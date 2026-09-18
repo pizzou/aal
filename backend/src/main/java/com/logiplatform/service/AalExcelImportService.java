@@ -1,0 +1,1565 @@
+
+package com.logiplatform.service;
+
+import com.logiplatform.model.ClientRecord;
+import com.logiplatform.model.CommercialInvoice;
+import com.logiplatform.model.CommercialQuote;
+import com.logiplatform.model.ExpenseRecord;
+import com.logiplatform.model.PartnerRecord;
+import com.logiplatform.model.Shipment;
+import com.logiplatform.model.TaskRecord;
+import com.logiplatform.model.TransportMode;
+import com.logiplatform.repository.ClientRecordRepository;
+import com.logiplatform.repository.CommercialInvoiceRepository;
+import com.logiplatform.repository.CommercialQuoteRepository;
+import com.logiplatform.repository.ExpenseRecordRepository;
+import com.logiplatform.repository.PartnerRecordRepository;
+import com.logiplatform.repository.ShipmentRepository;
+import com.logiplatform.repository.TaskRecordRepository;
+import com.logiplatform.tenancy.TenantContext;
+
+import org.apache.poi.ss.usermodel.*;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.InputStream;
+import java.math.BigDecimal;
+import java.time.*;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.*;
+
+@Service
+public class AalExcelImportService {
+
+        private static final Set<String> MONTHS = Set.of(
+                        "January",
+                        "February",
+                        "March",
+                        "April",
+                        "May",
+                        "June",
+                        "July",
+                        "August",
+                        "September",
+                        "October",
+                        "November",
+                        "December");
+
+        private static final List<DateTimeFormatter> DATE_FORMATS = List.of(
+                        DateTimeFormatter.ofPattern("M/d/yyyy"),
+                        DateTimeFormatter.ofPattern("M/d/yy"),
+                        DateTimeFormatter.ofPattern("d/M/yyyy"),
+                        DateTimeFormatter.ISO_LOCAL_DATE);
+
+        private final ShipmentRepository shipments;
+        private final CommercialQuoteRepository quotes;
+        private final CommercialInvoiceRepository invoices;
+        private final ClientRecordRepository clients;
+        private final PartnerRecordRepository partners;
+        private final TaskRecordRepository tasks;
+        private final ExpenseRecordRepository expenses;
+        private final FinancePostingService financePostingService;
+
+        public AalExcelImportService(
+                        ShipmentRepository shipments,
+                        CommercialQuoteRepository quotes,
+                        CommercialInvoiceRepository invoices,
+                        ClientRecordRepository clients,
+                        PartnerRecordRepository partners,
+                        TaskRecordRepository tasks,
+                        ExpenseRecordRepository expenses,
+                        FinancePostingService financePostingService) {
+
+                this.shipments = shipments;
+                this.quotes = quotes;
+                this.invoices = invoices;
+                this.clients = clients;
+                this.partners = partners;
+                this.tasks = tasks;
+                this.expenses = expenses;
+                this.financePostingService = financePostingService;
+        }
+
+        /**
+         * Supports both AAL workbook structures:
+         *
+         * 1. AAL MOTHERSHIP
+         * - January
+         * - February
+         * - ...
+         * - December
+         *
+         * 2. AAL COMMAND CENTER
+         * - Shipments
+         * - Quotations
+         * - Invoices
+         * - Clients
+         * - Partners
+         * - Tasks
+         * - Expenses
+         *
+         * .xlsx and .xlsm are supported through Apache POI.
+         */
+        @Transactional
+        public ImportResult importWorkbook(
+                        MultipartFile file) {
+
+                if (file == null || file.isEmpty()) {
+                        throw new IllegalArgumentException(
+                                        "Excel file is empty");
+                }
+
+                if (file.getSize() > 10L * 1024L * 1024L) {
+                        throw new IllegalArgumentException(
+                                        "Excel file exceeds the 10 MB import limit");
+                }
+
+                String filename = file.getOriginalFilename();
+
+                if (filename == null
+                                || !(filename.toLowerCase(Locale.ROOT).endsWith(".xlsx")
+                                                || filename.toLowerCase(Locale.ROOT).endsWith(".xlsm"))) {
+
+                        throw new IllegalArgumentException(
+                                        "Only .xlsx and .xlsm AAL workbooks are supported");
+                }
+
+                UUID tenant = TenantContext.getTenantId();
+
+                if (tenant == null) {
+                        throw new IllegalStateException(
+                                        "No tenant context is available");
+                }
+
+                int shipmentCount = 0;
+                int quoteCount = 0;
+                int invoiceCount = 0;
+                int clientCount = 0;
+                int partnerCount = 0;
+                int taskCount = 0;
+                int expenseCount = 0;
+
+                try (
+                                InputStream input = file.getInputStream();
+                                Workbook workbook = WorkbookFactory.create(input)) {
+
+                        for (Sheet sheet : workbook) {
+
+                                String name = sheet.getSheetName().trim();
+
+                                if (name.equalsIgnoreCase("Shipments")
+                                                || MONTHS.contains(name)) {
+
+                                        shipmentCount += importShipments(
+                                                        sheet,
+                                                        tenant);
+
+                                } else if (name.equalsIgnoreCase("Quotations")) {
+
+                                        quoteCount += importQuotes(
+                                                        sheet,
+                                                        tenant);
+
+                                } else if (name.equalsIgnoreCase("Invoices")) {
+
+                                        invoiceCount += importInvoices(
+                                                        sheet,
+                                                        tenant);
+
+                                } else if (name.equalsIgnoreCase("Clients")) {
+
+                                        clientCount += importClients(
+                                                        sheet,
+                                                        tenant);
+
+                                } else if (name.equalsIgnoreCase("Partners")) {
+
+                                        partnerCount += importPartners(
+                                                        sheet,
+                                                        tenant);
+
+                                } else if (name.equalsIgnoreCase("Tasks")) {
+
+                                        taskCount += importTasks(
+                                                        sheet,
+                                                        tenant);
+
+                                } else if (name.equalsIgnoreCase("Expenses")) {
+
+                                        expenseCount += importExpenses(
+                                                        sheet,
+                                                        tenant);
+                                }
+                        }
+
+                } catch (Exception e) {
+
+                        throw new IllegalArgumentException(
+                                        "Unable to import AAL workbook: "
+                                                        + rootMessage(e),
+                                        e);
+                }
+
+                return new ImportResult(
+                                shipmentCount,
+                                quoteCount,
+                                invoiceCount,
+                                clientCount,
+                                partnerCount,
+                                taskCount,
+                                expenseCount);
+        }
+
+        private int importShipments(
+                        Sheet sheet,
+                        UUID tenant) {
+
+                boolean monthly = MONTHS.contains(
+                                sheet.getSheetName().trim());
+
+                int headerRow = monthly
+                                ? 0
+                                : 2;
+
+                int firstDataRow = monthly
+                                ? 1
+                                : 3;
+
+                if (sheet.getLastRowNum() < firstDataRow) {
+                        return 0;
+                }
+
+                Map<String, Integer> headerMap = headers(
+                                sheet.getRow(headerRow));
+
+                if (monthly) {
+
+                        requireHeaders(
+                                        headerMap,
+                                        "AWB NO",
+                                        "ORIGIN",
+                                        "DESTINATION");
+
+                } else {
+
+                        requireHeaders(
+                                        headerMap,
+                                        "Shipment ID",
+                                        "Origin City / Port",
+                                        "Destination City / Port");
+                }
+
+                int count = 0;
+
+                for (int rowIndex = firstDataRow; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+
+                        Row row = sheet.getRow(rowIndex);
+
+                        if (row == null) {
+                                continue;
+                        }
+
+                        String reference = value(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "AWB NO"
+                                                        : "Shipment ID");
+
+                        if (blank(reference)) {
+                                continue;
+                        }
+
+                        String origin = value(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "ORIGIN"
+                                                        : "Origin City / Port");
+
+                        String destination = value(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "DESTINATION"
+                                                        : "Destination City / Port");
+
+                        Shipment shipment = shipments
+                                        .findByTenantIdAndReferenceCode(
+                                                        tenant,
+                                                        reference)
+                                        .orElse(null);
+
+                        if (shipment == null) {
+
+                                shipment = new Shipment(
+                                                tenant,
+                                                reference,
+                                                blank(origin)
+                                                                ? "UNKNOWN"
+                                                                : origin,
+                                                blank(destination)
+                                                                ? "UNKNOWN"
+                                                                : destination,
+                                                parseMode(
+                                                                monthly
+                                                                                ? "AIR"
+                                                                                : value(
+                                                                                                row,
+                                                                                                headerMap,
+                                                                                                "Service Type")),
+                                                value(
+                                                                row,
+                                                                headerMap,
+                                                                monthly
+                                                                                ? "AIRLINE USED"
+                                                                                : "Airline / Carrier"),
+                                                reference);
+                        }
+
+                        BigDecimal gross = decimal(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "GROSS WEIGHT (KG)"
+                                                        : "Actual Weight (kg)");
+
+                        BigDecimal volume = decimal(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "VOLUMETRIC WEIGHT (KG)"
+                                                        : "Volume Weight (kg)");
+
+                        String owner = value(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "OPERATOR"
+                                                        : "Owner");
+
+                        BigDecimal supplierCost = nz(
+                                        decimal(
+                                                        row,
+                                                        headerMap,
+                                                        monthly
+                                                                        ? "AMOUNT PAID TO SUPPLY"
+                                                                        : "Supplier Cost (USD)"));
+
+                        /*
+                         * Only the MOTHERSHIP workbook contains cumulative supplier
+                         * cash paid.
+                         *
+                         * The Command Center's Supplier Cost is a cost basis,
+                         * not a cash payment, and must never be posted as one.
+                         */
+                        BigDecimal supplierPaid = monthly
+                                        ? nz(decimal(
+                                                        row,
+                                                        headerMap,
+                                                        "AMOUNT PAID TO SUPPLY"))
+                                        : BigDecimal.ZERO;
+
+                        BigDecimal otherExpenses = decimal(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "OTHER EXPENSES"
+                                                        : "Other Cost (USD)");
+
+                        BigDecimal billed = decimal(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "AMOUNT BILLED TO CLIENT"
+                                                        : "Client Revenue (USD)");
+
+                        BigDecimal paid = decimal(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "AMOUNT PAID BY CLIENT"
+                                                        : "");
+
+                        String paymentStatus = value(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "PAYMENT STATUS"
+                                                        : "Payment Status");
+
+                        /*
+                         * Some MOTHERSHIP rows contain formula-driven payment status.
+                         *
+                         * If the cached formula result is unavailable, derive it from
+                         * the actual financial values.
+                         */
+                        if (monthly && blank(paymentStatus)) {
+
+                                paymentStatus = derivePaymentStatus(
+                                                billed,
+                                                paid);
+                        }
+
+                        BigDecimal previousSupplierPaid = shipment.getAmountPaidToSupply() == null
+                                        ? BigDecimal.ZERO
+                                        : shipment.getAmountPaidToSupply();
+
+                        shipment.updateCommandCenterFields(
+
+                                        value(
+                                                        row,
+                                                        headerMap,
+                                                        monthly
+                                                                        ? "NAME OF CLIENT"
+                                                                        : "Client"),
+
+                                        value(
+                                                        row,
+                                                        headerMap,
+                                                        "Contact"),
+
+                                        value(
+                                                        row,
+                                                        headerMap,
+                                                        "COMMODITY"),
+
+                                        monthly
+                                                        ? ""
+                                                        : value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Origin Country"),
+
+                                        origin,
+
+                                        monthly
+                                                        ? ""
+                                                        : value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Destination Country"),
+
+                                        destination,
+
+                                        gross,
+
+                                        volume,
+
+                                        intValue(
+                                                        row,
+                                                        headerMap,
+                                                        monthly
+                                                                        ? null
+                                                                        : "Packages"),
+
+                                        value(
+                                                        row,
+                                                        headerMap,
+                                                        monthly
+                                                                        ? "AIRLINE USED"
+                                                                        : "Airline / Carrier"),
+
+                                        value(
+                                                        row,
+                                                        headerMap,
+                                                        monthly
+                                                                        ? "SERVICE TYPE"
+                                                                        : "Service Type"),
+
+                                        owner,
+
+                                        supplierCost,
+
+                                        monthly
+                                                        ? BigDecimal.ZERO
+                                                        : decimal(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Other Cost (USD)"),
+
+                                        billed,
+
+                                        monthly
+                                                        ? paid
+                                                        : BigDecimal.ZERO,
+
+                                        supplierPaid,
+
+                                        otherExpenses,
+
+                                        paymentStatus,
+
+                                        owner,
+
+                                        monthly
+                                                        ? reference
+                                                        : value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Invoice No."),
+
+                                        toInstant(
+                                                        row,
+                                                        headerMap,
+                                                        monthly
+                                                                        ? "DATE"
+                                                                        : "ETD"),
+
+                                        monthly
+                                                        ? null
+                                                        : toInstant(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "ETA"),
+
+                                        monthly
+                                                        ? ""
+                                                        : value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Next Action"),
+
+                                        monthly
+                                                        ? null
+                                                        : localDate(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Next Action Date"),
+
+                                        monthly
+                                                        ? "Imported from AAL MOTHERSHIP"
+                                                        : value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Notes"),
+
+                                        monthly
+                                                        ? "USD"
+                                                        : defaultCurrency(
+                                                                        value(
+                                                                                        row,
+                                                                                        headerMap,
+                                                                                        "Currency")));
+
+                        /*
+                         * Date Opened
+                         */
+                        LocalDate opened = localDate(
+                                        row,
+                                        headerMap,
+                                        monthly
+                                                        ? "DATE"
+                                                        : "Date Opened");
+
+                        if (opened != null) {
+                                shipment.setDateOpened(opened);
+                        }
+
+                        /*
+                         * Workbook status.
+                         */
+                        shipment.setOperationalStatus(
+                                        value(
+                                                        row,
+                                                        headerMap,
+                                                        monthly
+                                                                        ? "SHIPMENT STATUS"
+                                                                        : "Status"));
+
+                        if (supplierPaid.compareTo(previousSupplierPaid) < 0) {
+
+                                throw new IllegalArgumentException(
+                                                "Supplier payment cannot decrease for shipment "
+                                                                + reference
+                                                                + " during workbook import");
+                        }
+
+                        Shipment saved = shipments.save(shipment);
+
+                        if (supplierPaid.compareTo(previousSupplierPaid) > 0) {
+
+                                financePostingService.postSupplierPayment(
+                                                tenant,
+                                                saved.getId(),
+                                                supplierPaid,
+                                                saved.getCurrency(),
+                                                saved.getReferenceCode());
+                        }
+
+                        count++;
+                }
+
+                return count;
+        }
+
+        private int importQuotes(
+                        Sheet sheet,
+                        UUID tenant) {
+
+                Map<String, Integer> headerMap = headers(
+                                sheet.getRow(2));
+
+                int count = 0;
+
+                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+
+                        Row row = sheet.getRow(rowIndex);
+
+                        if (row == null) {
+                                continue;
+                        }
+
+                        String quoteId = value(
+                                        row,
+                                        headerMap,
+                                        "Quote ID");
+
+                        if (blank(quoteId)
+                                        || quotes
+                                                        .findByTenantIdAndQuoteId(
+                                                                        tenant,
+                                                                        quoteId)
+                                                        .isPresent()) {
+
+                                continue;
+                        }
+
+                        BigDecimal supplier = nz(
+                                        decimal(
+                                                        row,
+                                                        headerMap,
+                                                        "Supplier Cost (USD)"));
+
+                        BigDecimal other = nz(
+                                        decimal(
+                                                        row,
+                                                        headerMap,
+                                                        "Other Cost (USD)"));
+
+                        BigDecimal markup = nz(
+                                        decimal(
+                                                        row,
+                                                        headerMap,
+                                                        "Markup %"));
+
+                        BigDecimal quoted = decimal(
+                                        row,
+                                        headerMap,
+                                        "Quoted Amount (USD)");
+
+                        if (quoted == null) {
+
+                                quoted = supplier
+                                                .add(other)
+                                                .multiply(
+                                                                BigDecimal.ONE.add(
+                                                                                markup.divide(
+                                                                                                BigDecimal.valueOf(100),
+                                                                                                8,
+                                                                                                java.math.RoundingMode.HALF_UP)));
+                        }
+
+                        BigDecimal expectedProfit = decimal(
+                                        row,
+                                        headerMap,
+                                        "Expected Profit (USD)");
+
+                        if (expectedProfit == null) {
+
+                                expectedProfit = quoted
+                                                .subtract(supplier)
+                                                .subtract(other);
+                        }
+
+                        quotes.save(
+                                        new CommercialQuote(
+                                                        tenant,
+                                                        quoteId,
+                                                        localDate(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Quote Date"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Client"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Route"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Service Type"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Commodity"),
+                                                        decimal(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Chargeable Weight (kg)"),
+                                                        supplier,
+                                                        other,
+                                                        markup,
+                                                        quoted,
+                                                        expectedProfit,
+                                                        localDate(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Valid Until"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Status"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Owner"),
+                                                        localDate(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Follow-up Date"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Notes"),
+                                                        "IMPORTED"));
+
+                        count++;
+                }
+
+                return count;
+        }
+
+        private int importInvoices(
+                        Sheet sheet,
+                        UUID tenant) {
+
+                Map<String, Integer> headerMap = headers(
+                                sheet.getRow(2));
+
+                int count = 0;
+
+                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+
+                        Row row = sheet.getRow(rowIndex);
+
+                        if (row == null) {
+                                continue;
+                        }
+
+                        String invoiceNo = value(
+                                        row,
+                                        headerMap,
+                                        "Invoice No.");
+
+                        /*
+                         * Invoice records are identified by invoice number.
+                         *
+                         * DO NOT check ExpenseRecord here.
+                         * expenseId belongs to importExpenses(), not importInvoices().
+                         */
+                        if (blank(invoiceNo)
+                                        || invoices
+                                                        .findByTenantIdAndInvoiceNo(
+                                                                        tenant,
+                                                                        invoiceNo)
+                                                        .isPresent()) {
+
+                                continue;
+                        }
+
+                        UUID shipmentId = null;
+
+                        String shipmentReference = value(
+                                        row,
+                                        headerMap,
+                                        "Shipment ID");
+
+                        if (!blank(shipmentReference)) {
+
+                                shipmentId = shipments
+                                                .findByTenantIdAndReferenceCode(
+                                                                tenant,
+                                                                shipmentReference)
+                                                .map(Shipment::getId)
+                                                .orElse(null);
+                        }
+
+                        BigDecimal invoiceAmount = nz(
+                                        decimal(
+                                                        row,
+                                                        headerMap,
+                                                        "Invoice Amount"));
+
+                        CommercialInvoice invoice = new CommercialInvoice(
+                                        tenant,
+                                        invoiceNo,
+                                        localDate(
+                                                        row,
+                                                        headerMap,
+                                                        "Issue Date"),
+                                        value(
+                                                        row,
+                                                        headerMap,
+                                                        "Client"),
+                                        shipmentId,
+                                        defaultCurrency(
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Currency")),
+                                        invoiceAmount,
+                                        localDate(
+                                                        row,
+                                                        headerMap,
+                                                        "Due Date"),
+                                        value(
+                                                        row,
+                                                        headerMap,
+                                                        "Owner"));
+
+                        invoice.setImportedCollectionData(
+                                        decimal(
+                                                        row,
+                                                        headerMap,
+                                                        "Amount Paid"),
+                                        localDate(
+                                                        row,
+                                                        headerMap,
+                                                        "Last Follow-up"),
+                                        localDate(
+                                                        row,
+                                                        headerMap,
+                                                        "Next Follow-up"),
+                                        value(
+                                                        row,
+                                                        headerMap,
+                                                        "Notes"));
+
+                        invoices.save(invoice);
+
+                        count++;
+                }
+
+                return count;
+        }
+
+        private int importClients(
+                        Sheet sheet,
+                        UUID tenant) {
+
+                Map<String, Integer> headerMap = headers(
+                                sheet.getRow(2));
+
+                int count = 0;
+
+                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+
+                        Row row = sheet.getRow(rowIndex);
+
+                        if (row == null) {
+                                continue;
+                        }
+
+                        String clientId = value(
+                                        row,
+                                        headerMap,
+                                        "Client ID");
+
+                        if (blank(clientId)
+                                        || clients
+                                                        .findByTenantIdAndClientId(
+                                                                        tenant,
+                                                                        clientId)
+                                                        .isPresent()) {
+
+                                continue;
+                        }
+
+                        clients.save(
+                                        new ClientRecord(
+                                                        tenant,
+                                                        clientId,
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Client / Company"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Contact Person"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Phone"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Email"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Industry"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Country"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "City"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Lead Source"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Client Status"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Relationship Owner"),
+                                                        localDate(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Next Follow-up"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Notes")));
+
+                        count++;
+                }
+
+                return count;
+        }
+
+        private int importPartners(
+                        Sheet sheet,
+                        UUID tenant) {
+
+                Map<String, Integer> headerMap = headers(
+                                sheet.getRow(2));
+
+                int count = 0;
+
+                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+
+                        Row row = sheet.getRow(rowIndex);
+
+                        if (row == null) {
+                                continue;
+                        }
+
+                        String partnerId = value(
+                                        row,
+                                        headerMap,
+                                        "Partner ID");
+
+                        if (blank(partnerId)) {
+                                continue;
+                        }
+
+                        if (partners
+                                        .findByTenantIdAndPartnerId(
+                                                        tenant,
+                                                        partnerId)
+                                        .isPresent()) {
+
+                                continue;
+                        }
+
+                        partners.save(
+                                        new PartnerRecord(
+                                                        tenant,
+                                                        partnerId,
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Country"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Company"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Contact Person"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Phone"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Email"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Services"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "City / Port / Airport"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Payment Terms"),
+                                                        intValue(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Rating (1-5)"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Status"),
+                                                        localDate(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Last Verified"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Notes")));
+
+                        count++;
+                }
+
+                return count;
+        }
+
+        private int importTasks(
+                        Sheet sheet,
+                        UUID tenant) {
+
+                Map<String, Integer> headerMap = headers(
+                                sheet.getRow(2));
+
+                int count = 0;
+
+                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+
+                        Row row = sheet.getRow(rowIndex);
+
+                        if (row == null) {
+                                continue;
+                        }
+
+                        String taskId = value(
+                                        row,
+                                        headerMap,
+                                        "Task ID");
+
+                        if (blank(taskId)) {
+                                continue;
+                        }
+
+                        if (tasks
+                                        .findByTenantIdAndTaskId(
+                                                        tenant,
+                                                        taskId)
+                                        .isPresent()) {
+
+                                continue;
+                        }
+
+                        LocalDate created = localDate(
+                                        row,
+                                        headerMap,
+                                        "Created Date");
+
+                        tasks.save(
+                                        new TaskRecord(
+                                                        tenant,
+                                                        taskId,
+                                                        created == null
+                                                                        ? LocalDate.now()
+                                                                        : created,
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Department"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Related Shipment / Client"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Task"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Priority"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Owner"),
+                                                        localDate(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Due Date"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Status"),
+                                                        localDate(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Completion Date"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Notes")));
+
+                        count++;
+                }
+
+                return count;
+        }
+
+        private int importExpenses(
+                        Sheet sheet,
+                        UUID tenant) {
+
+                Map<String, Integer> headerMap = headers(
+                                sheet.getRow(2));
+
+                int count = 0;
+
+                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+
+                        Row row = sheet.getRow(rowIndex);
+
+                        if (row == null) {
+                                continue;
+                        }
+
+                        String expenseId = value(
+                                        row,
+                                        headerMap,
+                                        "Expense ID");
+
+                        if (blank(expenseId)) {
+                                continue;
+                        }
+
+                        /*
+                         * expenseId belongs to this method and is therefore valid here.
+                         */
+                        if (expenses
+                                        .findByTenantIdAndExpenseId(
+                                                        tenant,
+                                                        expenseId)
+                                        .isPresent()) {
+
+                                continue;
+                        }
+
+                        UUID shipmentId = null;
+
+                        String shipmentReference = value(
+                                        row,
+                                        headerMap,
+                                        "Shipment ID");
+
+                        if (!blank(shipmentReference)) {
+
+                                shipmentId = shipments
+                                                .findByTenantIdAndReferenceCode(
+                                                                tenant,
+                                                                shipmentReference)
+                                                .map(Shipment::getId)
+                                                .orElse(null);
+                        }
+
+                        LocalDate expenseDate = localDate(
+                                        row,
+                                        headerMap,
+                                        "Date");
+
+                        expenses.save(
+                                        new ExpenseRecord(
+                                                        tenant,
+                                                        expenseId,
+                                                        expenseDate == null
+                                                                        ? LocalDate.now()
+                                                                        : expenseDate,
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Type"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Category"),
+                                                        shipmentId,
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Client"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Vendor / Payee"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Description"),
+                                                        defaultCurrency(
+                                                                        value(
+                                                                                        row,
+                                                                                        headerMap,
+                                                                                        "Currency")),
+                                                        nz(
+                                                                        decimal(
+                                                                                        row,
+                                                                                        headerMap,
+                                                                                        "Original Amount")),
+                                                        decimal(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Exchange Rate to USD"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Payment Method"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Status"),
+                                                        value(
+                                                                        row,
+                                                                        headerMap,
+                                                                        "Approved By")));
+
+                        count++;
+                }
+
+                return count;
+        }
+
+        private static void requireHeaders(
+                        Map<String, Integer> headers,
+                        String... required) {
+
+                for (String header : required) {
+
+                        String key = header
+                                        .trim()
+                                        .toLowerCase(Locale.ROOT);
+
+                        if (!headers.containsKey(key)) {
+
+                                throw new IllegalArgumentException(
+                                                "Required AAL workbook column is missing: "
+                                                                + header);
+                        }
+                }
+        }
+
+        private static Map<String, Integer> headers(
+                        Row row) {
+
+                Map<String, Integer> result = new HashMap<>();
+
+                if (row == null) {
+                        return result;
+                }
+
+                DataFormatter formatter = new DataFormatter();
+
+                for (Cell cell : row) {
+
+                        String key = formatter
+                                        .formatCellValue(cell)
+                                        .trim()
+                                        .toLowerCase(Locale.ROOT);
+
+                        if (!key.isBlank()) {
+
+                                result.put(
+                                                key,
+                                                cell.getColumnIndex());
+                        }
+                }
+
+                return result;
+        }
+
+        private static String value(
+                        Row row,
+                        Map<String, Integer> headers,
+                        String header) {
+
+                if (row == null
+                                || header == null
+                                || header.isBlank()) {
+
+                        return "";
+                }
+
+                Integer index = headers.get(
+                                header
+                                                .trim()
+                                                .toLowerCase(Locale.ROOT));
+
+                if (index == null) {
+                        return "";
+                }
+
+                Cell cell = row.getCell(index);
+
+                if (cell == null) {
+                        return "";
+                }
+
+                return new DataFormatter()
+                                .formatCellValue(cell)
+                                .trim();
+        }
+
+        private static BigDecimal decimal(
+                        Row row,
+                        Map<String, Integer> headers,
+                        String header) {
+
+                if (header == null) {
+                        return null;
+                }
+
+                String raw = value(
+                                row,
+                                headers,
+                                header)
+                                .replace(",", "")
+                                .trim();
+
+                if (raw.isBlank()
+                                || raw.equals("-")
+                                || raw.equalsIgnoreCase("N/A")) {
+
+                        return null;
+                }
+
+                try {
+
+                        return new BigDecimal(raw);
+
+                } catch (NumberFormatException e) {
+
+                        return null;
+                }
+        }
+
+        private static Integer intValue(
+                        Row row,
+                        Map<String, Integer> headers,
+                        String header) {
+
+                BigDecimal value = decimal(
+                                row,
+                                headers,
+                                header);
+
+                return value == null
+                                ? null
+                                : value.intValue();
+        }
+
+        /**
+         * Correctly reads:
+         *
+         * 2/6/2026
+         * 2/12/2026
+         * Excel date cells
+         * ISO timestamps
+         */
+        private static LocalDate localDate(
+                        Row row,
+                        Map<String, Integer> headers,
+                        String header) {
+
+                if (header == null) {
+                        return null;
+                }
+
+                Integer index = headers.get(
+                                header
+                                                .trim()
+                                                .toLowerCase(Locale.ROOT));
+
+                if (index == null) {
+                        return null;
+                }
+
+                Cell cell = row.getCell(index);
+
+                if (cell == null) {
+                        return null;
+                }
+
+                if (cell.getCellType() == CellType.NUMERIC
+                                && DateUtil.isCellDateFormatted(cell)) {
+
+                        return cell
+                                        .getLocalDateTimeCellValue()
+                                        .toLocalDate();
+                }
+
+                String raw = new DataFormatter()
+                                .formatCellValue(cell)
+                                .trim();
+
+                if (raw.isBlank()) {
+                        return null;
+                }
+
+                for (DateTimeFormatter formatter : DATE_FORMATS) {
+
+                        try {
+
+                                return LocalDate.parse(
+                                                raw,
+                                                formatter);
+
+                        } catch (DateTimeParseException ignored) {
+                        }
+                }
+
+                /*
+                 * Support ISO timestamps.
+                 */
+                try {
+
+                        return Instant
+                                        .parse(raw)
+                                        .atZone(ZoneOffset.UTC)
+                                        .toLocalDate();
+
+                } catch (DateTimeParseException ignored) {
+
+                        return null;
+                }
+        }
+
+        private static Instant toInstant(
+                        Row row,
+                        Map<String, Integer> headers,
+                        String header) {
+
+                LocalDate date = localDate(
+                                row,
+                                headers,
+                                header);
+
+                if (date == null) {
+                        return null;
+                }
+
+                return date
+                                .atStartOfDay(ZoneOffset.UTC)
+                                .toInstant();
+        }
+
+        private static TransportMode parseMode(
+                        String raw) {
+
+                if (raw == null) {
+                        return TransportMode.AIR;
+                }
+
+                String value = raw.toUpperCase(
+                                Locale.ROOT);
+
+                if (value.contains("AIR")) {
+                        return TransportMode.AIR;
+                }
+
+                if (value.contains("SEA")
+                                || value.contains("OCEAN")) {
+
+                        return TransportMode.SEA;
+                }
+
+                if (value.contains("RAIL")) {
+                        return TransportMode.RAIL;
+                }
+
+                return TransportMode.ROAD;
+        }
+
+        private static String defaultCurrency(
+                        String value) {
+
+                return blank(value)
+                                ? "USD"
+                                : value
+                                                .trim()
+                                                .toUpperCase(Locale.ROOT);
+        }
+
+        private static String derivePaymentStatus(
+                        BigDecimal billed,
+                        BigDecimal paid) {
+
+                if (billed == null) {
+                        return "";
+                }
+
+                BigDecimal actualPaid = paid == null
+                                ? BigDecimal.ZERO
+                                : paid;
+
+                return billed.subtract(actualPaid).signum() == 0
+                                ? "Paid"
+                                : "Outstanding";
+        }
+
+        private static BigDecimal nz(
+                        BigDecimal value) {
+
+                return value == null
+                                ? BigDecimal.ZERO
+                                : value;
+        }
+
+        private static boolean blank(
+                        String value) {
+
+                return value == null
+                                || value.isBlank();
+        }
+
+        private static String rootMessage(
+                        Throwable throwable) {
+
+                Throwable current = throwable;
+
+                while (current.getCause() != null) {
+                        current = current.getCause();
+                }
+
+                return current.getMessage() == null
+                                ? current
+                                                .getClass()
+                                                .getSimpleName()
+                                : current.getMessage();
+        }
+
+        public record ImportResult(
+                        int shipments,
+                        int quotations,
+                        int invoices,
+                        int clients,
+                        int partners,
+                        int tasks,
+                        int expenses) {
+        }
+}

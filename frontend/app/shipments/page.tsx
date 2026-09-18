@@ -1,0 +1,407 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+
+import { ApiError, Shipment, shipmentsApi } from "@/lib/api-client";
+import { useAuth } from "@/lib/auth-context";
+
+const MODES = ["ALL", "AIR", "ROAD", "SEA", "RAIL"];
+
+function money(value: number | null | undefined, currency = "USD"): string {
+  if (value == null) {
+    return "—";
+  }
+
+  return `${currency} ${value.toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function statusClass(status: string): string {
+  if (status === "DELIVERED" || status === "COMPLETED") {
+    return "status status-success";
+  }
+
+  if (status === "ON_HOLD" || status === "CUSTOMS") {
+    return "status status-warning";
+  }
+
+  if (status === "CANCELLED") {
+    return "status status-danger";
+  }
+
+  return "status status-neutral";
+}
+
+export default function ShipmentsPage() {
+  const router = useRouter();
+
+  const { accessToken, isLoading } = useAuth();
+
+  const [shipments, setShipments] = useState<Shipment[]>([]);
+
+  const [query, setQuery] = useState("");
+
+  const [mode, setMode] = useState("ALL");
+
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!isLoading && !accessToken) {
+      router.push("/login");
+    }
+  }, [isLoading, accessToken, router]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      return;
+    }
+
+    let active = true;
+
+    setError("");
+
+    shipmentsApi
+      .list()
+      .then((response) => {
+        if (!active) {
+          return;
+        }
+
+        setShipments(response.content);
+      })
+      .catch((exception) => {
+        if (!active) {
+          return;
+        }
+
+        setError(
+          exception instanceof ApiError
+            ? exception.message
+            : "Failed to load shipments.",
+        );
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [accessToken]);
+
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+
+    return shipments.filter((shipment) => {
+      const matchesMode = mode === "ALL" || shipment.transportMode === mode;
+
+      const matchesSearch =
+        !q ||
+        [
+          shipment.referenceCode,
+          shipment.clientName,
+          shipment.contact,
+          shipment.commodity,
+          shipment.airlineUsed,
+          shipment.carrierName,
+          shipment.invoiceNo,
+          shipment.originCityPort,
+          shipment.destinationCityPort,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+
+      return matchesMode && matchesSearch;
+    });
+  }, [shipments, mode, query]);
+
+  if (isLoading || !accessToken) {
+    return null;
+  }
+
+  const grossWeight = rows.reduce(
+    (sum, shipment) => sum + (shipment.grossWeightKg ?? 0),
+    0,
+  );
+
+  const chargeableWeight = rows.reduce(
+    (sum, shipment) => sum + (shipment.chargeableWeightKg ?? 0),
+    0,
+  );
+
+  const billed = rows.reduce(
+    (sum, shipment) => sum + (shipment.amountBilledToClient ?? 0),
+    0,
+  );
+
+  const outstanding = rows.reduce(
+    (sum, shipment) => sum + (shipment.amountRemaining ?? 0),
+    0,
+  );
+
+  const activeShipments = rows.filter(
+    (shipment) =>
+      !["DELIVERED", "COMPLETED", "CANCELLED"].includes(shipment.status),
+  ).length;
+
+  const deliveredShipments = rows.filter(
+    (shipment) =>
+      shipment.status === "DELIVERED" || shipment.status === "COMPLETED",
+  ).length;
+
+  return (
+    <main className="page">
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">AAL / OPERATIONS REGISTER</div>
+
+          <h1 className="page-title">Shipments</h1>
+
+          <p className="page-subtitle">
+            The digital daily shipment ledger for Africa Logistic Aviation —
+            operational, cargo and financial information in one controlled
+            record.
+          </p>
+        </div>
+
+        <div className="actions">
+          <Link className="btn" href="/billing">
+            Billing & receivables
+          </Link>
+
+          <Link className="btn btn-primary" href="/new-shipment">
+            + New shipment
+          </Link>
+        </div>
+      </div>
+
+      {error && <div className="alert alert-error aal-alert">{error}</div>}
+
+      <section className="register-overview">
+        <div className="register-overview-copy">
+          <span>AAL DAILY OPERATING LEDGER</span>
+
+          <h2>Every shipment. Every kilogram. Every franc.</h2>
+
+          <p>
+            This register brings the MOTHERSHIP spreadsheet workflow into a
+            searchable operational system.
+          </p>
+        </div>
+
+        <div className="register-overview-stats">
+          <div>
+            <span>RECORDS</span>
+            <strong>{rows.length}</strong>
+          </div>
+
+          <div>
+            <span>GROSS KG</span>
+            <strong>{grossWeight.toLocaleString()}</strong>
+          </div>
+
+          <div>
+            <span>CHARGEABLE KG</span>
+            <strong>{chargeableWeight.toLocaleString()}</strong>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid grid-4 shipment-kpis">
+        <div className="card kpi premium-kpi">
+          <div className="kpi-label">Active shipments</div>
+
+          <div className="kpi-value">{activeShipments}</div>
+
+          <div className="kpi-meta">Currently in execution</div>
+        </div>
+
+        <div className="card kpi premium-kpi">
+          <div className="kpi-label">Client billing</div>
+
+          <div className="kpi-value">{money(billed)}</div>
+
+          <div className="kpi-meta">Amount billed across register</div>
+        </div>
+
+        <div className="card kpi premium-kpi">
+          <div className="kpi-label">Outstanding</div>
+
+          <div className="kpi-value">{money(outstanding)}</div>
+
+          <div className="kpi-meta">Customer balances</div>
+        </div>
+
+        <div className="card kpi premium-kpi">
+          <div className="kpi-label">Delivered</div>
+
+          <div className="kpi-value">{deliveredShipments}</div>
+
+          <div className="kpi-meta">Completed movements</div>
+        </div>
+      </div>
+
+      <section className="card shipment-register-card">
+        <div className="register-head">
+          <div>
+            <div className="eyebrow">DAILY SHIPMENT LEDGER</div>
+
+            <h2 className="card-title">AAL shipment records</h2>
+
+            <p className="card-muted">
+              Search AWB/reference, client, commodity, airline, invoice or
+              route.
+            </p>
+          </div>
+
+          <div className="register-tools">
+            <input
+              className="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search shipment, client, AWB, invoice…"
+              aria-label="Search shipments"
+            />
+
+            <div className="filter-group">
+              {MODES.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  className={
+                    mode === item ? "filter-button active" : "filter-button"
+                  }
+                  onClick={() => setMode(item)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table className="table shipment-table">
+            <thead>
+              <tr>
+                <th>Shipment / AWB</th>
+                <th>Client</th>
+                <th>Route</th>
+                <th>Commodity</th>
+                <th>Gross kg</th>
+                <th>Volumetric kg</th>
+                <th>Chargeable kg</th>
+                <th>Billed</th>
+                <th>Balance</th>
+                <th>Status</th>
+                <th />
+              </tr>
+            </thead>
+
+            <tbody>
+              {rows.map((shipment) => (
+                <tr key={shipment.id}>
+                  <td>
+                    <Link
+                      href={`/shipments/${shipment.id}`}
+                      className="table-link strong-link"
+                    >
+                      {shipment.referenceCode}
+                    </Link>
+
+                    <div className="card-muted">
+                      {shipment.invoiceNo ||
+                        shipment.airlineUsed ||
+                        "No invoice"}
+                    </div>
+                  </td>
+
+                  <td>
+                    <strong>{shipment.clientName || "—"}</strong>
+
+                    <div className="card-muted">{shipment.contact || ""}</div>
+                  </td>
+
+                  <td>
+                    <div className="route-cell">
+                      <span>
+                        {shipment.originCityPort ||
+                          shipment.originAddress ||
+                          "Origin"}
+                      </span>
+
+                      <IconArrow />
+
+                      <span>
+                        {shipment.destinationCityPort ||
+                          shipment.destinationAddress ||
+                          "Destination"}
+                      </span>
+                    </div>
+                  </td>
+
+                  <td>{shipment.commodity || "—"}</td>
+
+                  <td>{shipment.grossWeightKg ?? "—"}</td>
+
+                  <td>{shipment.volumetricWeightKg ?? "—"}</td>
+
+                  <td>
+                    <strong>
+                      {shipment.chargeableWeightKg ?? shipment.weightKg ?? "—"}
+                    </strong>
+                  </td>
+
+                  <td>
+                    {money(
+                      shipment.amountBilledToClient,
+                      shipment.currency || "USD",
+                    )}
+                  </td>
+
+                  <td>
+                    <strong>
+                      {money(
+                        shipment.amountRemaining,
+                        shipment.currency || "USD",
+                      )}
+                    </strong>
+                  </td>
+
+                  <td>
+                    <span className={statusClass(shipment.status)}>
+                      {shipment.status.replaceAll("_", " ")}
+                    </span>
+                  </td>
+
+                  <td>
+                    <Link
+                      className="btn btn-small"
+                      href={`/shipments/${shipment.id}`}
+                    >
+                      Open
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+
+              {!rows.length && (
+                <tr>
+                  <td colSpan={11} className="empty">
+                    No AAL shipment records match the selected filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function IconArrow() {
+  return <span className="route-arrow-mini">→</span>;
+}

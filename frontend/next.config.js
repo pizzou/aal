@@ -3,6 +3,14 @@ const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
   poweredByHeader: false,
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination: "https://aal-ocst.onrender.com/api/:path*",
+      },
+    ];
+  },
   experimental: {
     optimizePackageImports: [],
   },

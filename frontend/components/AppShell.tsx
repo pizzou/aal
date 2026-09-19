@@ -134,6 +134,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     path === "/track" ||
     path.startsWith("/track/") ||
     path.startsWith("/quote/view/") ||
+    path.startsWith("/quote/results/") ||
     path === "/";
 
   useEffect(() => {
@@ -143,7 +144,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [accessToken, role, router]);
 
   useEffect(() => {
-    if (!accessToken) {
+    if (!accessToken || role === "CUSTOMER") {
       setShipments([]);
       return;
     }

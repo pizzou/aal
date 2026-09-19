@@ -7,17 +7,18 @@ import com.logiplatform.dto.ShipmentDtos.ShipmentResponse;
 import com.logiplatform.service.CommercialOperationsService;
 import com.logiplatform.service.ShipmentService;
 import com.logiplatform.service.MailService;
-import static com.logiplatform.dto.CommandCenterShipmentDtos.UpdateRequest;
-import static com.logiplatform.dto.ShipmentDtos.UpdateStatusRequest;
+import com.logiplatform.dto.CommandCenterShipmentDtos.UpdateRequest;
+import com.logiplatform.dto.ShipmentDtos.UpdateStatusRequest;
 import com.logiplatform.tenancy.TenantContext;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -123,7 +124,6 @@ public class PublicCommercialController {
                             null,
                             null,
                             "UNPAID",
-                            null,
                             null,
                             null,
                             null,

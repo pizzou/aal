@@ -21,6 +21,8 @@ const modes = [
 export default function BookPage() {
   const params = useSearchParams();
   const quoteToken = params.get("quote") || "";
+  const requestToken = params.get("requestToken") || "";
+  const selectedMode = params.get("mode") || "";
   const [quote, setQuote] = useState<PublicQuoteView | null>(null);
   const [form, setForm] = useState({
     origin: "Kigali, Rwanda",
@@ -32,6 +34,8 @@ export default function BookPage() {
     contactName: "",
     email: "",
     phone: "",
+    commodity: "",
+    packages: "",
   });
   const [done, setDone] = useState(false);
   const [result, setResult] = useState<{
@@ -42,26 +46,49 @@ export default function BookPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!quoteToken) return;
-    publicQuoteApi
-      .view(quoteToken)
-      .then((data) => {
-        setQuote(data);
-        const [origin, destination] = (data.route || "").split(
-          /\s*(?:→|->)\s*/,
-          2,
-        );
-        setForm((current) => ({
-          ...current,
-          origin: origin || current.origin,
-          destination: destination || current.destination,
-          mode: serviceToMode(data.serviceType),
-          reference: data.quoteReference,
-          company: data.client || current.company,
-        }));
-      })
-      .catch(() => undefined);
-  }, [quoteToken]);
+    if (quoteToken) {
+      publicQuoteApi
+        .view(quoteToken)
+        .then((data) => {
+          setQuote(data);
+          const [origin, destination] = (data.route || "").split(
+            /\s*(?:→|->)\s*/,
+            2,
+          );
+          setForm((current) => ({
+            ...current,
+            origin: origin || current.origin,
+            destination: destination || current.destination,
+            mode: serviceToMode(data.serviceType),
+            reference: data.quoteReference,
+            company: data.client || current.company,
+          }));
+        })
+        .catch(() => undefined);
+      return;
+    }
+    if (requestToken) {
+      publicCommercialApi
+        .quoteRequest(requestToken)
+        .then((data) => {
+          setForm((current) => ({
+            ...current,
+            origin: data.origin || current.origin,
+            destination: data.destination || current.destination,
+            mode: selectedMode || current.mode,
+            reference: data.quoteReference,
+            company: data.company || current.company,
+            contactName: data.contactName || current.contactName,
+            email: data.email || current.email,
+            phone: data.phone || current.phone,
+            commodity: data.commodity || current.commodity,
+            packages:
+              data.packages == null ? current.packages : String(data.packages),
+          }));
+        })
+        .catch(() => undefined);
+    }
+  }, [quoteToken, requestToken, selectedMode]);
 
   const update = (key: string, value: string) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -77,6 +104,8 @@ export default function BookPage() {
             ...form,
             serviceType: form.mode,
             customerReference: form.reference,
+            quoteRequestToken: requestToken || undefined,
+            selectedMode: selectedMode || form.mode,
           });
       setResult({
         reference: response.reference,
@@ -126,6 +155,7 @@ export default function BookPage() {
   }
 
   const fromQuote = Boolean(quoteToken && quote);
+  const fromQuoteRequest = Boolean(requestToken);
   const quoteCanBook = !quoteToken || quote?.response === "ACCEPTED";
 
   return (
@@ -137,12 +167,16 @@ export default function BookPage() {
           <h1>
             {fromQuote
               ? "Book your accepted quotation."
-              : "Put the movement in motion."}
+              : fromQuoteRequest
+                ? "Book from your quote request."
+                : "Put the movement in motion."}
           </h1>
           <p>
             {fromQuote
               ? `Quotation ${quote?.quoteReference} is ready to convert into an AAL shipment.`
-              : "Book directly with AAL. No account is required to submit a booking request."}
+              : fromQuoteRequest
+                ? "Your public quote request is already registered. Confirm your shipment details below."
+                : "Book directly with AAL. No account is required to submit a booking request."}
           </p>
           <div className="flow-benefits">
             <span>
@@ -227,8 +261,19 @@ export default function BookPage() {
               value={form.phone}
               onChange={(v) => update("phone", v)}
             />
+            <Field
+              label="Commodity"
+              value={form.commodity}
+              onChange={(v) => update("commodity", v)}
+            />
+            <Field
+              label="Packages"
+              value={form.packages}
+              onChange={(v) => update("packages", v)}
+              type="number"
+            />
           </div>
-          {!quoteCanBook && (
+          {!quoteCanBook && !fromQuoteRequest && (
             <div className="alert alert-error">
               Accept the quotation before booking it.
             </div>
@@ -236,7 +281,7 @@ export default function BookPage() {
           {error && <div className="alert alert-error">{error}</div>}
           <button
             className="public-main-button flow-submit"
-            disabled={busy || !quoteCanBook}
+            disabled={busy || (!quoteCanBook && !fromQuoteRequest)}
           >
             {busy
               ? "Submitting…"

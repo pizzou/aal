@@ -36,6 +36,9 @@ public class MailService {
     @Value("${app.mail.brevo-api-key:}")
     private String brevoApiKey;
 
+    @Value("${app.frontend.url:https://aal-a.vercel.app}")
+    private String frontendUrl;
+
     public MailService() {
 
         SimpleClientHttpRequestFactory factory =
@@ -87,6 +90,60 @@ public class MailService {
     }
 
     @Async
+    public void sendPublicQuoteResult(
+            String recipientEmail,
+            String recipientName,
+            String quoteReference,
+            String route,
+            java.util.List<com.logiplatform.dto.PublicCommercialDtos.PublicQuoteOption> options,
+            String resultUrl) {
+
+        if (recipientEmail == null || recipientEmail.isBlank() || resultUrl == null || resultUrl.isBlank()) return;
+
+        StringBuilder rows = new StringBuilder();
+        if (options == null || options.isEmpty()) {
+            rows.append("<tr><td colspan=\"2\" style=\"padding:10px 0;color:#64748b\">No instant rate card was available. AAL will prepare a formal quotation.</td></tr>");
+        } else {
+            for (var option : options) {
+                rows.append("<tr><td style=\"padding:8px 0;color:#64748b\">")
+                        .append(escape(option.modeLabel()))
+                        .append("</td><td style=\"padding:8px 0;font-weight:700\">")
+                        .append(escape(option.currency()))
+                        .append(" ")
+                        .append(escape(option.totalCharge() == null ? "—" : option.totalCharge().stripTrailingZeros().toPlainString()))
+                        .append("</td></tr>");
+            }
+        }
+
+        send(
+                recipientEmail.trim(),
+                "Aviation Africa Logistics - Quote options " + escape(quoteReference),
+                """
+                <html><body style=\"font-family:Arial,sans-serif;color:#172033;line-height:1.55\">
+                  <div style=\"max-width:680px;margin:0 auto;padding:28px\">
+                    <div style=\"font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0b5cab\">AFRICA LOGISTIC AVIATION</div>
+                    <h2 style=\"margin:10px 0 8px\">Your quote options are ready</h2>
+                    <p>Hello %s,</p>
+                    <p>Your request <strong>%s</strong> is ready to review online.</p>
+                    <p style=\"font-size:14px;color:#475569\">Route: <strong>%s</strong></p>
+                    <table style=\"width:100%%;border-collapse:collapse;margin:20px 0\">
+                      %s
+                    </table>
+                    <p><a href=\"%s\" style=\"display:inline-block;padding:13px 22px;background:#0b5cab;color:#fff;text-decoration:none;border-radius:7px;font-weight:700\">View quote options</a></p>
+                    <p style=\"font-size:13px;color:#64748b\">No account is required. You can select an option and continue to booking.</p>
+                    <p>Africa Logistic Aviation</p>
+                  </div>
+                </body></html>
+                """.formatted(
+                        escape(recipientName == null || recipientName.isBlank() ? "Customer" : recipientName),
+                        escape(quoteReference),
+                        escape(route),
+                        rows.toString(),
+                        escapeAttribute(resultUrl))
+        );
+    }
+
+    @Async
     public void sendQuotationShare(
             String recipientEmail,
             String recipientName,
@@ -123,6 +180,46 @@ public class MailService {
                 """.formatted(
                         escape(recipientName == null || recipientName.isBlank() ? "Customer" : recipientName),
                         escape(quoteReference), escape(route), escape(serviceType), escape(quotedAmount), escape(validUntil), escapeAttribute(quoteUrl))
+        );
+    }
+
+    @Async
+    public void sendPublicBookingConfirmation(
+            String recipientEmail,
+            String recipientName,
+            String bookingReference,
+            String trackingToken,
+            String route) {
+
+        if (recipientEmail == null || recipientEmail.isBlank()) return;
+
+        String trackingUrl = frontendUrl.replaceAll("/$", "") + "/track/" + trackingToken;
+
+        send(
+                recipientEmail.trim(),
+                "Aviation Africa Logistics - Booking " + escape(bookingReference),
+                """
+                <html><body style="font-family:Arial,sans-serif;color:#172033;line-height:1.55">
+                  <div style="max-width:680px;margin:0 auto;padding:28px">
+                    <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0b5cab">AFRICA LOGISTIC AVIATION</div>
+                    <h2 style="margin:10px 0 8px">Your booking has been received</h2>
+                    <p>Hello %s,</p>
+                    <p>AAL has received booking <strong>%s</strong>.</p>
+                    <table style="width:100%%;border-collapse:collapse;margin:20px 0">
+                      <tr><td style="padding:8px 0;color:#64748b">Route</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+                      <tr><td style="padding:8px 0;color:#64748b">Tracking token</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+                    </table>
+                    <p><a href="%s" style="display:inline-block;padding:13px 22px;background:#0b5cab;color:#fff;text-decoration:none;border-radius:7px;font-weight:700">Track shipment</a></p>
+                    <p style="font-size:13px;color:#64748b">No account is required to track this shipment.</p>
+                    <p>Africa Logistic Aviation</p>
+                  </div>
+                </body></html>
+                """.formatted(
+                        escape(recipientName == null || recipientName.isBlank() ? "Customer" : recipientName),
+                        escape(bookingReference),
+                        escape(route),
+                        escape(trackingToken),
+                        escapeAttribute(trackingUrl))
         );
     }
 

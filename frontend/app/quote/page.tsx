@@ -1,24 +1,43 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import Link from "next/link";
-import { ApiError, publicCommercialApi } from "@/lib/api-client";
+import { FormEvent, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import Icon from "@/components/Icon";
+import { ApiError, publicCommercialApi } from "@/lib/api-client";
 
 const modes = [
+  ["ALL", "All modes", "globe"],
   ["AIR", "Air freight", "plane"],
   ["SEA", "Sea freight", "ship"],
   ["ROAD", "Road freight", "truck"],
 ] as const;
 
+type PackageLine = {
+  id: number;
+  quantity: string;
+  length: string;
+  width: string;
+  height: string;
+  weight: string;
+};
+
+const blankPackage = (id: number): PackageLine => ({
+  id,
+  quantity: "1",
+  length: "",
+  width: "",
+  height: "",
+  weight: "",
+});
+
 export default function QuotePage() {
-  const [mode, setMode] = useState("AIR");
+  const router = useRouter();
+  const [mode, setMode] = useState<(typeof modes)[number][0]>("ALL");
   const [form, setForm] = useState({
-    origin: "Kigali, Rwanda",
+    origin: "",
     destination: "",
-    weight: "",
-    volume: "",
-    packages: "",
+    pickupRequired: true,
+    deliveryRequired: true,
     commodity: "",
     company: "",
     contactName: "",
@@ -26,157 +45,288 @@ export default function QuotePage() {
     phone: "",
     notes: "",
   });
-  const [sent, setSent] = useState(false);
-  const [quoteId, setQuoteId] = useState("");
-  const [error, setError] = useState("");
+  const [packages, setPackages] = useState<PackageLine[]>([blankPackage(1)]);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
-  const update = (key: keyof typeof form, value: string) =>
+  const totals = useMemo(() => {
+    let quantity = 0;
+    let volume = 0;
+    let weight = 0;
+
+    for (const row of packages) {
+      const q = Number(row.quantity) || 0;
+      const l = Number(row.length) || 0;
+      const w = Number(row.width) || 0;
+      const h = Number(row.height) || 0;
+      const kg = Number(row.weight) || 0;
+
+      quantity += q;
+      volume += (q * l * w * h) / 1_000_000;
+      weight += q * kg;
+    }
+
+    const airVolumetric = volume * 167;
+    const chargeable =
+      mode === "AIR" || mode === "ALL"
+        ? Math.max(weight, airVolumetric)
+        : weight;
+
+    return { quantity, volume, weight, chargeable };
+  }, [packages, mode]);
+
+  function update(key: keyof typeof form, value: string | boolean) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
 
-  async function submit(event: FormEvent) {
+  function updatePackage(
+    id: number,
+    key: keyof Omit<PackageLine, "id">,
+    value: string,
+  ) {
+    setPackages((rows) =>
+      rows.map((row) => (row.id === id ? { ...row, [key]: value } : row)),
+    );
+  }
+
+  function addPackage() {
+    setPackages((rows) => [
+      ...rows,
+      blankPackage(Math.max(...rows.map((row) => row.id), 0) + 1),
+    ]);
+  }
+
+  function removePackage(id: number) {
+    setPackages((rows) =>
+      rows.length === 1 ? rows : rows.filter((row) => row.id !== id),
+    );
+  }
+
+  async function getQuotes(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError("");
+
     try {
       const response = await publicCommercialApi.requestQuote({
         origin: form.origin,
         destination: form.destination,
         serviceType: mode,
         commodity: form.commodity,
-        chargeableWeightKg: Number(form.weight) || 0,
-        volumeCbm: Number(form.volume) || 0,
-        packages: Number(form.packages) || 0,
+        chargeableWeightKg: totals.chargeable,
+        volumeCbm: totals.volume,
+        packages: totals.quantity,
         company: form.company,
         contactName: form.contactName,
         email: form.email,
         phone: form.phone,
-        notes: form.notes,
+        notes: `${form.notes || ""}${form.pickupRequired ? " | Pickup required" : ""}${form.deliveryRequired ? " | Delivery required" : ""}`,
       });
-      setQuoteId(response.quoteId);
-      setSent(true);
-    } catch (errorValue) {
+
+      router.push(
+        `/quote/results/${encodeURIComponent(response.requestToken)}`,
+      );
+    } catch (e) {
       setError(
-        errorValue instanceof ApiError
-          ? errorValue.message
-          : "Unable to submit quote request.",
+        e instanceof ApiError
+          ? e.message
+          : "Unable to prepare your freight quote.",
       );
     } finally {
       setBusy(false);
     }
   }
 
-  if (sent) {
-    return (
-      <main className="public-flow">
-        <FlowNav />
-        <section className="flow-success">
-          <div className="flow-success-icon">
-            <Icon name="shield" size={30} />
-          </div>
-          <div className="public-eyebrow">REQUEST RECEIVED</div>
-          <h1>Your freight request is with AAL.</h1>
-          <p>
-            Reference <strong>{quoteId}</strong>. We sent a confirmation to{" "}
-            <strong>{form.email}</strong>. When the quotation is prepared, AAL
-            will email you a secure link where you can review, accept and book
-            it — no account required.
-          </p>
-          <div className="flow-success-actions">
-            <Link className="public-main-button" href="/track">
-              Track a shipment <Icon name="arrow" size={14} />
-            </Link>
-            <Link className="flow-secondary" href="/">
-              Return to AAL
-            </Link>
-          </div>
-        </section>
-      </main>
-    );
-  }
-
   return (
-    <main className="public-flow">
-      <FlowNav />
-      <section className="quote-request-shell">
-        <div className="quote-request-head">
-          <div>
-            <div className="public-eyebrow">01 / QUOTE</div>
-            <h1>Start your freight quote.</h1>
-            <p>
-              Tell AAL what needs to move. No account is required and your
-              quotation will be delivered to your email.
-            </p>
-          </div>
-          <div className="quote-stepper">
-            <span className="active">1 Details</span>
-            <span>2 AAL pricing</span>
-            <span>3 Review & book</span>
-          </div>
+    <main className="kn-public-shell">
+      <PublicHeader />
+      <section className="kn-page-frame">
+        <div className="kn-breadcrumb">
+          Home <span>›</span> Quote
         </div>
 
-        <form className="quote-request-form" onSubmit={submit}>
-          <section className="quote-form-section">
-            <div className="quote-form-title">
-              <span>SHIPMENT</span>
-              <strong>What are you moving?</strong>
+        <div className="kn-stepper" aria-label="Quote steps">
+          <Step number="1" label="Quote request" active />
+          <span className="kn-step-arrow">→</span>
+          <Step number="2" label="Quote results" />
+          <span className="kn-step-arrow">→</span>
+          <Step number="3" label="Quote details" />
+          <span className="kn-step-arrow">→</span>
+          <Step number="4" label="Booking" />
+        </div>
+
+        <header className="kn-page-head">
+          <div>
+            <div className="kn-eyebrow">QUOTE REQUEST</div>
+            <h1>Get freight options in one request.</h1>
+            <p>
+              Enter the route and cargo details once. AAL will calculate the
+              available options, save your request and email you a secure link
+              to review the results.
+            </p>
+          </div>
+        </header>
+
+        {error && <div className="kn-error">{error}</div>}
+
+        <form onSubmit={getQuotes} className="kn-form">
+          <section className="kn-card">
+            <div className="kn-card-title-row">
+              <div>
+                <h2>Origin</h2>
+                <span>Shipment pickup location</span>
+              </div>
+              <div>
+                <h2>Destination</h2>
+                <span>Delivery location</span>
+              </div>
             </div>
-            <div className="flow-mode quote-mode-grid">
+            <div className="kn-route-grid">
+              <Field
+                label="From origin location"
+                value={form.origin}
+                onChange={(value) => update("origin", value)}
+                required
+              />
+              <Field
+                label="To destination location"
+                value={form.destination}
+                onChange={(value) => update("destination", value)}
+                required
+              />
+              <label className="kn-check">
+                <input
+                  type="checkbox"
+                  checked={form.pickupRequired}
+                  onChange={(event) =>
+                    update("pickupRequired", event.target.checked)
+                  }
+                />
+                Pickup required?
+              </label>
+              <label className="kn-check">
+                <input
+                  type="checkbox"
+                  checked={form.deliveryRequired}
+                  onChange={(event) =>
+                    update("deliveryRequired", event.target.checked)
+                  }
+                />
+                Delivery to consignee?
+              </label>
+            </div>
+          </section>
+
+          <section className="kn-card">
+            <div className="kn-section-tabs">
+              <strong>Package details</strong>
+              <span>Totals update automatically</span>
+            </div>
+            <div className="kn-unit-row">
+              <span>kg / cm</span>
+              <span>Volume in m³</span>
+            </div>
+            <div className="kn-package-table">
+              <div className="kn-package-head">
+                <span>Quantity</span>
+                <span>Length</span>
+                <span>Width</span>
+                <span>Height</span>
+                <span>Weight / piece</span>
+                <span />
+              </div>
+              {packages.map((row) => (
+                <div className="kn-package-row" key={row.id}>
+                  <NumberField
+                    value={row.quantity}
+                    onChange={(value) =>
+                      updatePackage(row.id, "quantity", value)
+                    }
+                  />
+                  <NumberField
+                    value={row.length}
+                    onChange={(value) => updatePackage(row.id, "length", value)}
+                    suffix="cm"
+                  />
+                  <NumberField
+                    value={row.width}
+                    onChange={(value) => updatePackage(row.id, "width", value)}
+                    suffix="cm"
+                  />
+                  <NumberField
+                    value={row.height}
+                    onChange={(value) => updatePackage(row.id, "height", value)}
+                    suffix="cm"
+                  />
+                  <NumberField
+                    value={row.weight}
+                    onChange={(value) => updatePackage(row.id, "weight", value)}
+                    suffix="kg"
+                  />
+                  <button
+                    type="button"
+                    className="kn-remove"
+                    onClick={() => removePackage(row.id)}
+                    aria-label="Remove package"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="kn-add-package"
+                onClick={addPackage}
+              >
+                + Add another package
+              </button>
+            </div>
+            <div className="kn-total-strip">
+              <Metric label="Total quantity" value={String(totals.quantity)} />
+              <Metric
+                label="Total volume"
+                value={`${totals.volume.toFixed(3)} m³`}
+              />
+              <Metric
+                label="Total weight"
+                value={`${totals.weight.toFixed(2)} kg`}
+              />
+              <Metric
+                label="Chargeable weight"
+                value={`${totals.chargeable.toFixed(2)} kg`}
+              />
+            </div>
+          </section>
+
+          <section className="kn-card">
+            <div className="kn-card-title-row single">
+              <div>
+                <h2>Transport & customer details</h2>
+                <span>Used for pricing and quotation delivery</span>
+              </div>
+            </div>
+            <div className="kn-mode-grid">
               {modes.map(([value, label, icon]) => (
                 <button
-                  type="button"
                   key={value}
-                  className={mode === value ? "selected" : ""}
+                  type="button"
+                  className={mode === value ? "active" : ""}
                   onClick={() => setMode(value)}
                 >
-                  <Icon name={icon} size={18} />
+                  <Icon
+                    name={icon as "globe" | "plane" | "ship" | "truck"}
+                    size={18}
+                  />
                   <span>{label}</span>
                 </button>
               ))}
             </div>
-            <div className="flow-grid">
-              <Field
-                label="Origin"
-                value={form.origin}
-                onChange={(value) => update("origin", value)}
-              />
-              <Field
-                label="Destination"
-                value={form.destination}
-                onChange={(value) => update("destination", value)}
-              />
-              <Field
-                label="Weight (kg)"
-                value={form.weight}
-                onChange={(value) => update("weight", value)}
-                type="number"
-              />
-              <Field
-                label="Volume (CBM)"
-                value={form.volume}
-                onChange={(value) => update("volume", value)}
-                type="number"
-              />
-              <Field
-                label="Packages"
-                value={form.packages}
-                onChange={(value) => update("packages", value)}
-                type="number"
-              />
+            <div className="kn-fields-3">
               <Field
                 label="Commodity"
                 value={form.commodity}
                 onChange={(value) => update("commodity", value)}
               />
-            </div>
-          </section>
-
-          <section className="quote-form-section">
-            <div className="quote-form-title">
-              <span>CONTACT</span>
-              <strong>Where should we send your quotation?</strong>
-            </div>
-            <div className="flow-grid">
               <Field
                 label="Company"
                 value={form.company}
@@ -186,42 +336,46 @@ export default function QuotePage() {
                 label="Contact name"
                 value={form.contactName}
                 onChange={(value) => update("contactName", value)}
+                required
               />
               <Field
                 label="Email"
+                type="email"
                 value={form.email}
                 onChange={(value) => update("email", value)}
-                type="email"
+                required
               />
               <Field
                 label="Phone"
                 value={form.phone}
                 onChange={(value) => update("phone", value)}
               />
-            </div>
-            <label className="flow-textarea">
-              <span>Additional requirements</span>
-              <textarea
+              <Field
+                label="Additional notes"
                 value={form.notes}
-                onChange={(e) => update("notes", e.target.value)}
-                rows={4}
-                placeholder="Incoterms, delivery requirements, special handling, preferred departure, etc."
+                onChange={(value) => update("notes", value)}
               />
-            </label>
+            </div>
           </section>
 
-          {error && <div className="alert alert-error">{error}</div>}
-          <div className="quote-form-submit">
+          <div className="kn-form-actions">
             <div>
-              <strong>Secure customer delivery</strong>
-              <small>
-                AAL will use your email to send the quotation and secure review
-                link.
-              </small>
+              <strong>Ready to compare freight options?</strong>
+              <span>
+                AAL will email your secure quote-results link immediately.
+              </span>
             </div>
-            <button className="public-main-button" disabled={busy}>
-              {busy ? "Sending request…" : "Request AAL quote"}
-              <Icon name="arrow" size={14} />
+            <button
+              className="kn-primary-button"
+              type="submit"
+              disabled={
+                busy ||
+                totals.quantity <= 0 ||
+                (totals.weight <= 0 && totals.volume <= 0)
+              }
+            >
+              {busy ? "Preparing…" : "Get quotes"}
+              <Icon name="arrow" size={15} />
             </button>
           </div>
         </form>
@@ -230,48 +384,106 @@ export default function QuotePage() {
   );
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  type = "text",
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-}) {
+function PublicHeader() {
   return (
-    <label className="flow-field">
-      <span>{label}</span>
-      <input
-        required
-        value={value}
-        type={type}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </label>
-  );
-}
-
-function FlowNav() {
-  return (
-    <nav className="public-nav flow-nav">
-      <Link href="/" className="public-brand">
-        <span className="public-brand-mark">
-          <Icon name="plane" size={20} />
+    <header className="kn-header">
+      <a href="/" className="kn-brand" aria-label="AAL home">
+        <span className="kn-brand-mark">
+          <Icon name="plane" size={19} />
         </span>
         <span>
           <strong>AAL</strong>
           <small>AFRICA LOGISTIC AVIATION</small>
         </span>
-      </Link>
-      <div className="flow-nav-links">
-        <Link href="/quote">Quote</Link>
-        <Link href="/book">Book</Link>
-        <Link href="/track">Track</Link>
-        <Link href="/login">AAL team</Link>
+      </a>
+      <div className="kn-header-search">
+        <Icon name="search" size={17} />
+        <span>Search by tracking reference</span>
+        <a href="/track">Track</a>
       </div>
-    </nav>
+      <div className="kn-header-actions">
+        <a href="/book">Book</a>
+        <a href="/login" className="kn-login-button">
+          AAL team
+        </a>
+      </div>
+    </header>
+  );
+}
+
+function Step({
+  number,
+  label,
+  active = false,
+  complete = false,
+}: {
+  number: string;
+  label: string;
+  active?: boolean;
+  complete?: boolean;
+}) {
+  return (
+    <span
+      className={`kn-step ${active ? "active" : ""} ${complete ? "complete" : ""}`}
+    >
+      <b>{number}</b>
+      {label}
+    </span>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  required = false,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+  type?: string;
+}) {
+  return (
+    <label className="kn-field">
+      <span>{label}</span>
+      <input
+        required={required}
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function NumberField({
+  value,
+  onChange,
+  suffix,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  suffix?: string;
+}) {
+  return (
+    <div className="kn-number-field">
+      <input
+        inputMode="decimal"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {suffix && <span>{suffix}</span>}
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="kn-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }

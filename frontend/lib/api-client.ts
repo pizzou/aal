@@ -541,12 +541,45 @@ export const publicQuoteApi = {
     ),
 };
 
+export interface PublicQuoteOption {
+  mode: string;
+  modeLabel: string;
+  baseCharge: number;
+  fuelSurcharge: number;
+  totalCharge: number;
+  currency: string;
+  rateType: string;
+  available: boolean;
+  validUntil: string;
+}
+
+export interface PublicQuoteRequestResponse {
+  requestToken: string;
+  quoteReference: string;
+  createdAt: string;
+  validUntil: string;
+  origin: string;
+  destination: string;
+  company: string | null;
+  contactName: string;
+  email: string;
+  phone: string | null;
+  commodity: string | null;
+  packages: number | null;
+  volumeCbm: number | null;
+  options: PublicQuoteOption[];
+}
+
 export const publicCommercialApi = {
   requestQuote: (data: Record<string, unknown>) =>
-    apiFetch<QuoteRecord>("/api/public/commercial/quotes", {
+    apiFetch<PublicQuoteRequestResponse>("/api/public/commercial/quotes", {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  quoteRequest: (token: string) =>
+    apiFetch<PublicQuoteRequestResponse>(
+      `/api/public/commercial/quote-requests/${encodeURIComponent(token)}`,
+    ),
   bookShipment: (data: Record<string, unknown>) =>
     apiFetch<{
       shipmentId: string;

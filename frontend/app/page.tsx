@@ -48,7 +48,7 @@ export default function Home() {
           </span>
           <span>
             <strong>AAL</strong>
-            <small>AFRICA LOGISTIC AVIATION</small>
+            <small>AVIATION AFRICA LOGISTIC </small>
           </span>
         </Link>
 
@@ -164,7 +164,7 @@ export default function Home() {
       </section>
 
       <footer className="kn-public-footer">
-        <span>© {new Date().getFullYear()} Africa Logistic Aviation</span>
+        <span>© {new Date().getFullYear()} Aviation Africa Logistic </span>
         <span>Quote · Book · Track</span>
         <Link href="/login">AAL team sign in</Link>
       </footer>

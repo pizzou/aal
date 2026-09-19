@@ -1,55 +1,51 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth-context";
 import Icon from "@/components/Icon";
 
-const actions = [
+const services = [
   {
-    key: "quote",
-    eyebrow: "01",
-    title: "Get a quote",
-    text: "Enter your route and shipment details and request an AAL freight quotation.",
-    href: "/quote",
-    icon: "file" as const,
-    label: "Start with a quote",
+    title: "Air freight",
+    copy: "Fast, time-critical cargo across regional and international lanes.",
+    icon: "plane" as const,
   },
   {
-    key: "book",
-    eyebrow: "02",
-    title: "Book a shipment",
-    text: "Turn your freight requirement into a shipment request and continue with AAL operations.",
-    href: "/book",
+    title: "Sea freight",
+    copy: "FCL, LCL and port-to-port coordination with milestone visibility.",
     icon: "ship" as const,
-    label: "Start a booking",
   },
   {
-    key: "track",
-    eyebrow: "03",
-    title: "Track a shipment",
-    text: "Use your secure tracking reference to see status, milestones and expected arrival information.",
-    href: "/track",
+    title: "Road freight",
+    copy: "Reliable road movements with dispatch, delivery and proof of delivery.",
+    icon: "truck" as const,
+  },
+  {
+    title: "Multimodal",
+    copy: "One coordinated journey across truck, air, sea and rail legs.",
     icon: "globe" as const,
-    label: "Track shipment",
   },
 ];
 
 export default function Home() {
-  const { accessToken, isLoading } = useAuth();
   const router = useRouter();
+  const [trackingRef, setTrackingRef] = useState("");
 
-  useEffect(() => {
-    if (accessToken) router.replace("/aal-control-tower");
-  }, [accessToken, router]);
-
-  if (isLoading || accessToken) return null;
+  function track(event: FormEvent) {
+    event.preventDefault();
+    const token = trackingRef.trim();
+    if (token) router.push(`/track/${encodeURIComponent(token)}`);
+  }
 
   return (
-    <main className="public-home">
-      <nav className="public-nav">
-        <Link href="/" className="public-brand" aria-label="AAL home">
+    <main className="public-site">
+      <header className="public-site-nav">
+        <Link
+          href="/"
+          className="public-brand public-brand-large"
+          aria-label="AAL home"
+        >
           <span className="public-brand-mark">
             <Icon name="plane" size={20} />
           </span>
@@ -58,82 +54,156 @@ export default function Home() {
             <small>AFRICA LOGISTIC AVIATION</small>
           </span>
         </Link>
+        <nav className="public-site-links" aria-label="Public navigation">
+          <Link href="/quote">Quote</Link>
+          <Link href="/book">Book</Link>
+          <Link href="/track">Track</Link>
+        </nav>
+        <Link href="/login" className="public-team-link">
+          AAL team
+        </Link>
+      </header>
 
-        <div className="public-nav-actions">
-          <span className="public-nav-caption">Logistics, connected.</span>
-          <Link className="public-signin" href="/login">
-            Sign in
-          </Link>
-          <Link className="public-nav-cta" href="/login">
-            Staff sign in
-          </Link>
-        </div>
-      </nav>
-
-      <section className="public-hero">
-        <div className="public-hero-copy">
+      <section className="public-hero-v2">
+        <div className="public-hero-v2-copy">
           <div className="public-eyebrow">AFRICA LOGISTIC AVIATION</div>
-          <h1>
-            Move your shipment.
-            <br />
-            <span>Stay in control.</span>
-          </h1>
+          <h1>Complete control of your shipment.</h1>
           <p>
-            AAL gives you a simple starting point for freight: get a quote, book
-            a shipment, or track an existing movement.
+            Get a freight quote, book your movement and follow every milestone —
+            without creating an account.
+          </p>
+          <div className="public-hero-actions">
+            <Link href="/quote" className="public-primary-cta">
+              Start with a quote <Icon name="arrow" size={15} />
+            </Link>
+            <Link href="/book" className="public-secondary-cta">
+              Book a shipment
+            </Link>
+          </div>
+          <div className="public-proof-row">
+            <span>
+              <Icon name="shield" size={14} /> Secure public access
+            </span>
+            <span>
+              <Icon name="globe" size={14} /> Air · Sea · Road
+            </span>
+            <span>
+              <Icon name="chart" size={14} /> Live shipment visibility
+            </span>
+          </div>
+        </div>
+
+        <div className="public-hero-card">
+          <div className="public-hero-card-label">TRACK A SHIPMENT</div>
+          <h2>Where is your cargo?</h2>
+          <p>Enter the tracking token or reference you received from AAL.</p>
+          <form onSubmit={track} className="public-track-form">
+            <div className="public-track-input">
+              <Icon name="search" size={17} />
+              <input
+                value={trackingRef}
+                onChange={(e) => setTrackingRef(e.target.value)}
+                placeholder="Tracking reference"
+                aria-label="Tracking reference"
+              />
+            </div>
+            <button className="public-primary-cta" type="submit">
+              Track <Icon name="arrow" size={14} />
+            </button>
+          </form>
+          <div className="public-hero-card-note">No login required.</div>
+        </div>
+      </section>
+
+      <section className="public-journey">
+        <div className="public-section-head">
+          <div>
+            <div className="public-eyebrow">ONE SIMPLE JOURNEY</div>
+            <h2>From quote to delivery.</h2>
+          </div>
+          <p>
+            Everything customers need is available from the public experience.
+            AAL operations remain behind the scenes.
           </p>
         </div>
+        <div className="public-journey-grid">
+          <Link href="/quote" className="public-journey-card">
+            <span>01</span>
+            <div className="public-journey-icon">
+              <Icon name="file" size={20} />
+            </div>
+            <h3>Quote</h3>
+            <p>Tell AAL your route, cargo and service requirement.</p>
+            <strong>
+              Request a quote <Icon name="arrow" size={13} />
+            </strong>
+          </Link>
+          <Link href="/book" className="public-journey-card">
+            <span>02</span>
+            <div className="public-journey-icon">
+              <Icon name="ship" size={20} />
+            </div>
+            <h3>Book</h3>
+            <p>Book directly or continue from an accepted quotation.</p>
+            <strong>
+              Start a booking <Icon name="arrow" size={13} />
+            </strong>
+          </Link>
+          <Link href="/track" className="public-journey-card">
+            <span>03</span>
+            <div className="public-journey-icon">
+              <Icon name="globe" size={20} />
+            </div>
+            <h3>Track</h3>
+            <p>Follow milestones, ETA, carrier and delivery progress.</p>
+            <strong>
+              Track shipment <Icon name="arrow" size={13} />
+            </strong>
+          </Link>
+        </div>
+      </section>
 
-        <div className="public-action-grid" aria-label="AAL customer actions">
-          {actions.map((action) => (
-            <Link
-              href={action.href}
-              className={`public-action-card ${action.key}`}
-              key={action.key}
-            >
-              <div className="public-action-top">
-                <span className="public-action-number">{action.eyebrow}</span>
-                <span className="public-action-icon">
-                  <Icon name={action.icon} size={19} />
-                </span>
+      <section className="public-services">
+        <div className="public-section-head">
+          <div>
+            <div className="public-eyebrow">LOGISTICS CAPABILITIES</div>
+            <h2>One platform. Every mode.</h2>
+          </div>
+          <p>
+            Built around the daily realities of African freight: multimodal
+            coordination, shipment control and operational visibility.
+          </p>
+        </div>
+        <div className="public-service-grid">
+          {services.map((service) => (
+            <div className="public-service-card" key={service.title}>
+              <div className="public-service-icon">
+                <Icon name={service.icon} size={19} />
               </div>
-              <div className="public-action-body">
-                <h2>{action.title}</h2>
-                <p>{action.text}</p>
-              </div>
-              <span className="public-action-link">
-                {action.label}
-                <Icon name="arrow" size={14} />
-              </span>
-            </Link>
+              <h3>{service.title}</h3>
+              <p>{service.copy}</p>
+            </div>
           ))}
         </div>
       </section>
 
-      <section className="public-trust">
+      <section className="public-final-cta">
         <div>
-          <strong>Air · Sea · Road · Multimodal</strong>
-          <span>One connected AAL logistics experience.</span>
+          <div className="public-eyebrow">READY TO MOVE?</div>
+          <h2>Start with the shipment you have today.</h2>
+          <p>
+            No customer account is required for quoting, booking or tracking.
+          </p>
         </div>
-        <div className="public-trust-items">
-          <span>
-            <Icon name="shield" size={14} /> Secure shipment handling
-          </span>
-          <span>
-            <Icon name="globe" size={14} /> Shipment visibility
-          </span>
-          <span>
-            <Icon name="chart" size={14} /> Commercial control
-          </span>
-        </div>
+        <Link href="/quote" className="public-primary-cta">
+          Get a quote <Icon name="arrow" size={14} />
+        </Link>
       </section>
 
-      <footer className="public-footer">
+      <footer className="public-site-footer">
         <span>© {new Date().getFullYear()} Africa Logistic Aviation</span>
-        <div>
-          <Link href="/track">Track shipment</Link>
-          <Link href="/login">AAL staff sign in</Link>
-        </div>
+        <span>Quote · Book · Track</span>
+        <Link href="/login">AAL team sign in</Link>
       </footer>
     </main>
   );

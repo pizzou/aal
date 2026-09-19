@@ -1,174 +1,57 @@
 "use client";
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+
+import { FormEvent, useState } from "react";
 import Link from "next/link";
-import {
-  ApiError,
-  PublicShipmentView,
-  publicTrackingApi,
-} from "@/lib/api-client";
+import { useRouter } from "next/navigation";
 import Icon from "@/components/Icon";
-export default function PublicTrackingResult() {
-  const params = useParams<{ token: string }>();
-  const [data, setData] = useState<PublicShipmentView | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    if (params.token)
-      publicTrackingApi
-        .track(params.token)
-        .then(setData)
-        .catch((e) =>
-          setError(
-            e instanceof ApiError ? e.message : "Tracking reference not found",
-          ),
-        );
-  }, [params.token]);
-  if (error)
-    return (
-      <main className="public-flow">
-        <FlowNav />
-        <section className="flow-success">
-          <div className="flow-success-icon">
-            <Icon name="search" size={30} />
-          </div>
-          <div className="public-eyebrow">03 / TRACK</div>
-          <h1>We could not find that shipment.</h1>
-          <p>{error}. Check the reference and try again.</p>
-          <Link className="public-main-button" href="/track">
-            Try another reference
-          </Link>
-        </section>
-      </main>
-    );
-  if (!data)
-    return (
-      <main className="public-flow">
-        <FlowNav />
-        <section className="flow-success">
-          <div className="public-eyebrow">03 / TRACK</div>
-          <h1>Loading shipment visibility…</h1>
-        </section>
-      </main>
-    );
+
+export default function TrackPage() {
+  const router = useRouter();
+  const [reference, setReference] = useState("");
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const token = reference.trim();
+    if (token) router.push(`/track/${encodeURIComponent(token)}`);
+  }
+
   return (
-    <main className="public-flow">
+    <main className="public-flow public-track-home">
       <FlowNav />
-      <section className="track-result">
-        <div className="track-result-head">
-          <div>
-            <div className="public-eyebrow">03 / LIVE SHIPMENT VISIBILITY</div>
-            <h1>{data.referenceCode}</h1>
-            <p>
-              {data.originAddress} <span>→</span> {data.destinationAddress}
-            </p>
+      <section className="public-center-panel">
+        <div className="public-eyebrow">03 / TRACK</div>
+        <h1>Track your shipment.</h1>
+        <p>Enter the tracking token or shipment reference sent by AAL.</p>
+        <form onSubmit={submit} className="public-large-track-form">
+          <div className="public-track-input">
+            <Icon name="search" size={18} />
+            <input
+              autoFocus
+              value={reference}
+              onChange={(e) => setReference(e.target.value)}
+              placeholder="e.g. 2a7f... or AAL-2026-00124"
+            />
           </div>
-          <span className="track-status">{data.status}</span>
-        </div>
-        <div className="track-kpis">
-          <div>
-            <span>MODE</span>
-            <strong>{data.transportMode}</strong>
-          </div>
-          <div>
-            <span>CARRIER</span>
-            <strong>{data.carrierName || "Assigned by AAL"}</strong>
-          </div>
-          <div>
-            <span>REFERENCE</span>
-            <strong>{data.carrierReferenceNumber || data.referenceCode}</strong>
-          </div>
-          <div>
-            <span>ETA</span>
-            <strong>
-              {data.eta ? new Date(data.eta).toLocaleString() : "Updating"}
-            </strong>
-          </div>
-        </div>
-        <section className="track-panel">
-          <div className="track-panel-title">
-            <span>SHIPMENT JOURNEY</span>
-            <strong>Milestones</strong>
-          </div>
-          {data.events.map((x, i) => (
-            <div className="track-event" key={`${x.occurredAt}-${i}`}>
-              <div className="track-dot" />
-              <div>
-                <strong>{x.eventType}</strong>
-                <span>{x.location || "AAL network"}</span>
-                <small>{x.notes || "Shipment milestone recorded"}</small>
-              </div>
-              <time>{new Date(x.occurredAt).toLocaleString()}</time>
-            </div>
-          ))}
-          {!data.events.length && (
-            <div className="empty">
-              Shipment booked. AAL will publish additional milestones as the
-              movement progresses.
-            </div>
-          )}
-        </section>
-        <div className="track-bottom">
-          <div className="track-panel">
-            <div className="track-panel-title">
-              <span>DOCUMENTS</span>
-              <strong>Customer-visible documents</strong>
-            </div>
-            {data.documents.map((d, i) => (
-              <div className="track-doc" key={`${d.documentType}-${i}`}>
-                <Icon name="file" size={16} />
-                <div>
-                  <strong>{d.documentType}</strong>
-                  <small>
-                    {d.status} · {new Date(d.createdAt).toLocaleDateString()}
-                  </small>
-                </div>
-              </div>
-            ))}
-            {!data.documents.length && (
-              <div className="empty">
-                No public documents have been published.
-              </div>
-            )}
-          </div>
-          <div className="track-panel">
-            <div className="track-panel-title">
-              <span>DELIVERY</span>
-              <strong>Proof of delivery</strong>
-            </div>
-            {data.pod ? (
-              <>
-                <div className="pod-line">
-                  <span>Recipient</span>
-                  <strong>{data.pod.recipientName || "—"}</strong>
-                </div>
-                <div className="pod-line">
-                  <span>Delivered</span>
-                  <strong>
-                    {new Date(data.pod.deliveredAt).toLocaleString()}
-                  </strong>
-                </div>
-                <div className="pod-line">
-                  <span>Evidence</span>
-                  <strong>
-                    {data.pod.evidenceAvailable ? "Available" : "Not attached"}
-                  </strong>
-                </div>
-              </>
-            ) : (
-              <div className="empty">
-                POD will appear here after delivery confirmation.
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="track-cta">
-          <Link href="/track">Track another shipment</Link>
-          <Link href="/">AAL home</Link>
+          <button className="public-main-button" type="submit">
+            Track shipment <Icon name="arrow" size={14} />
+          </button>
+        </form>
+        <div className="flow-benefits">
+          <span>
+            <Icon name="shield" size={15} /> No login required
+          </span>
+          <span>
+            <Icon name="globe" size={15} /> Milestones & ETA
+          </span>
+          <span>
+            <Icon name="file" size={15} /> Public documents
+          </span>
         </div>
       </section>
     </main>
   );
 }
+
 function FlowNav() {
   return (
     <nav className="public-nav flow-nav">
@@ -185,7 +68,7 @@ function FlowNav() {
         <Link href="/quote">Quote</Link>
         <Link href="/book">Book</Link>
         <Link href="/track">Track</Link>
-        <Link href="/login">Sign in</Link>
+        <Link href="/login">AAL team</Link>
       </div>
     </nav>
   );

@@ -134,9 +134,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     path === "/track" ||
     path.startsWith("/track/") ||
     path.startsWith("/quote/view/") ||
-    path === "/portal" ||
-    path.startsWith("/portal/") ||
-    path.startsWith("/customer-portal/") ||
     path === "/";
 
   useEffect(() => {

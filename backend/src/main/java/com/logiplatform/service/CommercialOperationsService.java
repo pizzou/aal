@@ -73,32 +73,28 @@ public class CommercialOperationsService {
         BigDecimal profit = amount.subtract(
                 supplier.add(other));
 
-        return QuoteResponse.from(
-                quotes.save(
-                        new CommercialQuote(
-                                tenantId,
-                                r.quoteId(),
-                                r.quoteDate(),
-                                r.client(),
-                                r.route(),
-                                r.serviceType(),
-                                r.commodity(),
-                                nz(r.chargeableWeightKg()),
-                                supplier,
-                                other,
-                                nz(r.markupPercent()),
-                                amount,
-                                profit,
-                                r.validUntil(),
-                                r.status() == null
-                                        ? "Draft"
-                                        : r.status(),
-                                r.owner(),
-                                r.followUpDate(),
-                                r.notes(),
-                                r.pricingMode() == null
-                                        ? "RULES_BASED"
-                                        : r.pricingMode())));
+        CommercialQuote quote = new CommercialQuote(
+                tenantId,
+                r.quoteId(),
+                r.quoteDate(),
+                r.client(),
+                r.route(),
+                r.serviceType(),
+                r.commodity(),
+                nz(r.chargeableWeightKg()),
+                supplier,
+                other,
+                nz(r.markupPercent()),
+                amount,
+                profit,
+                r.validUntil(),
+                r.status() == null ? "Draft" : r.status(),
+                r.owner(),
+                r.followUpDate(),
+                r.notes(),
+                r.pricingMode() == null ? "RULES_BASED" : r.pricingMode());
+        quote.setCustomerContact(r.customerEmail(), r.customerContactName(), r.customerPhone());
+        return QuoteResponse.from(quotes.save(quote));
     }
 
     @Transactional

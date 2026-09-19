@@ -3,6 +3,8 @@ package com.logiplatform.service;
 import com.logiplatform.dto.PublicQuoteDtos.QuoteResponseAction;
 import com.logiplatform.dto.PublicQuoteDtos.QuoteView;
 import com.logiplatform.model.CommercialQuote;
+import com.logiplatform.model.Shipment;
+import com.logiplatform.repository.ShipmentRepository;
 import com.logiplatform.repository.ClientRecordRepository;
 import com.logiplatform.repository.CommercialQuoteRepository;
 import com.logiplatform.tenancy.TenantContext;
@@ -30,6 +32,8 @@ public class PublicQuoteShareService {
     private final ClientRecordRepository clients;
     private final JdbcTemplate db;
     private final MailService mail;
+    private final CommercialOperationsService commercialOperations;
+    private final ShipmentRepository shipments;
     private final SecureRandom random = new SecureRandom();
 
     @Value("${app.frontend.url:http://localhost:3000}")
@@ -38,12 +42,16 @@ public class PublicQuoteShareService {
     public PublicQuoteShareService(
             CommercialQuoteRepository quotes,
             ClientRecordRepository clients,
-            @Qualifier("authJdbcTemplate") JdbcTemplate db,
-            MailService mail) {
+            @Qualifier("publicJdbcTemplate") JdbcTemplate db,
+            MailService mail,
+            CommercialOperationsService commercialOperations,
+            ShipmentRepository shipments) {
         this.quotes = quotes;
         this.clients = clients;
         this.db = db;
         this.mail = mail;
+        this.commercialOperations = commercialOperations;
+        this.shipments = shipments;
     }
 
     /**
@@ -79,7 +87,9 @@ public class PublicQuoteShareService {
                 quote.getClient()).orElse(null);
 
         String email = overrideEmail == null || overrideEmail.isBlank()
-                ? (client == null ? null : client.getEmail())
+                ? (client != null && client.getEmail() != null && !client.getEmail().isBlank()
+                    ? client.getEmail()
+                    : quote.getCustomerEmail())
                 : overrideEmail.trim();
 
         if (email == null || email.isBlank()) {
@@ -88,7 +98,9 @@ public class PublicQuoteShareService {
                     "Customer email is not configured. Add the customer's email or provide a recipient email.");
         }
 
-        String name = client == null ? quote.getClient() : client.getContactPerson();
+        String name = client != null && client.getContactPerson() != null && !client.getContactPerson().isBlank()
+                ? client.getContactPerson()
+                : (quote.getCustomerContactName() == null ? quote.getClient() : quote.getCustomerContactName());
         String rawToken = generateToken();
         String tokenHash = hash(rawToken);
         Instant expiresAt = quote.getValidUntil() == null
@@ -184,7 +196,7 @@ public class PublicQuoteShareService {
         // Serialize responses for the same share token so two browser clicks
         // cannot race and produce conflicting WON/LOST outcomes.
         ShareRow locked = db.queryForObject(
-                "SELECT s.id, s.tenant_id, s.quote_id, s.response, "
+                "SELECT s.id, s.tenant_id, s.quote_id, s.response, s.booked_shipment_id, "
                         + "q.quote_id AS quote_reference, q.quote_date, q.client, q.route, "
                         + "q.service_type, q.commodity, q.chargeable_weight_kg, q.quoted_amount, "
                         + "q.valid_until, q.status "
@@ -196,6 +208,7 @@ public class PublicQuoteShareService {
                         rs.getObject("tenant_id", UUID.class),
                         rs.getObject("quote_id", UUID.class),
                         rs.getString("response"),
+                        rs.getObject("booked_shipment_id", UUID.class),
                         rs.getString("quote_reference"),
                         rs.getObject("quote_date", LocalDate.class),
                         rs.getString("client"),
@@ -246,6 +259,47 @@ public class PublicQuoteShareService {
                 "Your response has been recorded. AAL will follow up with you.");
     }
 
+    @Transactional
+    public PublicBookingResult book(String token, String shipmentReference) {
+        ShareRow row = find(token);
+        if (row == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Quotation link is invalid or expired");
+        }
+        if (row.validUntil() != null && row.validUntil().isBefore(LocalDate.now())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This quotation has expired.");
+        }
+        if ("CONVERTED".equalsIgnoreCase(row.status()) && row.bookedShipmentId() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This quotation has already been converted to a shipment.");
+        }
+        if (!"ACCEPTED".equalsIgnoreCase(row.response()) && !"WON".equalsIgnoreCase(row.status()) && !"CONVERTED".equalsIgnoreCase(row.status())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Accept the quotation before booking it.");
+        }
+
+        UUID existingShipmentId = row.bookedShipmentId();
+        if (existingShipmentId != null) {
+            TenantContext.setTenantId(row.tenantId());
+            try {
+                Shipment existing = shipments.findByIdAndTenantId(existingShipmentId, row.tenantId()).orElse(null);
+                if (existing != null) {
+                    return new PublicBookingResult(existing.getId(), existing.getReferenceCode(), existing.getTrackingToken(), existing.getStatus().name(), "Booking already confirmed.");
+                }
+            } finally {
+                TenantContext.clear();
+            }
+        }
+
+        TenantContext.setTenantId(row.tenantId());
+        try {
+            var converted = commercialOperations.convertQuoteToShipment(row.quoteId(), shipmentReference, null, null);
+            Shipment shipment = shipments.findByIdAndTenantId(converted.shipmentId(), row.tenantId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Shipment was created but could not be loaded"));
+            db.update("UPDATE commercial_quote_shares SET booked_shipment_id=?, booked_at=now() WHERE id=?", shipment.getId(), row.id());
+            return new PublicBookingResult(shipment.getId(), shipment.getReferenceCode(), shipment.getTrackingToken(), shipment.getStatus().name(), "Booking confirmed.");
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
     private ShareRow find(String token) {
         if (token == null || token.isBlank() || token.length() > 200) {
             return null;
@@ -255,7 +309,7 @@ public class PublicQuoteShareService {
 
         var rows = db.query(
                 "SELECT "
-                        + "s.id, s.tenant_id, s.quote_id, s.response, "
+                        + "s.id, s.tenant_id, s.quote_id, s.response, s.booked_shipment_id, "
                         + "q.quote_id AS quote_reference, q.quote_date, q.client, q.route, "
                         + "q.service_type, q.commodity, q.chargeable_weight_kg, q.quoted_amount, "
                         + "q.valid_until, q.status "
@@ -268,6 +322,7 @@ public class PublicQuoteShareService {
                         rs.getObject("tenant_id", UUID.class),
                         rs.getObject("quote_id", UUID.class),
                         rs.getString("response"),
+                        rs.getObject("booked_shipment_id", UUID.class),
                         rs.getString("quote_reference"),
                         rs.getObject("quote_date", LocalDate.class),
                         rs.getString("client"),
@@ -327,6 +382,14 @@ public class PublicQuoteShareService {
         }
     }
 
+    public record PublicBookingResult(
+            UUID shipmentId,
+            String reference,
+            UUID trackingToken,
+            String status,
+            String message) {
+    }
+
     public record QuoteShareResult(
             UUID shareId,
             String quoteReference,
@@ -340,6 +403,7 @@ public class PublicQuoteShareService {
             UUID tenantId,
             UUID quoteId,
             String response,
+            UUID bookedShipmentId,
             String quoteReference,
             LocalDate quoteDate,
             String client,

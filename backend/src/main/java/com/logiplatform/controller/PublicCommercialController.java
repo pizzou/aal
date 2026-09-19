@@ -6,6 +6,9 @@ import com.logiplatform.dto.ShipmentDtos.CreateShipmentRequest;
 import com.logiplatform.dto.ShipmentDtos.ShipmentResponse;
 import com.logiplatform.service.CommercialOperationsService;
 import com.logiplatform.service.ShipmentService;
+import com.logiplatform.service.MailService;
+import static com.logiplatform.dto.CommandCenterShipmentDtos.UpdateRequest;
+import static com.logiplatform.dto.ShipmentDtos.UpdateStatusRequest;
 import com.logiplatform.tenancy.TenantContext;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
@@ -27,14 +30,17 @@ public class PublicCommercialController {
     private final CommercialOperationsService commercial;
     private final ShipmentService shipments;
     private final UUID tenantId;
+    private final MailService mail;
 
     public PublicCommercialController(
             CommercialOperationsService commercial,
             ShipmentService shipments,
-            @Value("${app.single-tenant.id}") UUID tenantId) {
+            @Value("${app.single-tenant.id}") UUID tenantId,
+            MailService mail) {
         this.commercial = commercial;
         this.shipments = shipments;
         this.tenantId = tenantId;
+        this.mail = mail;
     }
 
     @PostMapping("/quotes")
@@ -61,8 +67,18 @@ public class PublicCommercialController {
                     "WEB",
                     null,
                     notes,
-                    "PUBLIC_REQUEST");
-            return ResponseEntity.ok(commercial.createQuote(quote));
+                    "PUBLIC_REQUEST",
+                    request.email(),
+                    request.contactName(),
+                    request.phone());
+            QuoteResponse response = commercial.createQuote(quote);
+            mail.sendQuoteRequestReceived(
+                    request.email(),
+                    request.contactName(),
+                    response.quoteId(),
+                    route,
+                    request.serviceType());
+            return ResponseEntity.ok(response);
         });
     }
 
@@ -72,13 +88,58 @@ public class PublicCommercialController {
             String reference = request.customerReference() == null || request.customerReference().isBlank()
                     ? "WEB-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase()
                     : request.customerReference().trim();
+            String normalizedMode = normalizeTransportMode(request.serviceType());
             ShipmentResponse shipment = shipments.create(new CreateShipmentRequest(
                     reference,
                     request.origin().trim(),
                     request.destination().trim(),
-                    request.serviceType(),
+                    normalizedMode,
                     request.carrier(),
                     null));
+            shipment = shipments.updateStatus(
+                    shipment.id(),
+                    new UpdateStatusRequest("BOOKED"));
+
+            shipments.updateCommandCenter(
+                    shipment.id(),
+                    new UpdateRequest(
+                            request.company(),
+                            request.contactName(),
+                            null,
+                            null,
+                            request.origin().trim(),
+                            null,
+                            request.destination().trim(),
+                            null,
+                            null,
+                            null,
+                            normalizedMode.equals("AIR") ? request.carrier() : null,
+                            normalizedMode,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            "UNPAID",
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            "PUBLIC WEB BOOKING",
+                            "USD",
+                            LocalDate.now(),
+                            "BOOKED"));
+            if (request.email() != null && !request.email().isBlank()) {
+                shipments.updateNotificationEmail(
+                        shipment.id(),
+                        new com.logiplatform.dto.ShipmentDtos.UpdateNotificationEmailRequest(request.email()));
+            }
+
             return ResponseEntity.ok(new PublicBookingResponse(
                     shipment.id(),
                     shipment.referenceCode(),
@@ -95,6 +156,17 @@ public class PublicCommercialController {
         } finally {
             TenantContext.clear();
         }
+    }
+
+    private static String normalizeTransportMode(String raw) {
+        String value = raw == null ? "ROAD" : raw.trim().toUpperCase();
+        return switch (value) {
+            case "AIR", "AIRFREIGHT", "AIR FREIGHT" -> "AIR";
+            case "SEA", "SEA FREIGHT", "SEAFREIGHT" -> "SEA";
+            case "ROAD", "ROAD FREIGHT", "ROADFREIGHT" -> "ROAD";
+            case "RAIL", "RAIL FREIGHT", "RAILFREIGHT" -> "RAIL";
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid transport mode: " + raw);
+        };
     }
 
     private static String firstNonBlank(String... values) {
@@ -123,8 +195,8 @@ public class PublicCommercialController {
             @PositiveOrZero BigDecimal volumeCbm,
             @PositiveOrZero Integer packages,
             String company,
-            String contactName,
-            @Email String email,
+            @NotBlank String contactName,
+            @NotBlank @Email String email,
             String phone,
             String notes) {}
 
@@ -135,8 +207,8 @@ public class PublicCommercialController {
             String customerReference,
             String carrier,
             String company,
-            String contactName,
-            @Email String email,
+            @NotBlank String contactName,
+            @NotBlank @Email String email,
             String phone) {}
 
     public record PublicBookingResponse(UUID shipmentId, String reference, UUID trackingToken, String status, String message) {}

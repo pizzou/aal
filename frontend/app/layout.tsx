@@ -4,10 +4,10 @@ import { AuthProvider } from "@/lib/auth-context";
 import AppShell from "@/components/AppShell";
 
 export const metadata: Metadata = {
-  title: "Africa Logistic Aviation — Operations Control Tower",
+  title: "AAL — Quote, Book & Track Freight",
 
   description:
-    "Africa Logistic Aviation enterprise logistics operations platform for air cargo, multimodal freight, warehouse, documentation, commercial control and shipment visibility.",
+    "Africa Logistic Aviation public freight experience: request quotes, book shipments and track cargo across air, sea, road and multimodal logistics.",
 };
 
 export default function RootLayout({

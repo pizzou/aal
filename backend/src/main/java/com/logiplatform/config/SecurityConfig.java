@@ -78,8 +78,9 @@ public class SecurityConfig {
                                                                 "/api/auth/password/forgot",
                                                                 "/api/auth/password/reset",
                                                                 "/api/auth/csrf",
-                                                                "/api/public/**",
                                                                 "/api/public/commercial/**",
+                                                                "/api/public/quotes/**",
+                                                                "/api/public/tracking/**",
                                                                 "/actuator/health",
                                                                 "/actuator/prometheus",
                                                                 "/actuator/info")

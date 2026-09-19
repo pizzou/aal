@@ -49,6 +49,44 @@ public class MailService {
     }
 
     @Async
+    public void sendQuoteRequestReceived(
+            String recipientEmail,
+            String recipientName,
+            String quoteReference,
+            String route,
+            String serviceType) {
+
+        if (recipientEmail == null || recipientEmail.isBlank()) return;
+
+        send(
+                recipientEmail.trim(),
+                "Aviation Africa Logistics - Quote request received " + escape(quoteReference),
+                """
+                <html><body style="font-family:Arial,sans-serif;color:#172033;line-height:1.55">
+                  <div style="max-width:680px;margin:0 auto;padding:28px">
+                    <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0b5cab">AFRICA LOGISTIC AVIATION</div>
+                    <h2 style="margin:10px 0 8px">We received your quote request</h2>
+                    <p>Hello %s,</p>
+                    <p>AAL has received your freight quotation request. Our commercial team will review the shipment details and send the quotation to this email address.</p>
+                    <table style="width:100%%;border-collapse:collapse;margin:20px 0">
+                      <tr><td style="padding:8px 0;color:#64748b">Reference</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+                      <tr><td style="padding:8px 0;color:#64748b">Route</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+                      <tr><td style="padding:8px 0;color:#64748b">Service</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+                    </table>
+                    <p>No account is required. When the quotation is ready, AAL will send you a secure link where you can review, accept and book the shipment.</p>
+                    <p style="font-size:13px;color:#64748b">Please keep this email for your reference.</p>
+                    <p>Africa Logistic Aviation</p>
+                  </div>
+                </body></html>
+                """.formatted(
+                        escape(recipientName == null || recipientName.isBlank() ? "Customer" : recipientName),
+                        escape(quoteReference),
+                        escape(route),
+                        escape(serviceType))
+        );
+    }
+
+    @Async
     public void sendQuotationShare(
             String recipientEmail,
             String recipientName,

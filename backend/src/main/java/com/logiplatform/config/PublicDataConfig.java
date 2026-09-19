@@ -1,0 +1,26 @@
+package com.logiplatform.config;
+
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+import javax.sql.DataSource;
+
+/**
+ * Narrow raw-database access for token-scoped public endpoints.
+ *
+ * Public quote/tracking requests arrive without a tenant context, so they
+ * cannot use the tenant-aware datasource for the initial token lookup. The
+ * public services constrain every lookup by an unguessable token hash and,
+ * where relevant, the stored tenant id before touching business data.
+ */
+@Configuration
+public class PublicDataConfig {
+
+    @Bean(name = "publicJdbcTemplate")
+    public JdbcTemplate publicJdbcTemplate(
+            @Qualifier("rawDataSource") DataSource rawDataSource) {
+        return new JdbcTemplate(rawDataSource);
+    }
+}

@@ -51,6 +51,12 @@ public class CommercialQuote {
     private String notes;
     @Column(name = "pricing_mode")
     private String pricingMode = "RULES_BASED";
+    @Column(name = "customer_email")
+    private String customerEmail;
+    @Column(name = "customer_contact_name")
+    private String customerContactName;
+    @Column(name = "customer_phone")
+    private String customerPhone;
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 
@@ -81,6 +87,16 @@ public class CommercialQuote {
         this.notes = notes;
         pricingMode = mode;
     }
+
+    public void setCustomerContact(String email, String contactName, String phone) {
+        customerEmail = email == null || email.isBlank() ? null : email.trim();
+        customerContactName = contactName == null || contactName.isBlank() ? null : contactName.trim();
+        customerPhone = phone == null || phone.isBlank() ? null : phone.trim();
+    }
+
+    public String getCustomerEmail() { return customerEmail; }
+    public String getCustomerContactName() { return customerContactName; }
+    public String getCustomerPhone() { return customerPhone; }
 
     public void changeStatus(String value) {
         if (value == null || value.isBlank())

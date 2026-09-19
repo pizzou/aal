@@ -528,6 +528,17 @@ export const publicQuoteApi = {
       `/api/public/quotes/${encodeURIComponent(token)}/response?action=${action}`,
       { method: "POST" },
     ),
+  book: (token: string, shipmentReference?: string) =>
+    apiFetch<{
+      shipmentId: string;
+      reference: string;
+      trackingToken: string;
+      status: string;
+      message: string;
+    }>(
+      `/api/public/quotes/${encodeURIComponent(token)}/book${shipmentReference ? `?shipmentReference=${encodeURIComponent(shipmentReference)}` : ""}`,
+      { method: "POST" },
+    ),
 };
 
 export const publicCommercialApi = {

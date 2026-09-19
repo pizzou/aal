@@ -24,7 +24,7 @@ public class PublicTrackingService {
         private final JdbcTemplate db;
 
         public PublicTrackingService(
-                        @Qualifier("authJdbcTemplate") JdbcTemplate db) {
+                        @Qualifier("publicJdbcTemplate") JdbcTemplate db) {
                 this.db = db;
         }
 

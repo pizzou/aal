@@ -18,4 +18,9 @@ public class PublicQuoteController {
     public QuoteResponseAction response(@PathVariable String token, @RequestParam String action) {
         return service.respond(token, action);
     }
+
+    @PostMapping("/{token}/book")
+    public PublicQuoteShareService.PublicBookingResult book(@PathVariable String token, @RequestParam(required = false) String shipmentReference) {
+        return service.book(token, shipmentReference);
+    }
 }

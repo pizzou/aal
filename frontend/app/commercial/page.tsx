@@ -35,6 +35,7 @@ export default function CommercialPage() {
   const [busy, setBusy] = useState(false);
   const [shareQuoteId, setShareQuoteId] = useState<string | null>(null);
   const [shareEmail, setShareEmail] = useState("");
+  const [sendImmediately, setSendImmediately] = useState(true);
   const [quote, setQuote] = useState({
     quoteId: id("AAL-QT"),
     quoteDate: today(),
@@ -51,6 +52,7 @@ export default function CommercialPage() {
     owner: "",
     followUpDate: "",
     notes: "",
+    customerEmail: "",
   });
   const canExpense =
     role === "ADMIN" || role === "MANAGER" || role === "FINANCE";
@@ -105,7 +107,7 @@ export default function CommercialPage() {
     setError("");
     setSuccess("");
     try {
-      await commercialApi.createQuote({
+      const created = await commercialApi.createQuote({
         ...quote,
         chargeableWeightKg: Number(quote.chargeableWeightKg || 0),
         supplierCost: Number(quote.supplierCost || 0),
@@ -114,7 +116,19 @@ export default function CommercialPage() {
         quotedAmount: Number(quote.quotedAmount || 0),
         status: "DRAFT",
         pricingMode: "RULES_BASED",
+        customerEmail: quote.customerEmail || undefined,
       });
+      if (sendImmediately) {
+        const sent = await commercialApi.shareQuote(
+          created.id,
+          quote.customerEmail.trim() || undefined,
+        );
+        setSuccess(
+          `Quotation ${sent.quoteReference} was created and sent to ${sent.recipientEmail}.`,
+        );
+      } else {
+        setSuccess("Quotation created as a draft.");
+      }
       setQuote({
         ...quote,
         quoteId: id("AAL-QT"),
@@ -125,8 +139,9 @@ export default function CommercialPage() {
         otherCost: "",
         markupPercent: "",
         quotedAmount: "",
+        customerEmail: "",
       });
-      setSuccess("Quotation created.");
+      if (!sendImmediately) setSuccess("Quotation created as a draft.");
       await load();
     } catch (e) {
       setError(msg(e));
@@ -289,6 +304,7 @@ export default function CommercialPage() {
                   ["quoteId", "Quote ID"],
                   ["quoteDate", "Quote date"],
                   ["client", "Client"],
+                  ["customerEmail", "Customer email"],
                   ["route", "Route"],
                   ["serviceType", "Service type"],
                   ["commodity", "Commodity"],
@@ -343,8 +359,26 @@ export default function CommercialPage() {
                   }
                 />
               </div>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={sendImmediately}
+                  onChange={(e) => setSendImmediately(e.target.checked)}
+                />
+                <span>
+                  <strong>Send quotation to customer immediately</strong>
+                  <small>
+                    Uses the customer email above or the email stored in
+                    Customer 360.
+                  </small>
+                </span>
+              </label>
               <button className="btn btn-primary" disabled={busy}>
-                {busy ? "Saving…" : "Create quotation"}
+                {busy
+                  ? "Saving…"
+                  : sendImmediately
+                    ? "Create & send quotation"
+                    : "Create quotation"}
               </button>
             </form>
           </div>

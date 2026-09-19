@@ -1,20 +1,192 @@
 "use client";
-import { useEffect, useState } from "react";
-import { ApiError, PublicQuoteView, publicQuoteApi } from "@/lib/api-client";
 
-export default function PublicQuotePage({ params }: { params: { token: string } }) {
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { ApiError, PublicQuoteView, publicQuoteApi } from "@/lib/api-client";
+import Icon from "@/components/Icon";
+
+export default function PublicQuotePage({
+  params,
+}: {
+  params: { token: string };
+}) {
   const [quote, setQuote] = useState<PublicQuoteView | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  useEffect(() => { publicQuoteApi.view(params.token).then(setQuote).catch((e: unknown) => setError(e instanceof ApiError ? e.message : "Quotation link is unavailable.")); }, [params.token]);
+
+  useEffect(() => {
+    publicQuoteApi
+      .view(params.token)
+      .then(setQuote)
+      .catch((e: unknown) =>
+        setError(
+          e instanceof ApiError ? e.message : "Quotation link is unavailable.",
+        ),
+      );
+  }, [params.token]);
+
   async function respond(action: "ACCEPTED" | "DECLINED") {
-    setBusy(true); setError("");
-    try { const r = await publicQuoteApi.respond(params.token, action); setMessage(r.message); const v = await publicQuoteApi.view(params.token); setQuote(v); }
-    catch (e) { setError(e instanceof ApiError ? e.message : "Unable to record your response."); }
-    finally { setBusy(false); }
+    setBusy(true);
+    setError("");
+    try {
+      const response = await publicQuoteApi.respond(params.token, action);
+      setMessage(response.message);
+      setQuote(await publicQuoteApi.view(params.token));
+    } catch (e) {
+      setError(
+        e instanceof ApiError ? e.message : "Unable to record your response.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
-  if (error) return <main className="public-flow"><section className="flow-success"><div className="public-eyebrow">AAL QUOTATION</div><h1>Quotation unavailable</h1><p>{error}</p></section></main>;
-  if (!quote) return <main className="public-flow"><section className="flow-success"><div className="public-eyebrow">AAL QUOTATION</div><h1>Loading quotation…</h1></section></main>;
-  return <main className="public-flow"><nav className="public-nav flow-nav"><div className="public-brand"><span className="public-brand-mark">✈</span><span><strong>AAL</strong><small>AFRICA LOGISTIC AVIATION</small></span></div></nav><section className="flow-layout"><div className="flow-intro"><div className="public-eyebrow">AAL QUOTATION</div><h1>{quote.quoteReference}</h1><p>Prepared for <strong>{quote.client || "Customer"}</strong>. Review the quotation details below and respond securely online.</p></div><div className="card" style={{ alignSelf: "start" }}><div className="metric-row"><span>Route</span><strong>{quote.route || "—"}</strong></div><div className="metric-row"><span>Service</span><strong>{quote.serviceType || "—"}</strong></div><div className="metric-row"><span>Commodity</span><strong>{quote.commodity || "—"}</strong></div><div className="metric-row"><span>Chargeable weight</span><strong>{quote.chargeableWeightKg ?? "—"} kg</strong></div><div className="metric-row"><span>Quoted total</span><strong>{(quote.quotedAmount ?? 0).toLocaleString()}</strong></div><div className="metric-row"><span>Valid until</span><strong>{quote.validUntil || "—"}</strong></div>{message && <div className="alert alert-success" style={{ marginTop: 16 }}>{message}</div>}{quote.actionable && !quote.response && <div style={{ display: "flex", gap: 10, marginTop: 20 }}><button className="btn btn-primary" disabled={busy} onClick={() => respond("ACCEPTED")}>{busy ? "Processing…" : "Accept quotation"}</button><button className="btn" disabled={busy} onClick={() => respond("DECLINED")}>Decline</button></div>}{quote.response && <div className="status status-neutral" style={{ marginTop: 18 }}>Response recorded: {quote.response}</div>}</div></section></main>;
+
+  if (error)
+    return (
+      <main className="public-flow">
+        <FlowNav />
+        <section className="flow-success">
+          <div className="public-eyebrow">AAL QUOTATION</div>
+          <h1>Quotation unavailable</h1>
+          <p>{error}</p>
+          <Link className="public-main-button" href="/quote">
+            Request a new quote <Icon name="arrow" size={14} />
+          </Link>
+        </section>
+      </main>
+    );
+  if (!quote)
+    return (
+      <main className="public-flow">
+        <FlowNav />
+        <section className="flow-success">
+          <div className="public-eyebrow">AAL QUOTATION</div>
+          <h1>Loading quotation…</h1>
+        </section>
+      </main>
+    );
+
+  const accepted =
+    quote.response === "ACCEPTED" || quote.status.toUpperCase() === "WON";
+  const booked = quote.status.toUpperCase() === "CONVERTED";
+
+  return (
+    <main className="public-flow">
+      <FlowNav />
+      <section className="quote-view-shell">
+        <div className="quote-view-head">
+          <div>
+            <div className="public-eyebrow">AAL QUOTATION</div>
+            <h1>{quote.quoteReference}</h1>
+            <p>
+              Prepared for <strong>{quote.client || "Customer"}</strong>. Review
+              the quotation, accept it and continue directly to booking.
+            </p>
+          </div>
+          <span
+            className={`track-status ${booked ? "quote-status-booked" : accepted ? "" : "quote-status-open"}`}
+          >
+            {booked ? "BOOKED" : accepted ? "ACCEPTED" : quote.status}
+          </span>
+        </div>
+
+        <div className="quote-view-grid">
+          <section className="quote-view-card">
+            <div className="quote-view-card-label">SHIPMENT</div>
+            <QuoteRow label="Route" value={quote.route || "—"} />
+            <QuoteRow label="Service" value={quote.serviceType || "—"} />
+            <QuoteRow label="Commodity" value={quote.commodity || "—"} />
+            <QuoteRow
+              label="Chargeable weight"
+              value={
+                quote.chargeableWeightKg == null
+                  ? "—"
+                  : `${quote.chargeableWeightKg} kg`
+              }
+            />
+            <QuoteRow label="Valid until" value={quote.validUntil || "—"} />
+          </section>
+
+          <section className="quote-view-card quote-price-card">
+            <div className="quote-view-card-label">QUOTED TOTAL</div>
+            <div className="quote-price">
+              {quote.quotedAmount == null
+                ? "—"
+                : quote.quotedAmount.toLocaleString()}
+            </div>
+            <p>No account is required to respond or book.</p>
+            {message && <div className="alert alert-success">{message}</div>}
+            {error && <div className="alert alert-error">{error}</div>}
+            {!quote.response && quote.actionable && (
+              <div className="quote-action-row">
+                <button
+                  className="public-main-button"
+                  disabled={busy}
+                  onClick={() => respond("ACCEPTED")}
+                >
+                  {busy ? "Processing…" : "Accept quotation"}
+                  <Icon name="arrow" size={14} />
+                </button>
+                <button
+                  className="flow-secondary"
+                  disabled={busy}
+                  onClick={() => respond("DECLINED")}
+                >
+                  Decline
+                </button>
+              </div>
+            )}
+            {accepted && !booked && (
+              <Link
+                className="public-main-button quote-book-button"
+                href={`/book?quote=${encodeURIComponent(params.token)}`}
+              >
+                Book this quotation <Icon name="arrow" size={14} />
+              </Link>
+            )}
+            {booked && (
+              <Link
+                className="public-main-button quote-book-button"
+                href="/track"
+              >
+                Track your shipment <Icon name="arrow" size={14} />
+              </Link>
+            )}
+          </section>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function QuoteRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="quote-row">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function FlowNav() {
+  return (
+    <nav className="public-nav flow-nav">
+      <Link href="/" className="public-brand">
+        <span className="public-brand-mark">
+          <Icon name="plane" size={20} />
+        </span>
+        <span>
+          <strong>AAL</strong>
+          <small>AFRICA LOGISTIC AVIATION</small>
+        </span>
+      </Link>
+      <div className="flow-nav-links">
+        <Link href="/quote">Quote</Link>
+        <Link href="/book">Book</Link>
+        <Link href="/track">Track</Link>
+        <Link href="/login">AAL team</Link>
+      </div>
+    </nav>
+  );
 }

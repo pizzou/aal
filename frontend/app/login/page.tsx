@@ -88,10 +88,7 @@ export default function LoginPage() {
 
     login(r.accessToken, r.tenantId, r.role);
     const next = search.get("next");
-    const destination =
-      next?.startsWith("/") && !next.startsWith("/portal")
-        ? next
-        : "/aal-control-tower";
+    const destination = next?.startsWith("/") ? next : "/aal-control-tower";
     router.push(r.mustChangePassword ? "/account/security" : destination);
   }
 

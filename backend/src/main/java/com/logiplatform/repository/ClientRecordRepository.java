@@ -18,4 +18,7 @@ public interface ClientRecordRepository
             UUID tenantId,
             String clientId);
 
+    Optional<ClientRecord> findFirstByTenantIdAndClientCompanyIgnoreCase(
+            UUID tenantId, String clientCompany);
+
 }

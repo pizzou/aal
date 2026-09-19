@@ -8,6 +8,17 @@ import { ApiError, Shipment, shipmentsApi } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 
 const MODES = ["ALL", "AIR", "ROAD", "SEA", "RAIL"];
+const STATUSES = [
+  "ALL",
+  "PLANNING",
+  "BOOKED",
+  "IN_TRANSIT",
+  "ARRIVED",
+  "CUSTOMS",
+  "DELIVERED",
+  "COMPLETED",
+  "ON_HOLD",
+];
 
 function money(value: number | null | undefined, currency = "USD"): string {
   if (value == null) {
@@ -45,6 +56,10 @@ export default function ShipmentsPage() {
   const [query, setQuery] = useState("");
 
   const [mode, setMode] = useState("ALL");
+  const [status, setStatus] = useState("ALL");
+  const [page, setPage] = useState(0);
+  const [totalElements, setTotalElements] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
 
   const [error, setError] = useState("");
 
@@ -55,67 +70,42 @@ export default function ShipmentsPage() {
   }, [isLoading, accessToken, router]);
 
   useEffect(() => {
-    if (!accessToken) {
-      return;
-    }
+    if (!accessToken) return;
 
-    let active = true;
+    const timer = window.setTimeout(() => {
+      let active = true;
+      setError("");
 
-    setError("");
+      shipmentsApi
+        .list({ page, size: 50, q: query.trim(), mode, status })
+        .then((response) => {
+          if (!active) return;
+          setShipments(response.content);
+          setTotalElements(response.totalElements);
+          setTotalPages(response.totalPages);
+        })
+        .catch((exception) => {
+          if (!active) return;
+          setError(
+            exception instanceof ApiError
+              ? exception.message
+              : "Failed to load shipments.",
+          );
+        });
 
-    shipmentsApi
-      .list()
-      .then((response) => {
-        if (!active) {
-          return;
-        }
+      return () => {
+        active = false;
+      };
+    }, 250);
 
-        setShipments(response.content);
-      })
-      .catch((exception) => {
-        if (!active) {
-          return;
-        }
+    return () => window.clearTimeout(timer);
+  }, [accessToken, page, query, mode, status]);
 
-        setError(
-          exception instanceof ApiError
-            ? exception.message
-            : "Failed to load shipments.",
-        );
-      });
+  useEffect(() => {
+    setPage(0);
+  }, [query, mode, status]);
 
-    return () => {
-      active = false;
-    };
-  }, [accessToken]);
-
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-
-    return shipments.filter((shipment) => {
-      const matchesMode = mode === "ALL" || shipment.transportMode === mode;
-
-      const matchesSearch =
-        !q ||
-        [
-          shipment.referenceCode,
-          shipment.clientName,
-          shipment.contact,
-          shipment.commodity,
-          shipment.airlineUsed,
-          shipment.carrierName,
-          shipment.invoiceNo,
-          shipment.originCityPort,
-          shipment.destinationCityPort,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase()
-          .includes(q);
-
-      return matchesMode && matchesSearch;
-    });
-  }, [shipments, mode, query]);
+  const rows = useMemo(() => shipments, [shipments]);
 
   if (isLoading || !accessToken) {
     return null;
@@ -194,7 +184,7 @@ export default function ShipmentsPage() {
         <div className="register-overview-stats">
           <div>
             <span>RECORDS</span>
-            <strong>{rows.length}</strong>
+            <strong>{totalElements.toLocaleString()}</strong>
           </div>
 
           <div>
@@ -279,6 +269,18 @@ export default function ShipmentsPage() {
                 </button>
               ))}
             </div>
+            <select
+              className="input"
+              value={status}
+              onChange={(event) => setStatus(event.target.value)}
+              aria-label="Filter shipment status"
+            >
+              {STATUSES.map((item) => (
+                <option key={item} value={item}>
+                  {item === "ALL" ? "All statuses" : item.replaceAll("_", " ")}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -396,6 +398,36 @@ export default function ShipmentsPage() {
               )}
             </tbody>
           </table>
+        </div>
+        <div className="page-head" style={{ marginTop: 14, marginBottom: 0 }}>
+          <div className="card-muted">
+            Showing {rows.length ? page * 50 + 1 : 0}–
+            {Math.min(page * 50 + rows.length, totalElements)} of{" "}
+            {totalElements.toLocaleString()} shipments
+          </div>
+          <div className="actions">
+            <button
+              className="btn btn-small"
+              type="button"
+              disabled={page === 0}
+              onClick={() => setPage((current) => Math.max(0, current - 1))}
+            >
+              Previous
+            </button>
+            <span className="card-muted">
+              Page {totalPages ? page + 1 : 0} / {totalPages || 0}
+            </span>
+            <button
+              className="btn btn-small"
+              type="button"
+              disabled={page + 1 >= totalPages}
+              onClick={() =>
+                setPage((current) => Math.min(totalPages - 1, current + 1))
+              }
+            >
+              Next
+            </button>
+          </div>
         </div>
       </section>
     </main>

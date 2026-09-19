@@ -67,10 +67,48 @@ public class ShipmentService {
         return ShipmentResponse.from(saved);
     }
 
+    /**
+     * Backward-compatible shipment listing used by service-level callers and tests
+     * that only need pagination without filters.
+     *
+     * Keeping this overload preserves the original service API while the HTTP
+     * endpoint can use the richer filtered listing method below.
+     */
     @Transactional(readOnly = true)
     public Page<ShipmentResponse> list(Pageable pageable) {
+        return list(pageable, null, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ShipmentResponse> list(Pageable pageable, String query, String mode, String status) {
         UUID tenantId = TenantContext.getTenantId();
-        return shipmentRepository.findAllByTenantId(tenantId, pageable).map(ShipmentResponse::from);
+
+        String normalizedQuery = query == null ? "" : query.trim();
+        TransportMode transportMode = parseOptionalTransportMode(mode);
+        ShipmentStatus shipmentStatus = parseOptionalShipmentStatus(status);
+
+        return shipmentRepository
+                .search(tenantId, normalizedQuery, transportMode, shipmentStatus, pageable)
+                .map(ShipmentResponse::from);
+    }
+
+    private TransportMode parseOptionalTransportMode(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return parseTransportMode(raw);
+    }
+
+    private ShipmentStatus parseOptionalShipmentStatus(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return ShipmentStatus.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Invalid status: " + raw);
+        }
     }
 
     @Transactional(readOnly = true)

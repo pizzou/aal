@@ -45,6 +45,46 @@ public class MailService {
     }
 
     @Async
+    public void sendQuotationShare(
+            String recipientEmail,
+            String recipientName,
+            String quoteReference,
+            String quoteUrl,
+            String route,
+            String serviceType,
+            String quotedAmount,
+            String validUntil) {
+
+        if (recipientEmail == null || recipientEmail.isBlank() || quoteUrl == null || quoteUrl.isBlank()) return;
+
+        send(
+                recipientEmail.trim(),
+                "Aviation Africa Logistics - Quotation " + escape(quoteReference),
+                """
+                <html><body style="font-family:Arial,sans-serif;color:#172033;line-height:1.55">
+                  <div style="max-width:680px;margin:0 auto;padding:28px">
+                    <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0b5cab">AVIATION AFRICA LOGISTICS</div>
+                    <h2 style="margin:10px 0 8px">Your freight quotation is ready</h2>
+                    <p>Hello %s,</p>
+                    <p>AAL has prepared quotation <strong>%s</strong> for your logistics requirements.</p>
+                    <table style="width:100%%;border-collapse:collapse;margin:20px 0">
+                      <tr><td style="padding:8px 0;color:#64748b">Route</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+                      <tr><td style="padding:8px 0;color:#64748b">Service</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+                      <tr><td style="padding:8px 0;color:#64748b">Quoted total</td><td style="padding:8px 0;font-weight:700">%s</td></tr>
+                      <tr><td style="padding:8px 0;color:#64748b">Valid until</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+                    </table>
+                    <p><a href="%s" style="display:inline-block;padding:13px 22px;background:#0b5cab;color:#fff;text-decoration:none;border-radius:7px;font-weight:700">View quotation</a></p>
+                    <p style="font-size:13px;color:#64748b">You can review the quotation securely online and accept or decline it from the quotation page.</p>
+                    <p>Aviation Africa Logistics</p>
+                  </div>
+                </body></html>
+                """.formatted(
+                        escape(recipientName == null || recipientName.isBlank() ? "Customer" : recipientName),
+                        escape(quoteReference), escape(route), escape(serviceType), escape(quotedAmount), escape(validUntil), escapeAttribute(quoteUrl))
+        );
+    }
+
+    @Async
     public void sendLoginOtp(
             User user,
             String code,

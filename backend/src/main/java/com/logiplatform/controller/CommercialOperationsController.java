@@ -2,6 +2,7 @@ package com.logiplatform.controller;
 
 import com.logiplatform.dto.CommercialDtos.*;
 import com.logiplatform.service.CommercialOperationsService;
+import com.logiplatform.service.PublicQuoteShareService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
@@ -12,14 +13,21 @@ import java.util.*;
 @RequestMapping("/api/commercial")
 public class CommercialOperationsController {
     private final CommercialOperationsService s;
+    private final PublicQuoteShareService quoteSharing;
 
-    public CommercialOperationsController(CommercialOperationsService s) {
+    public CommercialOperationsController(CommercialOperationsService s, PublicQuoteShareService quoteSharing) {
         this.s = s;
+        this.quoteSharing = quoteSharing;
     }
 
     @PostMapping("/quotes")
     public QuoteResponse quote(@Valid @RequestBody QuoteRequest r) {
         return s.createQuote(r);
+    }
+
+    @PostMapping("/quotes/{id}/share")
+    public PublicQuoteShareService.QuoteShareResult shareQuote(@PathVariable UUID id, @RequestParam(required = false) String recipientEmail) {
+        return quoteSharing.share(id, recipientEmail);
     }
 
     @PostMapping("/quotes/{id}/invoice")

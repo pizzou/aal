@@ -33,6 +33,8 @@ export default function CommercialPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [busy, setBusy] = useState(false);
+  const [shareQuoteId, setShareQuoteId] = useState<string | null>(null);
+  const [shareEmail, setShareEmail] = useState("");
   const [quote, setQuote] = useState({
     quoteId: id("AAL-QT"),
     quoteDate: today(),
@@ -130,6 +132,28 @@ export default function CommercialPage() {
       setError(msg(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function shareQuote(quoteId: string) {
+    setBusy(true);
+    setError("");
+    setSuccess("");
+    setShareQuoteId(quoteId);
+    try {
+      const result = await commercialApi.shareQuote(
+        quoteId,
+        shareEmail.trim() || undefined,
+      );
+      setSuccess(
+        `Quotation ${result.quoteReference} was sent to ${result.recipientEmail}.`,
+      );
+      setShareEmail("");
+    } catch (e) {
+      setError(msg(e));
+    } finally {
+      setBusy(false);
+      setShareQuoteId(null);
     }
   }
 
@@ -326,6 +350,15 @@ export default function CommercialPage() {
           </div>
           <div className="card">
             <h2 className="card-title">Quotation pipeline</h2>
+            <div className="field" style={{ marginBottom: 12 }}>
+              <label>Optional recipient email</label>
+              <input
+                type="email"
+                placeholder="Uses the customer's master email when blank"
+                value={shareEmail}
+                onChange={(e) => setShareEmail(e.target.value)}
+              />
+            </div>
             <div className="table-wrap">
               <table className="table">
                 <thead>
@@ -335,6 +368,7 @@ export default function CommercialPage() {
                     <th>Value</th>
                     <th>Profit</th>
                     <th>Status</th>
+                    <th>Customer delivery</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -351,6 +385,18 @@ export default function CommercialPage() {
                         <span className="status status-neutral">
                           {q.status}
                         </span>
+                      </td>
+                      <td>
+                        <button
+                          className="btn btn-primary"
+                          disabled={busy}
+                          onClick={() => shareQuote(q.id)}
+                          type="button"
+                        >
+                          {shareQuoteId === q.id
+                            ? "Sending…"
+                            : "Send to customer"}
+                        </button>
                       </td>
                     </tr>
                   ))}

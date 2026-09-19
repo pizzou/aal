@@ -34,8 +34,12 @@ public class ShipmentController {
     }
 
     @GetMapping
-    public ResponseEntity<Page<ShipmentResponse>> list(Pageable pageable) {
-        return ResponseEntity.ok(shipmentService.list(pageable));
+    public ResponseEntity<Page<ShipmentResponse>> list(
+            Pageable pageable,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String mode,
+            @RequestParam(required = false) String status) {
+        return ResponseEntity.ok(shipmentService.list(pageable, q, mode, status));
     }
 
     @GetMapping("/{id}")

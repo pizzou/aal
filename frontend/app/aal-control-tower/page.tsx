@@ -2,59 +2,485 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { aalBusinessApi, AalBusinessCockpit, ApiError } from "@/lib/api-client";
+import {
+  AdvancedDashboard,
+  ApiError,
+  commandCenterApi,
+} from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
 
-const money = (n: number, c: string) => `${c} ${n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;
-const today = () => new Date().toISOString().slice(0,10);
-const monthStart = () => { const d=new Date(); d.setDate(1); return d.toISOString().slice(0,10); };
+const today = () => new Date().toISOString().slice(0, 10);
+
+function money(value: number | null | undefined, currency: string): string {
+  return `${currency} ${(value ?? 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function pct(value: number | null | undefined): string {
+  return `${(value ?? 0).toFixed(1)}%`;
+}
+
+function severityClass(value: string): string {
+  const normalized = value.toUpperCase();
+  if (normalized === "CRITICAL") return "status status-danger";
+  if (normalized === "HIGH") return "status status-warning";
+  return "status status-neutral";
+}
 
 export default function AalControlTower() {
-  const {accessToken,isLoading}=useAuth();
-  const router=useRouter();
-  const [data,setData]=useState<AalBusinessCockpit|null>(null);
-  const [from,setFrom]=useState(monthStart());
-  const [to,setTo]=useState(today());
-  const [currency,setCurrency]=useState("USD");
-  const [error,setError]=useState("");
+  const { accessToken, isLoading } = useAuth();
+  const router = useRouter();
+  const [data, setData] = useState<AdvancedDashboard | null>(null);
+  const [asOf, setAsOf] = useState(today());
+  const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(()=>{ if(!isLoading&&!accessToken) router.replace("/login"); },[isLoading,accessToken,router]);
-  useEffect(()=>{ if(!accessToken)return; aalBusinessApi.cockpit(from,to,currency).then(setData).catch((e)=>setError(e instanceof ApiError?e.message:"Unable to load AAL cockpit")); },[accessToken,from,to,currency]);
-  if(isLoading||!accessToken)return null;
+  async function load() {
+    if (!accessToken) return;
+    setRefreshing(true);
+    setError("");
+    try {
+      setData(await commandCenterApi.advanced(asOf));
+    } catch (e) {
+      setError(
+        e instanceof ApiError ? e.message : "Unable to load control tower",
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
-  return <main className="page">
-    <div className="page-head">
-      <div><div className="eyebrow">AAL NATIVE BUSINESS ENGINE</div><h1 className="page-title">Operations & Profitability</h1><p className="page-subtitle">A single source of truth for the operating rules previously maintained manually.</p></div>
-      <div className="actions"><Link className="btn btn-primary" href="/shipments">Open shipment register</Link></div>
-    </div>
-    <div className="card" style={{marginBottom:16}}><div className="grid grid-4">
-      <label>From<input className="input" type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label>
-      <label>To<input className="input" type="date" value={to} onChange={e=>setTo(e.target.value)}/></label>
-      <label>Reporting currency<select className="input" value={currency} onChange={e=>setCurrency(e.target.value)}><option>USD</option><option>RWF</option><option>EUR</option><option>GBP</option><option>CNY</option><option>AED</option></select></label>
-      <div style={{display:"flex",alignItems:"end"}}><Link className="btn" href="/command-center">Historical migration</Link></div>
-    </div></div>
-    {error&&<div className="alert alert-error">{error}</div>}
-    {!data?<div className="card">Loading native operating model…</div>:<>
-      <section className="grid grid-4">
-        <Kpi title="Shipments" value={data.shipments.toLocaleString()} meta={`${data.activeShipments} active · ${data.deliveredShipments} delivered`}/>
-        <Kpi title="Chargeable weight" value={`${data.chargeableWeightKg.toLocaleString()} kg`} meta={`${data.grossWeightKg.toLocaleString()} kg gross`}/>
-        <Kpi title="Revenue" value={money(data.billed,data.currency)} meta={`${money(data.collected,data.currency)} collected`}/>
-        <Kpi title="Receivable" value={money(data.receivable,data.currency)} meta={`${data.overdueTasks} overdue tasks`}/>
-      </section>
-      <section className="grid grid-4" style={{marginTop:16}}>
-        <Kpi title="Total cost" value={money(data.totalCost,data.currency)} meta="Supplier + other cost"/>
-        <Kpi title="Gross profit" value={money(data.grossProfit,data.currency)} meta={`${data.marginPercent.toFixed(2)}% margin`}/>
-        <Kpi title="Net income" value={money(data.netIncome,data.currency)} meta="Billed − supplier paid − other expenses"/>
-        <Kpi title="Sales pipeline" value={`${data.openQuotes} open`} meta={`${data.wonQuotes} won`}/>
-      </section>
-      <section className="grid grid-2" style={{marginTop:16}}>
-        <div className="card"><h2 className="card-title">Monthly operating performance</h2><div className="table-wrap"><table className="table"><thead><tr><th>Month</th><th>Shipments</th><th>Revenue</th><th>Collected</th><th>Cost</th><th>Gross profit</th></tr></thead><tbody>{data.monthly.map(m=><tr key={m.month}><td><strong>{m.month}</strong></td><td>{m.shipments}</td><td>{money(m.revenue,data.currency)}</td><td>{money(m.collected,data.currency)}</td><td>{money(m.cost,data.currency)}</td><td>{money(m.grossProfit,data.currency)}</td></tr>)}</tbody></table></div></div>
-        <div className="card"><h2 className="card-title">Top lanes by revenue</h2><div className="table-wrap"><table className="table"><thead><tr><th>Lane</th><th>Jobs</th><th>Revenue</th><th>Profit</th><th>Delayed</th></tr></thead><tbody>{data.lanes.map((l,i)=><tr key={`${l.origin}-${l.destination}-${i}`}><td><strong>{l.origin} → {l.destination}</strong></td><td>{l.shipments}</td><td>{money(l.revenue,data.currency)}</td><td>{money(l.grossProfit,data.currency)}</td><td>{l.delayed}</td></tr>)}</tbody></table></div></div>
-      </section>
-      <section className="card" style={{marginTop:16}}><h2 className="card-title">Native formula controls</h2><div className="grid grid-3"><Rule name="Chargeable weight" formula="MAX(gross weight, volumetric weight)"/><Rule name="Total cost" formula="supplier cost + other cost"/><Rule name="Customer receivable" formula="MAX(billed − collected, 0)"/><Rule name="Gross profit" formula="billed − supplier cost − other cost"/><Rule name="Gross margin" formula="gross profit ÷ billed × 100"/><Rule name="Net income" formula="billed − supplier paid − other expenses"/></div></section>
-    </>}
-  </main>
+  useEffect(() => {
+    if (!isLoading && !accessToken) router.replace("/login");
+  }, [isLoading, accessToken, router]);
+
+  useEffect(() => {
+    if (accessToken) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, asOf]);
+
+  if (isLoading || !accessToken) return null;
+
+  const currency = data?.financial.currency ?? "USD";
+
+  return (
+    <main className="page">
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">AAL / OPERATIONS CONTROL TOWER</div>
+          <h1 className="page-title">Daily command center</h1>
+          <p className="page-subtitle">
+            One operating view combining the manual MOTHERSHIP ledger, Command
+            Center workflow, fleet execution, exceptions, receivables and sales
+            pipeline.
+          </p>
+        </div>
+        <div className="actions">
+          <label className="card-muted">
+            As of
+            <input
+              className="input"
+              type="date"
+              value={asOf}
+              onChange={(e) => setAsOf(e.target.value)}
+            />
+          </label>
+          <button
+            className="btn"
+            type="button"
+            onClick={load}
+            disabled={refreshing}
+          >
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+          <Link className="btn btn-primary" href="/new-shipment">
+            + New shipment
+          </Link>
+        </div>
+      </div>
+
+      {error && <div className="alert alert-error aal-alert">{error}</div>}
+
+      {!data ? (
+        <div className="card">Loading live control-tower data…</div>
+      ) : (
+        <>
+          <section className="grid grid-4">
+            <Kpi
+              title="Active shipments"
+              value={data.operations.activeShipments.toLocaleString()}
+              meta={`${data.operations.totalShipments} total · ${data.operations.dueToday} due today`}
+            />
+            <Kpi
+              title="Delayed / exception"
+              value={`${data.operations.delayedShipments} / ${data.operations.exceptionShipments}`}
+              meta={`${data.operations.unassignedShipments} unassigned`}
+            />
+            <Kpi
+              title="On-time delivery"
+              value={pct(data.operations.onTimeRatePercent)}
+              meta={`${pct(data.operations.completionRatePercent)} completion rate`}
+            />
+            <Kpi
+              title="Receivables"
+              value={money(data.financial.receivables, currency)}
+              meta={`${money(data.operatingKpis.overdueReceivables, currency)} overdue`}
+            />
+          </section>
+
+          <section className="grid grid-4" style={{ marginTop: 16 }}>
+            <Kpi
+              title="Revenue invoiced"
+              value={money(data.operatingKpis.revenueInvoiced, currency)}
+              meta={`${money(data.financial.collected, currency)} collected`}
+            />
+            <Kpi
+              title="Gross profit"
+              value={money(data.operatingKpis.grossProfit, currency)}
+              meta={`${pct(data.operatingKpis.overallProfitMargin)} overall margin`}
+            />
+            <Kpi
+              title="Due next 30 days"
+              value={money(data.operatingKpis.dueNext30Days, currency)}
+              meta={`${data.operatingKpis.openTasks} open tasks`}
+            />
+            <Kpi
+              title="Sales pipeline"
+              value={data.operatingKpis.openQuotations.toLocaleString()}
+              meta={`${data.operatingKpis.wonQuotations} won · ${pct(data.operatingKpis.salesWinRate)} win rate`}
+            />
+          </section>
+
+          <section className="grid grid-2" style={{ marginTop: 16 }}>
+            <div className="card">
+              <div className="page-head compact">
+                <div>
+                  <div className="eyebrow">NEXT ACTIONS</div>
+                  <h2 className="card-title">What the team should work on</h2>
+                </div>
+              </div>
+              <div className="stack">
+                {data.actions.map((action, index) => (
+                  <Link
+                    className="action-row"
+                    href={action.href}
+                    key={`${action.title}-${index}`}
+                  >
+                    <span className={severityClass(action.priority)}>
+                      {action.priority}
+                    </span>
+                    <span>
+                      <strong>{action.title}</strong>
+                      <small>{action.detail}</small>
+                    </span>
+                    <span aria-hidden>→</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="eyebrow">EXCEPTION BOARD</div>
+              <h2 className="card-title">Operational attention</h2>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Severity</th>
+                      <th>Shipment</th>
+                      <th>Issue</th>
+                      <th>Lane</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.exceptions.slice(0, 8).map((item, index) => (
+                      <tr key={`${item.reference}-${index}`}>
+                        <td>
+                          <span className={severityClass(item.severity)}>
+                            {item.severity}
+                          </span>
+                        </td>
+                        <td>
+                          <Link
+                            className="table-link strong-link"
+                            href="/shipments"
+                          >
+                            {item.reference}
+                          </Link>
+                        </td>
+                        <td>{item.message}</td>
+                        <td>{item.lane}</td>
+                      </tr>
+                    ))}
+                    {!data.exceptions.length && (
+                      <tr>
+                        <td colSpan={4} className="empty">
+                          No open operational exceptions.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section className="grid grid-3" style={{ marginTop: 16 }}>
+            <div className="card">
+              <div className="eyebrow">FLEET READINESS</div>
+              <h2 className="card-title">Vehicles & drivers</h2>
+              <MetricRow
+                label="Vehicles available"
+                value={`${data.fleet.availableVehicles} / ${data.fleet.totalVehicles}`}
+                percent={data.fleet.vehicleUtilizationPercent}
+              />
+              <MetricRow
+                label="Vehicles on trip"
+                value={String(data.fleet.onTripVehicles)}
+              />
+              <MetricRow
+                label="Vehicles maintenance"
+                value={String(data.fleet.maintenanceVehicles)}
+              />
+              <MetricRow
+                label="Drivers available"
+                value={`${data.fleet.availableDrivers} / ${data.fleet.totalDrivers}`}
+                percent={data.fleet.driverUtilizationPercent}
+              />
+              <MetricRow
+                label="Drivers on trip"
+                value={String(data.fleet.onTripDrivers)}
+              />
+            </div>
+
+            <div className="card">
+              <div className="eyebrow">RECEIVABLES AGING</div>
+              <h2 className="card-title">Collection risk</h2>
+              {data.receivablesAging.map((item) => (
+                <MetricRow
+                  key={item.bucket}
+                  label={item.bucket}
+                  value={money(item.balance, currency)}
+                />
+              ))}
+            </div>
+
+            <div className="card">
+              <div className="eyebrow">SALES FUNNEL</div>
+              <h2 className="card-title">Quotation status</h2>
+              {data.quotationStatus.map((item) => (
+                <MetricRow
+                  key={item.status}
+                  label={item.status || "Unspecified"}
+                  value={item.count.toLocaleString()}
+                />
+              ))}
+              <div className="card-muted" style={{ marginTop: 12 }}>
+                {data.operatingKpis.overdueTasks} overdue tasks require
+                follow-up.
+              </div>
+            </div>
+          </section>
+
+          <section className="grid grid-2" style={{ marginTop: 16 }}>
+            <div className="card">
+              <div className="eyebrow">LANE & MODE INTELLIGENCE</div>
+              <h2 className="card-title">Network mix</h2>
+              <div className="grid grid-2">
+                <div>
+                  <h3 className="card-muted">Transport modes</h3>
+                  {data.modeMix.map((item) => (
+                    <MetricRow
+                      key={item.mode}
+                      label={item.mode}
+                      value={`${item.shipments} · ${pct(item.sharePercent)}`}
+                    />
+                  ))}
+                </div>
+                <div>
+                  <h3 className="card-muted">Top lanes</h3>
+                  {data.topLanes.map((item) => (
+                    <MetricRow
+                      key={item.lane}
+                      label={item.lane}
+                      value={`${item.shipments} · ${item.delayedShipments} delayed`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="eyebrow">7-DAY TREND</div>
+              <h2 className="card-title">Revenue vs operating cost</h2>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Shipments</th>
+                      <th>Revenue</th>
+                      <th>Operating cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.trend.map((item) => (
+                      <tr key={item.date}>
+                        <td>{item.date}</td>
+                        <td>{item.shipments}</td>
+                        <td>{money(item.revenue, currency)}</td>
+                        <td>{money(item.operatingCost, currency)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section className="card" style={{ marginTop: 16 }}>
+            <div className="eyebrow">FINANCIAL TREND</div>
+            <h2 className="card-title">Monthly commercial performance</h2>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>Revenue</th>
+                    <th>Gross profit</th>
+                    <th>Margin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.monthlyFinancial.map((item) => (
+                    <tr key={item.month}>
+                      <td>
+                        <strong>{item.month}</strong>
+                      </td>
+                      <td>{money(item.revenue, currency)}</td>
+                      <td>{money(item.grossProfit, currency)}</td>
+                      <td>
+                        {item.revenue
+                          ? pct((item.grossProfit / item.revenue) * 100)
+                          : "0.0%"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="card" style={{ marginTop: 16 }}>
+            <div className="eyebrow">WORKBOOK PARITY</div>
+            <h2 className="card-title">
+              The manual workflow is now one controlled operating system
+            </h2>
+            <div className="grid grid-4">
+              <Rule
+                title="MOTHERSHIP"
+                detail="AWB, client, contact, commodity, route, weight, airline, status, operator, billed, collected, supplier paid, expenses and net income."
+                href="/shipments"
+              />
+              <Rule
+                title="COMMAND CENTER"
+                detail="Shipments, quotations, invoices, clients, partners, tasks and expenses are persisted and searchable."
+                href="/commercial"
+              />
+              <Rule
+                title="FINANCE"
+                detail="Receivables, aging, payments, supplier cash and reconciliation are server-controlled and auditable."
+                href="/billing"
+              />
+              <Rule
+                title="EXECUTION"
+                detail="Trips, drivers, vehicles, tracking, exceptions and multimodal legs extend the workbook beyond manual rows."
+                href="/dispatch"
+              />
+            </div>
+          </section>
+        </>
+      )}
+    </main>
+  );
 }
-function Kpi({title,value,meta}:{title:string,value:string,meta:string}){return <div className="card kpi"><div className="kpi-label">{title}</div><div className="kpi-value" style={{fontSize:22}}>{value}</div><div className="kpi-meta">{meta}</div></div>}
-function Rule({name,formula}:{name:string,formula:string}){return <div className="card" style={{background:"var(--aal-panel-soft)"}}><div className="kpi-label">{name}</div><strong>{formula}</strong></div>}
+
+function Kpi({
+  title,
+  value,
+  meta,
+}: {
+  title: string;
+  value: string;
+  meta: string;
+}) {
+  return (
+    <div className="card kpi premium-kpi">
+      <div className="kpi-label">{title}</div>
+      <div className="kpi-value" style={{ fontSize: 22 }}>
+        {value}
+      </div>
+      <div className="kpi-meta">{meta}</div>
+    </div>
+  );
+}
+
+function MetricRow({
+  label,
+  value,
+  percent,
+}: {
+  label: string;
+  value: string;
+  percent?: number;
+}) {
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div
+        style={{ display: "flex", justifyContent: "space-between", gap: 12 }}
+      >
+        <span className="card-muted">{label}</span>
+        <strong>{value}</strong>
+      </div>
+      {percent != null && (
+        <div
+          style={{
+            marginTop: 5,
+            height: 5,
+            borderRadius: 999,
+            background: "var(--aal-border)",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              width: `${Math.max(0, Math.min(100, percent))}%`,
+              height: "100%",
+              background: "currentColor",
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Rule({
+  title,
+  detail,
+  href,
+}: {
+  title: string;
+  detail: string;
+  href: string;
+}) {
+  return (
+    <Link className="card" href={href} style={{ textDecoration: "none" }}>
+      <div className="eyebrow">{title}</div>
+      <div className="card-muted">{detail}</div>
+    </Link>
+  );
+}

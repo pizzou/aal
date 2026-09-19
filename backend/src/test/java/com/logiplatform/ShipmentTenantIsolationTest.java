@@ -21,17 +21,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/**
- * This is the most important test file in the codebase. A bug here means one client
- * can see another client's shipments — the single worst thing this system could do.
- *
- * NOTE ON SCOPE: this test runs against H2, so it verifies the APPLICATION-LAYER
- * scoping (ShipmentRepository's explicit tenantId parameters, ShipmentService reading
- * from TenantContext). It does NOT exercise Postgres Row-Level Security itself, since
- * H2 doesn't support it — RLS needs a separate integration test against real Postgres
- * (e.g. with Testcontainers) before this goes anywhere near production. Both layers
- * need their own test coverage; neither substitutes for the other.
- */
+
 import static com.logiplatform.dto.ShipmentDtos.*;
 import static com.logiplatform.dto.ReportingDtos.*;
 import static com.logiplatform.dto.TmsDtos.*;

@@ -20,9 +20,9 @@ export class ApiError extends Error {
 export interface Page<T> {
   content: T[];
   totalElements: number;
+  totalPages: number;
   size?: number;
   number?: number;
-  totalPages?: number;
   numberOfElements?: number;
   first?: boolean;
   last?: boolean;
@@ -220,27 +220,61 @@ export interface AuthSessionResponse {
 }
 
 export const authApi = {
-  login: (email: string, password: string, otp?: string, otpChallengeToken?: string) =>
+  login: (
+    email: string,
+    password: string,
+    otp?: string,
+    otpChallengeToken?: string,
+  ) =>
     apiFetch<AuthLoginResponse>("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email: email.trim().toLowerCase(), password, otp, otpChallengeToken }),
+      body: JSON.stringify({
+        email: email.trim().toLowerCase(),
+        password,
+        otp,
+        otpChallengeToken,
+      }),
     }),
   sendLoginOtp: (otpChallengeToken: string) =>
-    apiFetch<void>("/api/auth/send-login-otp", { method: "POST", body: JSON.stringify({ otpChallengeToken }) }),
+    apiFetch<void>("/api/auth/send-login-otp", {
+      method: "POST",
+      body: JSON.stringify({ otpChallengeToken }),
+    }),
 
   session: () => apiFetch<AuthSessionResponse>("/api/auth/session"),
 
-  logout: () =>
-    apiFetch<void>("/api/auth/logout", { method: "POST" }),
-  forgotPassword: (email: string) => apiFetch<void>("/api/auth/password/forgot", {method:"POST",body:JSON.stringify({email})}),
-  resetPassword: (token: string, newPassword: string) => apiFetch<void>("/api/auth/password/reset", {method:"POST",body:JSON.stringify({token,newPassword})}),
+  logout: () => apiFetch<void>("/api/auth/logout", { method: "POST" }),
+  forgotPassword: (email: string) =>
+    apiFetch<void>("/api/auth/password/forgot", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  resetPassword: (token: string, newPassword: string) =>
+    apiFetch<void>("/api/auth/password/reset", {
+      method: "POST",
+      body: JSON.stringify({ token, newPassword }),
+    }),
 };
 
-export interface UserNotificationRecord { id:string; type:string; title:string; message:string; link?:string|null; read:boolean; createdAt:string; }
+export interface UserNotificationRecord {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  link?: string | null;
+  read: boolean;
+  createdAt: string;
+}
 export const userNotificationsApi = {
-  list: () => apiFetch<{content:UserNotificationRecord[]; totalElements:number}>("/api/notifications?page=0&size=50"),
+  list: () =>
+    apiFetch<{ content: UserNotificationRecord[]; totalElements: number }>(
+      "/api/notifications?page=0&size=50",
+    ),
   unreadCount: () => apiFetch<number>("/api/notifications/unread-count"),
-  markRead: (id:string) => apiFetch<void>(`/api/notifications/${encodeURIComponent(id)}/read`,{method:"POST"}),
+  markRead: (id: string) =>
+    apiFetch<void>(`/api/notifications/${encodeURIComponent(id)}/read`, {
+      method: "POST",
+    }),
 };
 
 export interface NotificationRecord {
@@ -349,8 +383,40 @@ export interface TrackingEvent {
   occurredAt: string;
 }
 
+export interface ShipmentListParams {
+  page?: number;
+  size?: number;
+  q?: string;
+  mode?: string;
+  status?: string;
+}
+
 export const shipmentsApi = {
-  list: () => apiFetch<Page<Shipment>>("/api/shipments"),
+  list: (params: ShipmentListParams = {}) => {
+    const query = new URLSearchParams();
+
+    if (params.page != null)
+      query.set("page", String(Math.max(0, params.page)));
+    if (params.size != null)
+      query.set("size", String(Math.max(1, params.size)));
+
+    const search = params.q?.trim();
+    if (search) query.set("q", search);
+
+    const mode = params.mode?.trim();
+    if (mode && mode.toUpperCase() !== "ALL") query.set("mode", mode);
+
+    const status = params.status?.trim();
+    if (status && status.toUpperCase() !== "ALL") query.set("status", status);
+
+    query.append("sort", "dateOpened,desc");
+    query.append("sort", "createdAt,desc");
+
+    const encodedQuery = query.toString();
+    return apiFetch<Page<Shipment>>(
+      `/api/shipments${encodedQuery ? `?${encodedQuery}` : ""}`,
+    );
+  },
 
   get: (id: string) => apiFetch<Shipment>(`/api/shipments/${id}`),
 
@@ -443,7 +509,13 @@ export const publicCommercialApi = {
       body: JSON.stringify(data),
     }),
   bookShipment: (data: Record<string, unknown>) =>
-    apiFetch<{ shipmentId: string; reference: string; trackingToken: string; status: string; message: string }>("/api/public/commercial/bookings", {
+    apiFetch<{
+      shipmentId: string;
+      reference: string;
+      trackingToken: string;
+      status: string;
+      message: string;
+    }>("/api/public/commercial/bookings", {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -1222,6 +1294,21 @@ export const commercialApi = {
       `/api/commercial/quotes/${id}/status?status=${encodeURIComponent(status)}`,
       { method: "PATCH" },
     ),
+  shareQuote: (id: string, recipientEmail?: string) =>
+    apiFetch<{
+      shareId: string;
+      quoteReference: string;
+      recipientEmail: string;
+      url: string;
+      expiresAt: string;
+    }>(
+      `/api/commercial/quotes/${id}/share${
+        recipientEmail
+          ? `?recipientEmail=${encodeURIComponent(recipientEmail)}`
+          : ""
+      }`,
+      { method: "POST" },
+    ),
   invoices: () => apiFetch<InvoiceRecord[]>("/api/commercial/invoices"),
   createInvoice: (data: Record<string, unknown>) =>
     apiFetch<InvoiceRecord>("/api/commercial/invoices", {
@@ -1613,51 +1700,198 @@ export const aalBusinessApi = {
     if (from) p.set("from", from);
     if (to) p.set("to", to);
     if (currency) p.set("currency", currency);
-    return apiFetch<AalBusinessCockpit>(`/api/aal/business/cockpit?${p.toString()}`);
+    return apiFetch<AalBusinessCockpit>(
+      `/api/aal/business/cockpit?${p.toString()}`,
+    );
   },
   shipmentFinancial: (id: string) =>
-    apiFetch<AalShipmentFinancial>(`/api/aal/business/shipments/${id}/financial`),
+    apiFetch<AalShipmentFinancial>(
+      `/api/aal/business/shipments/${id}/financial`,
+    ),
 };
 
-export type PlatformFxRate = { id:string; rateDate:string; baseCurrency:string; quoteCurrency:string; rate:number; source:string|null };
-export type PlatformPeriod = { id:string; periodStart:string; periodEnd:string; status:string; closedAt:string|null; notes:string|null };
-export type PlatformAdjustment = { id:string; adjustmentNo:string; adjustmentType:string; invoiceId:string|null; shipmentId:string|null; amount:number; currency:string; reason:string; status:string };
-export type PlatformGeofence = { id:string; name:string; latitude:number; longitude:number; radiusM:number; active:boolean };
-export type PlatformIntegration = { id:string; code:string; displayName:string; protocol:string; baseUrl:string|null; enabled:boolean; healthStatus:string; lastSuccessAt:string|null; lastFailureAt:string|null; lastError:string|null };
+export type PlatformFxRate = {
+  id: string;
+  rateDate: string;
+  baseCurrency: string;
+  quoteCurrency: string;
+  rate: number;
+  source: string | null;
+};
+export type PlatformPeriod = {
+  id: string;
+  periodStart: string;
+  periodEnd: string;
+  status: string;
+  closedAt: string | null;
+  notes: string | null;
+};
+export type PlatformAdjustment = {
+  id: string;
+  adjustmentNo: string;
+  adjustmentType: string;
+  invoiceId: string | null;
+  shipmentId: string | null;
+  amount: number;
+  currency: string;
+  reason: string;
+  status: string;
+};
+export type PlatformGeofence = {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radiusM: number;
+  active: boolean;
+};
+export type PlatformIntegration = {
+  id: string;
+  code: string;
+  displayName: string;
+  protocol: string;
+  baseUrl: string | null;
+  enabled: boolean;
+  healthStatus: string;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastError: string | null;
+};
 export const platformApi = {
-  setupMfa:(userId:string)=>apiFetch<{secret:string;otpauthUri:string;enabled:boolean}>(`/api/platform/mfa/${userId}/setup`,{method:"POST"}),
-  verifyMfa:(userId:string,code:string)=>apiFetch<{configured:boolean;enabled:boolean;verifiedAt:string|null}>(`/api/platform/mfa/${userId}/verify`,{method:"POST",body:JSON.stringify({code})}),
-  mfaStatus:(userId:string)=>apiFetch<{configured:boolean;enabled:boolean;verifiedAt:string|null}>(`/api/platform/mfa/${userId}`),
-  fxRates:(from:string,to:string)=>apiFetch<PlatformFxRate[]>(`/api/platform/fx-rates?from=${from}&to=${to}`),
-  upsertFx:(data:Record<string,unknown>)=>apiFetch<PlatformFxRate>("/api/platform/fx-rates",{method:"POST",body:JSON.stringify(data)}),
-  periods:()=>apiFetch<PlatformPeriod[]>("/api/platform/finance-periods"),
-  openPeriod:(data:Record<string,unknown>)=>apiFetch<PlatformPeriod>("/api/platform/finance-periods",{method:"POST",body:JSON.stringify(data)}),
-  closePeriod:(id:string)=>apiFetch<PlatformPeriod>(`/api/platform/finance-periods/${id}/close`,{method:"POST"}),
-  adjustments:()=>apiFetch<PlatformAdjustment[]>("/api/platform/adjustments"),
-  createAdjustment:(data:Record<string,unknown>)=>apiFetch<PlatformAdjustment>("/api/platform/adjustments",{method:"POST",body:JSON.stringify(data)}),
-  geofences:()=>apiFetch<PlatformGeofence[]>("/api/platform/geofences"),
-  createGeofence:(data:Record<string,unknown>)=>apiFetch<PlatformGeofence>("/api/platform/geofences",{method:"POST",body:JSON.stringify(data)}),
-  evaluateGeofences:(latitude:number,longitude:number)=>apiFetch<Array<{distanceM:number;inside:boolean;geofenceName:string}>>(`/api/platform/geofences/evaluate?latitude=${latitude}&longitude=${longitude}`),
-  integrations:()=>apiFetch<PlatformIntegration[]>("/api/platform/integrations"),
-  registerIntegration:(data:Record<string,unknown>)=>apiFetch<PlatformIntegration>("/api/platform/integrations",{method:"POST",body:JSON.stringify(data)}),
+  setupMfa: (userId: string) =>
+    apiFetch<{ secret: string; otpauthUri: string; enabled: boolean }>(
+      `/api/platform/mfa/${userId}/setup`,
+      { method: "POST" },
+    ),
+  verifyMfa: (userId: string, code: string) =>
+    apiFetch<{
+      configured: boolean;
+      enabled: boolean;
+      verifiedAt: string | null;
+    }>(`/api/platform/mfa/${userId}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  mfaStatus: (userId: string) =>
+    apiFetch<{
+      configured: boolean;
+      enabled: boolean;
+      verifiedAt: string | null;
+    }>(`/api/platform/mfa/${userId}`),
+  fxRates: (from: string, to: string) =>
+    apiFetch<PlatformFxRate[]>(`/api/platform/fx-rates?from=${from}&to=${to}`),
+  upsertFx: (data: Record<string, unknown>) =>
+    apiFetch<PlatformFxRate>("/api/platform/fx-rates", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  periods: () => apiFetch<PlatformPeriod[]>("/api/platform/finance-periods"),
+  openPeriod: (data: Record<string, unknown>) =>
+    apiFetch<PlatformPeriod>("/api/platform/finance-periods", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  closePeriod: (id: string) =>
+    apiFetch<PlatformPeriod>(`/api/platform/finance-periods/${id}/close`, {
+      method: "POST",
+    }),
+  adjustments: () =>
+    apiFetch<PlatformAdjustment[]>("/api/platform/adjustments"),
+  createAdjustment: (data: Record<string, unknown>) =>
+    apiFetch<PlatformAdjustment>("/api/platform/adjustments", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  geofences: () => apiFetch<PlatformGeofence[]>("/api/platform/geofences"),
+  createGeofence: (data: Record<string, unknown>) =>
+    apiFetch<PlatformGeofence>("/api/platform/geofences", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  evaluateGeofences: (latitude: number, longitude: number) =>
+    apiFetch<
+      Array<{ distanceM: number; inside: boolean; geofenceName: string }>
+    >(
+      `/api/platform/geofences/evaluate?latitude=${latitude}&longitude=${longitude}`,
+    ),
+  integrations: () =>
+    apiFetch<PlatformIntegration[]>("/api/platform/integrations"),
+  registerIntegration: (data: Record<string, unknown>) =>
+    apiFetch<PlatformIntegration>("/api/platform/integrations", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };
 
 export interface CustomerShipment {
-  id: string; referenceCode: string; status: string; mode: string; origin: string; destination: string;
-  eta: string | null; carrier: string | null; trackingToken: string;
+  id: string;
+  referenceCode: string;
+  status: string;
+  mode: string;
+  origin: string;
+  destination: string;
+  eta: string | null;
+  carrier: string | null;
+  trackingToken: string;
 }
-export interface CustomerQuote { id:string; quoteId:string; quoteDate:string; client:string; route:string|null; serviceType:string|null; quotedAmount:number|null; currency:string|null; validUntil:string|null; status:string; }
-export interface CustomerInvoice { id:string; invoiceNo:string; shipmentId:string|null; amount:number; paid:number; outstanding:number; currency:string; status:string; dueDate:string|null; }
-export interface TrackingEvent { id:string; eventType:string; location:string|null; notes:string|null; occurredAt:string; }
-export interface CustomerDocument { id:string; shipmentId:string; type:string; uri:string; createdAt:string; }
+export interface CustomerQuote {
+  id: string;
+  quoteId: string;
+  quoteDate: string;
+  client: string;
+  route: string | null;
+  serviceType: string | null;
+  quotedAmount: number | null;
+  currency: string | null;
+  validUntil: string | null;
+  status: string;
+}
+export interface CustomerInvoice {
+  id: string;
+  invoiceNo: string;
+  shipmentId: string | null;
+  amount: number;
+  paid: number;
+  outstanding: number;
+  currency: string;
+  status: string;
+  dueDate: string | null;
+}
+export interface TrackingEvent {
+  id: string;
+  eventType: string;
+  location: string | null;
+  notes: string | null;
+  occurredAt: string;
+}
+export interface CustomerDocument {
+  id: string;
+  shipmentId: string;
+  type: string;
+  uri: string;
+  createdAt: string;
+}
 export const customerApi = {
-  profile: () => apiFetch<{userId:string;email:string;clientId:string;company:string;contact:string;phone:string;country:string;city:string}>('/api/customer/profile'),
-  shipments: () => apiFetch<CustomerShipment[]>('/api/customer/shipments'),
-  shipment: (id:string) => apiFetch<CustomerShipment>(`/api/customer/shipments/${id}`),
-  events: (id:string) => apiFetch<TrackingEvent[]>(`/api/customer/shipments/${id}/events`),
-  documents: (id:string) => apiFetch<CustomerDocument[]>(`/api/customer/shipments/${id}/documents`),
-  quotes: () => apiFetch<CustomerQuote[]>('/api/customer/quotes'),
-  invoices: () => apiFetch<CustomerInvoice[]>('/api/customer/invoices'),
+  profile: () =>
+    apiFetch<{
+      userId: string;
+      email: string;
+      clientId: string;
+      company: string;
+      contact: string;
+      phone: string;
+      country: string;
+      city: string;
+    }>("/api/customer/profile"),
+  shipments: () => apiFetch<CustomerShipment[]>("/api/customer/shipments"),
+  shipment: (id: string) =>
+    apiFetch<CustomerShipment>(`/api/customer/shipments/${id}`),
+  events: (id: string) =>
+    apiFetch<TrackingEvent[]>(`/api/customer/shipments/${id}/events`),
+  documents: (id: string) =>
+    apiFetch<CustomerDocument[]>(`/api/customer/shipments/${id}/documents`),
+  quotes: () => apiFetch<CustomerQuote[]>("/api/customer/quotes"),
+  invoices: () => apiFetch<CustomerInvoice[]>("/api/customer/invoices"),
 };
 
 export interface AalSystemSetting {
@@ -1669,9 +1903,18 @@ export interface AalSystemSetting {
 }
 
 export const settingsApi = {
-  list: (group?: string) => apiFetch<AalSystemSetting[]>(`/api/settings${group ? `?group=${encodeURIComponent(group)}` : ""}`),
-  save: (group: string, key: string, value: string) => apiFetch<AalSystemSetting>("/api/settings", {
-    method: "PUT", body: JSON.stringify({ group, key, value }),
-  }),
-  remove: (group: string, key: string) => apiFetch<void>(`/api/settings?group=${encodeURIComponent(group)}&key=${encodeURIComponent(key)}`, { method: "DELETE" }),
+  list: (group?: string) =>
+    apiFetch<AalSystemSetting[]>(
+      `/api/settings${group ? `?group=${encodeURIComponent(group)}` : ""}`,
+    ),
+  save: (group: string, key: string, value: string) =>
+    apiFetch<AalSystemSetting>("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ group, key, value }),
+    }),
+  remove: (group: string, key: string) =>
+    apiFetch<void>(
+      `/api/settings?group=${encodeURIComponent(group)}&key=${encodeURIComponent(key)}`,
+      { method: "DELETE" },
+    ),
 };

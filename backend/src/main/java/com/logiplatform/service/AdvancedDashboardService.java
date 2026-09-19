@@ -140,9 +140,10 @@ public class AdvancedDashboardService {
         BigDecimal[] totals = jdbc.queryForObject(
                 """
                         SELECT
-                            COALESCE(SUM(COALESCE(amount_billed_to_client, amount_billed_to_client, 0)),0) AS billed,
+                            COALESCE(SUM(COALESCE(amount_billed_to_client, 0)),0) AS billed,
                             COALESCE(SUM(COALESCE(amount_paid_by_client,0)),0) AS collected,
-                            COALESCE(SUM(GREATEST(COALESCE(amount_billed_to_client, amount_billed_to_client, 0) - COALESCE(amount_paid_by_client,0),0)),0) AS receivables,
+                            COALESCE(SUM(GREATEST(COALESCE(amount_billed_to_client, 0) - COALESCE(amount_paid_by_client,0),0)),0) AS receivables,
+                            COALESCE(SUM(COALESCE(supplier_cost,0) + COALESCE(other_cost,0)),0) AS gross_cost,
                             COALESCE(SUM(COALESCE(supplier_cost,0) + COALESCE(other_cost,0) + COALESCE(other_expenses,0)),0) AS operating_cost
                         FROM shipments
                         WHERE tenant_id = ?
@@ -152,6 +153,7 @@ public class AdvancedDashboardService {
                         rs.getBigDecimal("billed"),
                         rs.getBigDecimal("collected"),
                         rs.getBigDecimal("receivables"),
+                        rs.getBigDecimal("gross_cost"),
                         rs.getBigDecimal("operating_cost")
                 },
                 tenantId, displayCurrency, displayCurrency);
@@ -159,8 +161,11 @@ public class AdvancedDashboardService {
         BigDecimal billed = nz(totals[0]);
         BigDecimal collected = nz(totals[1]);
         BigDecimal receivables = nz(totals[2]);
-        BigDecimal operatingCost = nz(totals[3]);
-        BigDecimal grossMargin = billed.subtract(operatingCost);
+        BigDecimal grossCost = nz(totals[3]);
+        BigDecimal operatingCost = nz(totals[4]);
+        // Gross margin follows the AAL workbook rule: revenue minus supplier/other cost.
+        // Other expenses remain in operating cost and the separate net-income view.
+        BigDecimal grossMargin = billed.subtract(grossCost);
         BigDecimal marginPercent = billed.signum() == 0
                 ? BigDecimal.ZERO
                 : grossMargin.multiply(BigDecimal.valueOf(100))

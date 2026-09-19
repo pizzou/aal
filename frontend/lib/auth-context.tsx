@@ -62,12 +62,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        if (session.role === "CUSTOMER") {
+          try {
+            await authApi.logout();
+          } catch {
+            // Ignore cleanup errors; do not establish a customer session in the UI.
+          }
+          currentTenant = null;
+          setTenantId(null);
+          setRole(null);
+          setAuthenticated(false);
+          return;
+        }
+
         currentTenant = session.tenantId;
 
         setTenantId(session.tenantId);
         setRole(session.role);
         setAuthenticated(true);
-        if (session.mustChangePassword && typeof window !== "undefined" && window.location.pathname !== "/account/security") {
+        if (
+          session.mustChangePassword &&
+          typeof window !== "undefined" &&
+          window.location.pathname !== "/account/security"
+        ) {
           window.location.replace("/account/security");
           return;
         }

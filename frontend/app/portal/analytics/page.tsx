@@ -1,1 +1,5 @@
-"use client";import{useEffect,useState}from"react";import{shipmentsApi,Shipment}from"@/lib/api-client";export default function AnalyticsPage(){const[items,setItems]=useState<Shipment[]>([]);useEffect(()=>{shipmentsApi.list().then(r=>setItems(r.content)).catch(()=>{})},[]);const modes=items.reduce<Record<string,number>>((a,s)=>{a[s.transportMode]=(a[s.transportMode]||0)+1;return a},{});return <div className="portal-page"><div className="portal-page-title"><div className="portal-eyebrow">ANALYTICS</div><h1>Logistics performance</h1><p>A clear customer view of shipment activity and service mix.</p></div><div className="analytics-grid"><div className="portal-card analytics-main"><span>SHIPMENT ACTIVITY</span><h2>{items.length} total shipments</h2><div className="bar-chart">{items.slice(0,12).map((s,i)=><div key={s.id} style={{height:`${25+((i*17)%65)}%`}}><span>{s.referenceCode.slice(-4)}</span></div>)}</div></div><div className="portal-card"><span>SERVICE MIX</span><h2>Transport modes</h2>{Object.entries(modes).map(([m,n])=><div className="mix-row" key={m}><span>{m}</span><b>{n}</b></div>)}</div></div></div>}
+import { redirect } from "next/navigation";
+
+export default function LegacyAnalyticsRoute() {
+  redirect("/");
+}

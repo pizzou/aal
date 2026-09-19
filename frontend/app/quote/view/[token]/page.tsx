@@ -7,7 +7,7 @@ export default function PublicQuotePage({ params }: { params: { token: string } 
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  useEffect(() => { publicQuoteApi.view(params.token).then(setQuote).catch(e => setError(e instanceof ApiError ? e.message : "Quotation link is unavailable.")); }, [params.token]);
+  useEffect(() => { publicQuoteApi.view(params.token).then(setQuote).catch((e: unknown) => setError(e instanceof ApiError ? e.message : "Quotation link is unavailable.")); }, [params.token]);
   async function respond(action: "ACCEPTED" | "DECLINED") {
     setBusy(true); setError("");
     try { const r = await publicQuoteApi.respond(params.token, action); setMessage(r.message); const v = await publicQuoteApi.view(params.token); setQuote(v); }

@@ -35,7 +35,7 @@ export default function LoginPage() {
           return;
         }
 
-        finish(r);
+        await finish(r);
         return;
       }
 
@@ -44,7 +44,7 @@ export default function LoginPage() {
       }
 
       const r = await authApi.login(email, password, otp, challenge);
-      finish(r);
+      await finish(r);
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -73,10 +73,25 @@ export default function LoginPage() {
     }
   }
 
-  function finish(r: any) {
+  async function finish(r: any) {
+    if (r.role === "CUSTOMER") {
+      try {
+        await authApi.logout();
+      } catch {
+        // The account remains inaccessible to the internal workspace even if logout cleanup fails.
+      }
+      setError(
+        "Customer portal access is disabled. Customers use AAL's public quote, booking and tracking services without an account.",
+      );
+      return;
+    }
+
     login(r.accessToken, r.tenantId, r.role);
     const next = search.get("next");
-    const destination = next?.startsWith("/") ? next : "/aal-control-tower";
+    const destination =
+      next?.startsWith("/") && !next.startsWith("/portal")
+        ? next
+        : "/aal-control-tower";
     router.push(r.mustChangePassword ? "/account/security" : destination);
   }
 

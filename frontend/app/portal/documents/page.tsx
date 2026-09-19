@@ -1,1 +1,5 @@
-"use client";import{useEffect,useState}from"react";import{shipmentsApi,Shipment}from"@/lib/api-client";import Icon from"@/components/Icon";export default function DocumentsPage(){const[items,setItems]=useState<Shipment[]>([]);useEffect(()=>{shipmentsApi.list().then(r=>setItems(r.content)).catch(()=>{})},[]);return <div className="portal-page"><div className="portal-page-title"><div className="portal-eyebrow">DOCUMENTS</div><h1>Documents & customs</h1><p>Shipment paperwork stays connected to the movement it belongs to.</p></div><div className="document-grid">{items.slice(0,12).map(s=><div className="portal-card document-card" key={s.id}><div className="document-card-head"><div className="doc-icon"><Icon name="file"/></div><div><strong>{s.referenceCode}</strong><span>{s.originCityPort||s.originAddress} → {s.destinationCityPort||s.destinationAddress}</span></div></div><Doc name="Air waybill / transport document"/><Doc name="Commercial invoice"/><Doc name="Packing list"/><Doc name="Customs documentation"/></div>)}</div></div>};function Doc({name}:{name:string}){return <div className="doc-row"><span><Icon name="file" size={14}/>{name}</span><button><Icon name="chevron" size={13}/></button></div>}
+import { redirect } from "next/navigation";
+
+export default function LegacyDocumentsRoute() {
+  redirect("/");
+}

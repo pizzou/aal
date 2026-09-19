@@ -29,7 +29,12 @@ export interface AalRoleDefinition {
 export const usersApi = {
   list: () => apiFetch<AalUser[]>("/api/users"),
   roles: () => apiFetch<AalRoleDefinition[]>("/api/users/roles"),
-  create: (data: { email: string; displayName?: string; phone?: string; role: AalRole }) =>
+  create: (data: {
+    email: string;
+    displayName?: string;
+    phone?: string;
+    role: AalRole;
+  }) =>
     apiFetch<AalUser>("/api/users", {
       method: "POST",
       body: JSON.stringify(data),

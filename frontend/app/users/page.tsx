@@ -19,7 +19,6 @@ const fallbackRoles: AalRoleDefinition[] = [
     "Air Cargo",
     "Air cargo, flights, AWB and air-freight execution.",
   ],
-  ["CUSTOMER", "Customer", "Customer portal access for shipments, quotations, documents and invoices."],
 ].map(([roleName, displayName, description]) => ({
   roleName: roleName as AalRole,
   displayName,
@@ -64,9 +63,11 @@ export default function UsersPage() {
     setError("");
     try {
       const [u, r] = await Promise.all([usersApi.list(), usersApi.roles()]);
-      setUsers(u);
-      if (r.length) setRoles(r);
-      setDraftRoles(Object.fromEntries(u.map((x) => [x.id, x.role])));
+      const staffUsers = u.filter((x) => x.role !== "CUSTOMER");
+      const staffRoles = r.filter((x) => x.roleName !== "CUSTOMER");
+      setUsers(staffUsers);
+      if (staffRoles.length) setRoles(staffRoles);
+      setDraftRoles(Object.fromEntries(staffUsers.map((x) => [x.id, x.role])));
     } catch (e) {
       setError(messageFor(e));
     } finally {
@@ -137,23 +138,44 @@ export default function UsersPage() {
 
   async function saveEmail() {
     if (!editUser) return;
-    setBusy(true); setError(""); setSuccess("");
+    setBusy(true);
+    setError("");
+    setSuccess("");
     try {
-      const updated = await usersApi.updateEmail(editUser.id, editEmail.trim().toLowerCase());
-      setUsers(current => current.map(x => x.id === updated.id ? updated : x));
-      setEditUser(null); setEditEmail("");
+      const updated = await usersApi.updateEmail(
+        editUser.id,
+        editEmail.trim().toLowerCase(),
+      );
+      setUsers((current) =>
+        current.map((x) => (x.id === updated.id ? updated : x)),
+      );
+      setEditUser(null);
+      setEditEmail("");
       setSuccess(`Email updated for ${updated.email}.`);
-    } catch (e) { setError(messageFor(e)); } finally { setBusy(false); }
+    } catch (e) {
+      setError(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function savePassword() {
     if (!editUser) return;
-    setBusy(true); setError(""); setSuccess("");
+    setBusy(true);
+    setError("");
+    setSuccess("");
     try {
       await usersApi.resetPassword(editUser.id, editPassword);
-      setEditPassword(""); setEditUser(null);
-      setSuccess(`Password reset for ${editUser.email}. Existing sessions were revoked.`);
-    } catch (e) { setError(messageFor(e)); } finally { setBusy(false); }
+      setEditPassword("");
+      setEditUser(null);
+      setSuccess(
+        `Password reset for ${editUser.email}. Existing sessions were revoked.`,
+      );
+    } catch (e) {
+      setError(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function toggle(user: AalUser) {
@@ -247,9 +269,26 @@ export default function UsersPage() {
                 maxLength={255}
               />
             </div>
-            <div className="field"><label>Display name</label><input value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="Full name" /></div>
-            <div className="field"><label>Phone (optional)</label><input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="+250…" /></div>
-            <div className="alert" style={{fontSize:12}}>AAL generates a secure temporary password and emails the login credentials. The user must change it after the first sign-in.</div>
+            <div className="field">
+              <label>Display name</label>
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Full name"
+              />
+            </div>
+            <div className="field">
+              <label>Phone (optional)</label>
+              <input
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+250…"
+              />
+            </div>
+            <div className="alert" style={{ fontSize: 12 }}>
+              AAL generates a secure temporary password and emails the login
+              credentials. The user must change it after the first sign-in.
+            </div>
             <div className="field">
               <label>Role</label>
               <select
@@ -328,9 +367,25 @@ export default function UsersPage() {
                             ))}
                           </select>
                           {selected !== user.role && (
-                            <button className="btn btn-primary" disabled={busy} onClick={() => void saveRole(user)}>Save</button>
+                            <button
+                              className="btn btn-primary"
+                              disabled={busy}
+                              onClick={() => void saveRole(user)}
+                            >
+                              Save
+                            </button>
                           )}
-                          <button className="btn" disabled={busy} onClick={() => { setEditUser(user); setEditEmail(user.email); setEditPassword(""); }}>Manage</button>
+                          <button
+                            className="btn"
+                            disabled={busy}
+                            onClick={() => {
+                              setEditUser(user);
+                              setEditEmail(user.email);
+                              setEditPassword("");
+                            }}
+                          >
+                            Manage
+                          </button>
                         </div>
                       </td>
                       <td>
@@ -374,17 +429,57 @@ export default function UsersPage() {
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <section className="modal-card">
             <div className="page-head">
-              <div><div className="eyebrow">ACCOUNT ADMINISTRATION</div><h2 className="card-title">Manage {editUser.email}</h2></div>
-              <button className="icon-btn" onClick={() => setEditUser(null)} aria-label="Close">×</button>
+              <div>
+                <div className="eyebrow">ACCOUNT ADMINISTRATION</div>
+                <h2 className="card-title">Manage {editUser.email}</h2>
+              </div>
+              <button
+                className="icon-btn"
+                onClick={() => setEditUser(null)}
+                aria-label="Close"
+              >
+                ×
+              </button>
             </div>
             <div className="form-grid">
-              <div className="field"><label>Email address</label><input type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} /></div>
-              <div className="field"><label>New password</label><input type="password" minLength={10} maxLength={128} value={editPassword} onChange={e => setEditPassword(e.target.value)} placeholder="Leave blank to keep current password" /></div>
+              <div className="field">
+                <label>Email address</label>
+                <input
+                  type="email"
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>New password</label>
+                <input
+                  type="password"
+                  minLength={10}
+                  maxLength={128}
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
+                  placeholder="Leave blank to keep current password"
+                />
+              </div>
             </div>
-            <div className="actions" style={{marginTop:14}}>
-              <button className="btn btn-primary" disabled={busy || !editEmail.trim()} onClick={() => void saveEmail()}>Update email</button>
-              <button className="btn" disabled={busy || editPassword.length < 10} onClick={() => void savePassword()}>Change password</button>
-              <button className="btn" onClick={() => setEditUser(null)}>Close</button>
+            <div className="actions" style={{ marginTop: 14 }}>
+              <button
+                className="btn btn-primary"
+                disabled={busy || !editEmail.trim()}
+                onClick={() => void saveEmail()}
+              >
+                Update email
+              </button>
+              <button
+                className="btn"
+                disabled={busy || editPassword.length < 10}
+                onClick={() => void savePassword()}
+              >
+                Change password
+              </button>
+              <button className="btn" onClick={() => setEditUser(null)}>
+                Close
+              </button>
             </div>
           </section>
         </div>

@@ -502,6 +502,34 @@ export interface PublicShipmentView {
   } | null;
 }
 
+export type PublicQuoteView = {
+  shareId: string;
+  quoteReference: string;
+  quoteDate: string;
+  client?: string | null;
+  route?: string | null;
+  serviceType?: string | null;
+  commodity?: string | null;
+  chargeableWeightKg?: number | null;
+  quotedAmount?: number | null;
+  validUntil?: string | null;
+  status: string;
+  actionable: boolean;
+  response?: string | null;
+};
+
+export const publicQuoteApi = {
+  view: (token: string) =>
+    apiFetch<PublicQuoteView>(
+      `/api/public/quotes/${encodeURIComponent(token)}`,
+    ),
+  respond: (token: string, action: "ACCEPTED" | "DECLINED") =>
+    apiFetch<{ status: string; message: string }>(
+      `/api/public/quotes/${encodeURIComponent(token)}/response?action=${action}`,
+      { method: "POST" },
+    ),
+};
+
 export const publicCommercialApi = {
   requestQuote: (data: Record<string, unknown>) =>
     apiFetch<QuoteRecord>("/api/public/commercial/quotes", {

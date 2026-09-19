@@ -71,11 +71,11 @@ export default function AalControlTower() {
       <div className="page-head">
         <div>
           <div className="eyebrow">AAL / OPERATIONS CONTROL TOWER</div>
-          <h1 className="page-title">Daily command center</h1>
+          <h1 className="page-title">Daily operations command center</h1>
           <p className="page-subtitle">
-            One operating view combining the manual MOTHERSHIP ledger, Command
-            Center workflow, fleet execution, exceptions, receivables and sales
-            pipeline.
+            Run the logistics business from one screen: shipments, today's
+            workload, exceptions, fleet readiness, cash exposure and commercial
+            priorities.
           </p>
         </div>
         <div className="actions">
@@ -112,30 +112,36 @@ export default function AalControlTower() {
             <Kpi
               title="Active shipments"
               value={data.operations.activeShipments.toLocaleString()}
-              meta={`${data.operations.totalShipments} total · ${data.operations.dueToday} due today`}
+              meta={`${data.operations.totalShipments} total`}
               href="/shipments"
             />
             <Kpi
-              title="Delayed / exception"
-              value={`${data.operations.delayedShipments} / ${data.operations.exceptionShipments}`}
+              title="Due today"
+              value={data.operations.dueToday.toLocaleString()}
               meta={`${data.operations.unassignedShipments} unassigned`}
+              href="/shipments"
+            />
+            <Kpi
+              title="Delayed / exceptions"
+              value={`${data.operations.delayedShipments} / ${data.operations.exceptionShipments}`}
+              meta="Operational attention required"
               href="/exceptions"
             />
             <Kpi
-              title="On-time delivery"
-              value={pct(data.operations.onTimeRatePercent)}
-              meta={`${pct(data.operations.completionRatePercent)} completion rate`}
-              href="/reports"
+              title="Open tasks"
+              value={data.operatingKpis.openTasks.toLocaleString()}
+              meta={`${data.operatingKpis.overdueTasks} overdue`}
+              href="/commercial"
             />
+          </section>
+
+          <section className="grid grid-4" style={{ marginTop: 16 }}>
             <Kpi
               title="Receivables"
               value={money(data.financial.receivables, currency)}
               meta={`${money(data.operatingKpis.overdueReceivables, currency)} overdue`}
               href="/billing"
             />
-          </section>
-
-          <section className="grid grid-4" style={{ marginTop: 16 }}>
             <Kpi
               title="Revenue invoiced"
               value={money(data.operatingKpis.revenueInvoiced, currency)}
@@ -145,14 +151,8 @@ export default function AalControlTower() {
             <Kpi
               title="Gross profit"
               value={money(data.operatingKpis.grossProfit, currency)}
-              meta={`${pct(data.operatingKpis.overallProfitMargin)} overall margin`}
+              meta={`${pct(data.operatingKpis.overallProfitMargin)} margin`}
               href="/reports"
-            />
-            <Kpi
-              title="Due next 30 days"
-              value={money(data.operatingKpis.dueNext30Days, currency)}
-              meta={`${data.operatingKpis.openTasks} open tasks`}
-              href="/billing"
             />
             <Kpi
               title="Sales pipeline"

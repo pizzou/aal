@@ -9,20 +9,10 @@ import { useEffect, useState } from "react";
 
 type NavItem = { label: string; href: string; icon: IconName };
 
-const portalNav: NavItem[] = [
-  { label: "Home", href: "/portal", icon: "grid" },
-  { label: "Get a quote", href: "/portal/quote", icon: "plus" },
-  { label: "Book shipment", href: "/portal/book", icon: "ship" },
-  { label: "Track shipments", href: "/portal/shipments", icon: "globe" },
-  { label: "Documents", href: "/portal/documents", icon: "file" },
-  { label: "Invoices", href: "/portal/invoices", icon: "money" },
-  { label: "Analytics", href: "/portal/analytics", icon: "chart" },
-];
-
 const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   {
     section: "CONTROL TOWER",
-    label: "AAL Operations & Profitability",
+    label: "Daily Operations & Profitability",
     href: "/aal-control-tower",
     icon: "grid",
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES", "FINANCE"],
@@ -137,11 +127,23 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const bare =
     path === "/login" ||
+    path === "/forgot-password" ||
+    path === "/reset-password" ||
+    path === "/quote" ||
+    path === "/book" ||
+    path === "/track" ||
     path.startsWith("/track/") ||
     path.startsWith("/quote/view/") ||
+    path === "/portal" ||
+    path.startsWith("/portal/") ||
     path.startsWith("/customer-portal/") ||
     path === "/";
-  const portal = path === "/portal" || path.startsWith("/portal/");
+
+  useEffect(() => {
+    if (role === "CUSTOMER" && accessToken) {
+      router.replace("/");
+    }
+  }, [accessToken, role, router]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -176,6 +178,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const results = query.trim() ? shipments : [];
 
   if (bare) return <>{children}</>;
+
   if (isLoading)
     return (
       <div className="app-loading">
@@ -186,33 +189,24 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     );
+
   if (!accessToken) return <>{children}</>;
+
+  // Customer accounts are intentionally not supported in the internal UI.
+  // AuthProvider clears them before this shell normally renders, but this guard
+  // also protects against transient state during session restoration.
+  if (role === "CUSTOMER") return null;
 
   async function doLogout() {
     await logout();
     router.push("/login");
   }
 
-  if (portal) {
-    return (
-      <CustomerShell
-        path={path}
-        open={open}
-        setOpen={setOpen}
-        query={query}
-        setQuery={setQuery}
-        results={results}
-        doLogout={doLogout}
-      >
-        {children}
-      </CustomerShell>
-    );
-  }
-
   const visible = internalNav.filter(
-    (i) => !i.roles || (role && i.roles.includes(role)),
+    (item) => !item.roles || (role && item.roles.includes(role)),
   );
   let last = "";
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${open ? "open" : ""}`}>
@@ -230,6 +224,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             last = item.section;
             const active =
               path === item.href || path.startsWith(`${item.href}/`);
+
             return (
               <div key={item.href}>
                 {section && <div className="nav-section">{item.section}</div>}
@@ -259,13 +254,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <div className="sidebar-footer">
-          <Link className="nav-link footer-link" href="/portal">
+          <Link className="nav-link footer-link" href="/quote">
             <span className="nav-icon">
-              <Icon name="globe" size={17} />
+              <Icon name="plus" size={17} />
             </span>
             <span className="nav-link-copy">
-              <strong>Customer Portal</strong>
-              <small>Switch to client experience</small>
+              <strong>Public quote flow</strong>
+              <small>Open customer-facing quote page</small>
             </span>
           </Link>
           <button
@@ -281,6 +276,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
+
       <section className="workspace">
         <header className="topbar">
           <button
@@ -300,7 +296,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <div className="live-indicator">
               <span /> SYSTEM ONLINE
             </div>
-            <button className="icon-btn">
+            <button className="icon-btn" aria-label="Notifications">
               <Icon name="bell" />
             </button>
             <div className="top-divider" />
@@ -332,6 +328,7 @@ function Brand() {
     </div>
   );
 }
+
 function SearchBox({
   query,
   setQuery,
@@ -364,94 +361,6 @@ function SearchBox({
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function CustomerShell({
-  children,
-  path,
-  open,
-  setOpen,
-  query,
-  setQuery,
-  results,
-  doLogout,
-}: {
-  children: React.ReactNode;
-  path: string;
-  open: boolean;
-  setOpen: (v: boolean) => void;
-  query: string;
-  setQuery: (v: string) => void;
-  results: Shipment[];
-  doLogout: () => void;
-}) {
-  return (
-    <div className="portal-shell">
-      <aside className={`portal-sidebar ${open ? "open" : ""}`}>
-        <div className="portal-brand">
-          <div className="portal-logo">
-            <Icon name="plane" size={20} />
-          </div>
-          <div>
-            <strong>AAL</strong>
-            <span>AFRICA LOGISTIC AVIATION</span>
-          </div>
-        </div>
-        <div className="portal-account">
-          <div className="portal-account-label">CUSTOMER WORKSPACE</div>
-          <strong>My AAL Logistics</strong>
-          <span>Connected account</span>
-        </div>
-        <nav className="portal-nav">
-          {portalNav.map((item) => {
-            const active =
-              path === item.href || path.startsWith(`${item.href}/`);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={active ? "active" : ""}
-                onClick={() => setOpen(false)}
-              >
-                <Icon name={item.icon} size={17} />
-                <span>{item.label}</span>
-                {item.href === "/portal/quote" && <b>NEW</b>}
-              </Link>
-            );
-          })}
-        </nav>
-        <div className="portal-sidebar-bottom">
-          <Link href="/dashboard">
-            <Icon name="grid" size={16} /> Internal control tower
-          </Link>
-          <button onClick={doLogout}>
-            <Icon name="logout" size={16} /> Sign out
-          </button>
-        </div>
-      </aside>
-      <main className="portal-main">
-        <header className="portal-topbar">
-          <button
-            className="icon-btn portal-menu"
-            onClick={() => setOpen(!open)}
-          >
-            <Icon name="menu" />
-          </button>
-          <div className="portal-top-search">
-            <SearchBox query={query} setQuery={setQuery} results={results} />
-          </div>
-          <div className="portal-top-actions">
-            <button className="portal-icon">
-              <Icon name="bell" />
-            </button>
-            <button className="portal-help">Help</button>
-            <div className="portal-avatar">AA</div>
-          </div>
-        </header>
-        {children}
-      </main>
     </div>
   );
 }

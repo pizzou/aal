@@ -13,7 +13,11 @@ public class ProductionConfigurationValidator {
             @Value("${spring.datasource.username}") String dbUser,
             @Value("${spring.datasource.password}") String dbPassword,
             @Value("${security.cors.allowed-origins}") String origins,
-            @Value("${app.environment}") String environment) {
+            @Value("${app.environment}") String environment,
+            @Value("${app.frontend.url}") String frontendUrl,
+            @Value("${app.mail.enabled:false}") boolean mailEnabled,
+            @Value("${app.mail.brevo-api-key:}") String brevoApiKey,
+            @Value("${app.mail.from:}") String mailFrom) {
 
         if (jwtSecret == null
                 || jwtSecret.isBlank()
@@ -38,7 +42,8 @@ public class ProductionConfigurationValidator {
                 || dbPassword.isBlank()
                 || dbPassword.contains("change-me")
                 || dbPassword.contains("dev_pw")
-                || dbPassword.equals("Mpumuro@2025")) {
+                || dbPassword.equalsIgnoreCase("password")
+                || dbPassword.equalsIgnoreCase("postgres")) {
 
             throw new IllegalStateException(
                     "Production database password is not configured with a production secret");
@@ -58,6 +63,26 @@ public class ProductionConfigurationValidator {
 
             throw new IllegalStateException(
                     "Production profile requires app.environment=production");
+        }
+
+        if (frontendUrl == null
+                || frontendUrl.isBlank()
+                || !(frontendUrl.startsWith("https://") || frontendUrl.startsWith("http://"))
+                || frontendUrl.contains("localhost")
+                || frontendUrl.contains("127.0.0.1")) {
+            throw new IllegalStateException(
+                    "Production requires a public APP_FRONTEND_URL without localhost");
+        }
+
+        if (mailEnabled) {
+            if (brevoApiKey == null || brevoApiKey.isBlank()) {
+                throw new IllegalStateException(
+                        "AAL_MAIL_ENABLED=true requires BREVO_API_KEY");
+            }
+            if (mailFrom == null || mailFrom.isBlank() || !mailFrom.contains("@")) {
+                throw new IllegalStateException(
+                        "AAL_MAIL_ENABLED=true requires a valid AAL_MAIL_FROM address");
+            }
         }
     }
 }

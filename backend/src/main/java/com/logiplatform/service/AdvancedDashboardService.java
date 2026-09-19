@@ -261,7 +261,7 @@ public class AdvancedDashboardService {
                 """
                         SELECT d::date AS day,
                                COUNT(s.id) AS shipments,
-                               COALESCE(SUM(COALESCE(s.amount_billed_to_client, s.amount_billed_to_client, 0)),0) AS revenue,
+                               COALESCE(SUM(COALESCE(s.amount_billed_to_client, 0)),0) AS revenue,
                                COALESCE(SUM(COALESCE(s.supplier_cost,0) + COALESCE(s.other_cost,0) + COALESCE(s.other_expenses,0)),0) AS operating_cost
                         FROM generate_series(?::date - INTERVAL '6 days', ?::date, INTERVAL '1 day') d
                         LEFT JOIN shipments s
@@ -441,7 +441,7 @@ public class AdvancedDashboardService {
                                 AND UPPER(i.currency) = ?) AS outstanding,
 
                             (SELECT COALESCE(SUM(
-                                      COALESCE(s.amount_billed_to_client,s.amount_billed_to_client,0)
+                                      COALESCE(s.amount_billed_to_client,0)
                                       - COALESCE(s.supplier_cost,0)
                                       - COALESCE(s.other_cost,0)
                                    ),0)
@@ -541,11 +541,11 @@ public class AdvancedDashboardService {
                             TO_CHAR(d, 'YYYY-MM') AS month,
                             COALESCE(SUM(
                                 CASE WHEN UPPER(COALESCE(NULLIF(s.currency,''),?)) = ?
-                                THEN COALESCE(s.amount_billed_to_client,s.amount_billed_to_client,0) ELSE 0 END
+                                THEN COALESCE(s.amount_billed_to_client,0) ELSE 0 END
                             ),0) AS revenue,
                             COALESCE(SUM(
                                 CASE WHEN UPPER(COALESCE(NULLIF(s.currency,''),?)) = ?
-                                THEN COALESCE(s.amount_billed_to_client,s.amount_billed_to_client,0)
+                                THEN COALESCE(s.amount_billed_to_client,0)
                                      - COALESCE(s.supplier_cost,0)
                                      - COALESCE(s.other_cost,0)
                                 ELSE 0 END

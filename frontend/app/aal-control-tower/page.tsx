@@ -10,7 +10,7 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => new Date().toLocaleDateString("en-CA");
 
 function money(value: number | null | undefined, currency: string): string {
   return `${currency} ${(value ?? 0).toLocaleString(undefined, {
@@ -113,21 +113,25 @@ export default function AalControlTower() {
               title="Active shipments"
               value={data.operations.activeShipments.toLocaleString()}
               meta={`${data.operations.totalShipments} total · ${data.operations.dueToday} due today`}
+              href="/shipments"
             />
             <Kpi
               title="Delayed / exception"
               value={`${data.operations.delayedShipments} / ${data.operations.exceptionShipments}`}
               meta={`${data.operations.unassignedShipments} unassigned`}
+              href="/exceptions"
             />
             <Kpi
               title="On-time delivery"
               value={pct(data.operations.onTimeRatePercent)}
               meta={`${pct(data.operations.completionRatePercent)} completion rate`}
+              href="/reports"
             />
             <Kpi
               title="Receivables"
               value={money(data.financial.receivables, currency)}
               meta={`${money(data.operatingKpis.overdueReceivables, currency)} overdue`}
+              href="/billing"
             />
           </section>
 
@@ -136,21 +140,25 @@ export default function AalControlTower() {
               title="Revenue invoiced"
               value={money(data.operatingKpis.revenueInvoiced, currency)}
               meta={`${money(data.financial.collected, currency)} collected`}
+              href="/billing"
             />
             <Kpi
               title="Gross profit"
               value={money(data.operatingKpis.grossProfit, currency)}
               meta={`${pct(data.operatingKpis.overallProfitMargin)} overall margin`}
+              href="/reports"
             />
             <Kpi
               title="Due next 30 days"
               value={money(data.operatingKpis.dueNext30Days, currency)}
               meta={`${data.operatingKpis.openTasks} open tasks`}
+              href="/billing"
             />
             <Kpi
               title="Sales pipeline"
               value={data.operatingKpis.openQuotations.toLocaleString()}
               meta={`${data.operatingKpis.wonQuotations} won · ${pct(data.operatingKpis.salesWinRate)} win rate`}
+              href="/commercial"
             />
           </section>
 
@@ -163,22 +171,28 @@ export default function AalControlTower() {
                 </div>
               </div>
               <div className="stack">
-                {data.actions.map((action, index) => (
-                  <Link
-                    className="action-row"
-                    href={action.href}
-                    key={`${action.title}-${index}`}
-                  >
-                    <span className={severityClass(action.priority)}>
-                      {action.priority}
-                    </span>
-                    <span>
-                      <strong>{action.title}</strong>
-                      <small>{action.detail}</small>
-                    </span>
-                    <span aria-hidden>→</span>
-                  </Link>
-                ))}
+                {data.actions.length ? (
+                  data.actions.map((action, index) => (
+                    <Link
+                      className="action-row"
+                      href={action.href}
+                      key={`${action.title}-${index}`}
+                    >
+                      <span className={severityClass(action.priority)}>
+                        {action.priority}
+                      </span>
+                      <span>
+                        <strong>{action.title}</strong>
+                        <small>{action.detail}</small>
+                      </span>
+                      <span aria-hidden>→</span>
+                    </Link>
+                  ))
+                ) : (
+                  <div className="empty">
+                    No priority actions require attention.
+                  </div>
+                )}
               </div>
             </div>
 
@@ -206,7 +220,7 @@ export default function AalControlTower() {
                         <td>
                           <Link
                             className="table-link strong-link"
-                            href="/shipments"
+                            href={`/shipments?q=${encodeURIComponent(item.reference)}`}
                           >
                             {item.reference}
                           </Link>
@@ -412,19 +426,22 @@ function Kpi({
   title,
   value,
   meta,
+  href,
 }: {
   title: string;
   value: string;
   meta: string;
+  href: string;
 }) {
   return (
-    <div className="card kpi premium-kpi">
+    <Link className="card kpi premium-kpi kpi-link" href={href}>
       <div className="kpi-label">{title}</div>
       <div className="kpi-value" style={{ fontSize: 22 }}>
         {value}
       </div>
       <div className="kpi-meta">{meta}</div>
-    </div>
+      <div className="kpi-drill">Open underlying records →</div>
+    </Link>
   );
 }
 

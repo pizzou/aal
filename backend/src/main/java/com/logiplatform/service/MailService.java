@@ -11,12 +11,16 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
 
 @Service
 public class MailService {
+
+    private static final Logger log = LoggerFactory.getLogger(MailService.class);
 
     private static final String BREVO_URL =
             "https://api.brevo.com/v3/smtp/email";
@@ -277,21 +281,22 @@ public class MailService {
             return;
         }
 
+        if (!mailEnabled) {
+            log.debug("AAL mail delivery is disabled by configuration");
+            return;
+        }
+
         if (brevoApiKey == null
                 || brevoApiKey.isBlank()) {
 
-            System.err.println(
-                    "[AAL EMAIL] BREVO API key is not configured"
-            );
+            log.warn("Brevo API key is not configured; email delivery is disabled");
 
             return;
         }
 
         if (from == null || from.isBlank()) {
 
-            System.err.println(
-                    "[AAL EMAIL] Mail sender address is not configured"
-            );
+            log.warn("Mail sender address is not configured; email delivery is disabled");
 
             return;
         }
@@ -347,10 +352,7 @@ public class MailService {
 
             if (!response.getStatusCode().is2xxSuccessful()) {
 
-                System.err.println(
-                        "[AAL EMAIL] Brevo rejected message. HTTP="
-                                + response.getStatusCode().value()
-                );
+                log.warn("Brevo rejected email. httpStatus={}", response.getStatusCode().value());
             }
 
         } catch (Exception ex) {
@@ -360,10 +362,7 @@ public class MailService {
              * Email-provider failure must NEVER turn a valid
              * authentication request into HTTP 500.
              */
-            System.err.println(
-                    "[AAL EMAIL] Delivery failed: "
-                            + ex.getMessage()
-            );
+            log.error("Email delivery failed: {}", ex.getMessage(), ex);
         }
     }
 

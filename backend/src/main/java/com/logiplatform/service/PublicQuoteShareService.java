@@ -6,6 +6,7 @@ import com.logiplatform.model.CommercialQuote;
 import com.logiplatform.repository.ClientRecordRepository;
 import com.logiplatform.repository.CommercialQuoteRepository;
 import com.logiplatform.tenancy.TenantContext;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -31,13 +32,13 @@ public class PublicQuoteShareService {
     private final MailService mail;
     private final SecureRandom random = new SecureRandom();
 
-    @Value("${app.frontend.url:https://aal-a.vercel.app}")
+    @Value("${app.frontend.url:http://localhost:3000}")
     private String frontendUrl;
 
     public PublicQuoteShareService(
             CommercialQuoteRepository quotes,
             ClientRecordRepository clients,
-            JdbcTemplate db,
+            @Qualifier("authJdbcTemplate") JdbcTemplate db,
             MailService mail) {
         this.quotes = quotes;
         this.clients = clients;
@@ -45,21 +46,22 @@ public class PublicQuoteShareService {
         this.mail = mail;
     }
 
+    /**
+     * Internal authenticated operation: tenant context is present here and the
+     * normal tenant-aware JPA repositories are intentionally used.
+     */
     @Transactional
     public QuoteShareResult share(UUID quoteId, String overrideEmail) {
         UUID tenant = TenantContext.getTenantId();
 
         CommercialQuote quote = quotes.findById(quoteId)
                 .filter(q -> tenant.equals(q.getTenantId()))
-                .orElseThrow(() ->
-                        new ResponseStatusException(
-                                HttpStatus.NOT_FOUND,
-                                "Quote not found"));
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Quote not found"));
 
         LocalDate today = LocalDate.now();
 
-        if (quote.getValidUntil() != null
-                && quote.getValidUntil().isBefore(today)) {
+        if (quote.getValidUntil() != null && quote.getValidUntil().isBefore(today)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "This quotation has expired. Renew it before sharing.");
@@ -72,60 +74,35 @@ public class PublicQuoteShareService {
                     "This quotation is no longer shareable.");
         }
 
-        var client = clients
-                .findFirstByTenantIdAndClientCompanyIgnoreCase(
-                        tenant,
-                        quote.getClient())
-                .orElse(null);
+        var client = clients.findFirstByTenantIdAndClientCompanyIgnoreCase(
+                tenant,
+                quote.getClient()).orElse(null);
 
-        String email =
-                overrideEmail == null || overrideEmail.isBlank()
-                        ? (client == null ? null : client.getEmail())
-                        : overrideEmail.trim();
+        String email = overrideEmail == null || overrideEmail.isBlank()
+                ? (client == null ? null : client.getEmail())
+                : overrideEmail.trim();
 
         if (email == null || email.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Customer email is not configured. "
-                            + "Add the customer's email or provide a recipient email.");
+                    "Customer email is not configured. Add the customer's email or provide a recipient email.");
         }
 
-        String name = client == null
-                ? quote.getClient()
-                : client.getContactPerson();
-
+        String name = client == null ? quote.getClient() : client.getContactPerson();
         String rawToken = generateToken();
         String tokenHash = hash(rawToken);
-
-        Instant expiresAt =
-                quote.getValidUntil() == null
-                        ? Instant.now().plusSeconds(30L * 24L * 3600L)
-                        : quote.getValidUntil()
-                                .plusDays(1)
-                                .atStartOfDay()
-                                .toInstant(ZoneOffset.UTC);
-
+        Instant expiresAt = quote.getValidUntil() == null
+                ? Instant.now().plusSeconds(30L * 24L * 3600L)
+                : quote.getValidUntil().plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
         UUID shareId = UUID.randomUUID();
 
         db.update(
-                """
-                INSERT INTO commercial_quote_shares
-                    (id, tenant_id, quote_id, token_hash, recipient_email, expires_at)
-                VALUES
-                    (?, ?, ?, ?, ?, ?)
-                """,
-                shareId,
-                tenant,
-                quoteId,
-                tokenHash,
-                email,
-                expiresAt
-        );
+                "INSERT INTO commercial_quote_shares "
+                        + "(id,tenant_id,quote_id,token_hash,recipient_email,expires_at) "
+                        + "VALUES(?,?,?,?,?,?)",
+                shareId, tenant, quoteId, tokenHash, email, expiresAt);
 
-        String url =
-                frontendUrl.replaceAll("/$", "")
-                        + "/quote/view/"
-                        + rawToken;
+        String url = frontendUrl.replaceAll("/$", "") + "/quote/view/" + rawToken;
 
         mail.sendQuotationShare(
                 email,
@@ -136,27 +113,19 @@ public class PublicQuoteShareService {
                 quote.getServiceType(),
                 quote.getQuotedAmount() == null
                         ? "—"
-                        : quote.getQuotedAmount()
-                                .stripTrailingZeros()
-                                .toPlainString(),
-                quote.getValidUntil() == null
-                        ? "30 days"
-                        : quote.getValidUntil().toString()
-        );
+                        : quote.getQuotedAmount().stripTrailingZeros().toPlainString(),
+                quote.getValidUntil() == null ? "30 days" : quote.getValidUntil().toString());
 
-        return new QuoteShareResult(
-                shareId,
-                quote.getQuoteId(),
-                email,
-                url,
-                expiresAt
-        );
+        return new QuoteShareResult(shareId, quote.getQuoteId(), email, url, expiresAt);
     }
 
+    /**
+     * Public endpoint: deliberately independent of TenantContext. The raw auth
+     * datasource is used, and every query is constrained by the hashed token.
+     */
     @Transactional
     public QuoteView view(String token) {
         ShareRow row = find(token);
-
         if (row == null) {
             throw new ResponseStatusException(
                     HttpStatus.NOT_FOUND,
@@ -164,165 +133,181 @@ public class PublicQuoteShareService {
         }
 
         db.update(
-                """
-                UPDATE commercial_quote_shares
-                SET opened_at = COALESCE(opened_at, now())
-                WHERE id = ?
-                """,
-                row.id()
-        );
+                "UPDATE commercial_quote_shares "
+                        + "SET opened_at=COALESCE(opened_at,now()) WHERE id=?",
+                row.id());
 
         return toView(row);
     }
 
+    /**
+     * Public endpoint: accepts or declines the quotation without requiring a
+     * login or tenant context. The update is explicitly scoped by tenant and
+     * quote id so it cannot affect another quotation.
+     */
     @Transactional
-    public QuoteResponseAction respond(
-            String token,
-            String action) {
-
+    public QuoteResponseAction respond(String token, String action) {
         ShareRow row = find(token);
-
         if (row == null) {
             throw new ResponseStatusException(
                     HttpStatus.NOT_FOUND,
                     "Quotation link is invalid or expired");
         }
 
-        CommercialQuote quote = row.quote();
-
-        String normalized =
-                action == null
-                        ? ""
-                        : action.trim().toUpperCase();
-
-        if (!normalized.equals("ACCEPTED")
-                && !normalized.equals("DECLINED")) {
+        String normalized = action == null ? "" : action.trim().toUpperCase();
+        if (!normalized.equals("ACCEPTED") && !normalized.equals("DECLINED")) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Action must be ACCEPTED or DECLINED");
         }
 
-        if (quote.getValidUntil() != null
-                && quote.getValidUntil().isBefore(LocalDate.now())) {
+        if (row.validUntil() != null && row.validUntil().isBefore(LocalDate.now())) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "This quotation has expired.");
         }
 
-        if (row.response() != null
-                && !row.response().isBlank()) {
+        if (row.response() != null && !row.response().isBlank()) {
             return new QuoteResponseAction(
                     row.response(),
-                    "This quotation has already received your response."
-            );
+                    "This quotation has already received your response.");
         }
 
-        if ("ACCEPTED".equals(normalized)) {
-            quote.changeStatus("WON");
-        } else {
-            quote.changeStatus("LOST");
+        if ("WON".equalsIgnoreCase(row.status())
+                || "LOST".equalsIgnoreCase(row.status())
+                || "EXPIRED".equalsIgnoreCase(row.status())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This quotation is no longer actionable.");
         }
 
-        quotes.save(quote);
+        // Serialize responses for the same share token so two browser clicks
+        // cannot race and produce conflicting WON/LOST outcomes.
+        ShareRow locked = db.queryForObject(
+                "SELECT s.id, s.tenant_id, s.quote_id, s.response, "
+                        + "q.quote_id AS quote_reference, q.quote_date, q.client, q.route, "
+                        + "q.service_type, q.commodity, q.chargeable_weight_kg, q.quoted_amount, "
+                        + "q.valid_until, q.status "
+                        + "FROM commercial_quote_shares s "
+                        + "JOIN commercial_quotes q ON q.id=s.quote_id AND q.tenant_id=s.tenant_id "
+                        + "WHERE s.id=? FOR UPDATE",
+                (rs, n) -> new ShareRow(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("tenant_id", UUID.class),
+                        rs.getObject("quote_id", UUID.class),
+                        rs.getString("response"),
+                        rs.getString("quote_reference"),
+                        rs.getObject("quote_date", LocalDate.class),
+                        rs.getString("client"),
+                        rs.getString("route"),
+                        rs.getString("service_type"),
+                        rs.getString("commodity"),
+                        rs.getBigDecimal("chargeable_weight_kg"),
+                        rs.getBigDecimal("quoted_amount"),
+                        rs.getObject("valid_until", LocalDate.class),
+                        rs.getString("status")),
+                row.id());
+
+        if (locked.response() != null && !locked.response().isBlank()) {
+            return new QuoteResponseAction(
+                    locked.response(),
+                    "This quotation has already received your response.");
+        }
+
+        if ("WON".equalsIgnoreCase(locked.status())
+                || "LOST".equalsIgnoreCase(locked.status())
+                || "EXPIRED".equalsIgnoreCase(locked.status())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This quotation is no longer actionable.");
+        }
+
+        String newStatus = "ACCEPTED".equals(normalized) ? "WON" : "LOST";
+
+        int updated = db.update(
+                "UPDATE commercial_quotes SET status=? WHERE id=? AND tenant_id=?",
+                newStatus,
+                locked.quoteId(),
+                locked.tenantId());
+
+        if (updated != 1) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "The quotation could not be updated. Please contact AAL.");
+        }
 
         db.update(
-                """
-                UPDATE commercial_quote_shares
-                SET response = ?, responded_at = now()
-                WHERE id = ?
-                """,
+                "UPDATE commercial_quote_shares SET response=?,responded_at=now() WHERE id=? AND response IS NULL",
                 normalized,
-                row.id()
-        );
+                locked.id());
 
         return new QuoteResponseAction(
                 normalized,
-                "Your response has been recorded. AAL will follow up with you."
-        );
+                "Your response has been recorded. AAL will follow up with you.");
     }
 
     private ShareRow find(String token) {
-        if (token == null
-                || token.isBlank()
-                || token.length() > 200) {
+        if (token == null || token.isBlank() || token.length() > 200) {
             return null;
         }
 
         String tokenHash = hash(token);
 
         var rows = db.query(
-                """
-                SELECT
-                    s.id,
-                    s.response,
-                    q.id AS quote_id
-                FROM commercial_quote_shares s
-                JOIN commercial_quotes q
-                  ON q.id = s.quote_id
-                 AND q.tenant_id = s.tenant_id
-                WHERE s.token_hash = ?
-                  AND s.expires_at > now()
-                """,
-                (rs, rowNum) ->
-                        new ShareLookupRow(
-                                rs.getObject("id", UUID.class),
-                                rs.getObject("quote_id", UUID.class),
-                                rs.getString("response")
-                        ),
-                tokenHash
-        );
+                "SELECT "
+                        + "s.id, s.tenant_id, s.quote_id, s.response, "
+                        + "q.quote_id AS quote_reference, q.quote_date, q.client, q.route, "
+                        + "q.service_type, q.commodity, q.chargeable_weight_kg, q.quoted_amount, "
+                        + "q.valid_until, q.status "
+                        + "FROM commercial_quote_shares s "
+                        + "JOIN commercial_quotes q "
+                        + "ON q.id=s.quote_id AND q.tenant_id=s.tenant_id "
+                        + "WHERE s.token_hash=? AND s.expires_at>now()",
+                (rs, n) -> new ShareRow(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("tenant_id", UUID.class),
+                        rs.getObject("quote_id", UUID.class),
+                        rs.getString("response"),
+                        rs.getString("quote_reference"),
+                        rs.getObject("quote_date", LocalDate.class),
+                        rs.getString("client"),
+                        rs.getString("route"),
+                        rs.getString("service_type"),
+                        rs.getString("commodity"),
+                        rs.getBigDecimal("chargeable_weight_kg"),
+                        rs.getBigDecimal("quoted_amount"),
+                        rs.getObject("valid_until", LocalDate.class),
+                        rs.getString("status")
+                ),
+                tokenHash);
 
-        if (rows.isEmpty()) {
-            return null;
-        }
-
-        ShareLookupRow lookup = rows.get(0);
-
-        CommercialQuote quote =
-                quotes.findById(lookup.quoteId()).orElse(null);
-
-        if (quote == null) {
-            return null;
-        }
-
-        return new ShareRow(
-                lookup.id(),
-                lookup.quoteId(),
-                lookup.response(),
-                quote
-        );
+        return rows.isEmpty() ? null : rows.get(0);
     }
 
     private QuoteView toView(ShareRow row) {
-        CommercialQuote quote = row.quote();
+        boolean valid = row.validUntil() == null
+                || !row.validUntil().isBefore(LocalDate.now());
 
-        LocalDate today = LocalDate.now();
-
-        boolean valid =
-                quote.getValidUntil() == null
-                        || !quote.getValidUntil().isBefore(today);
-
-        boolean actionable =
-                valid
-                        && !"WON".equalsIgnoreCase(quote.getStatus())
-                        && !"LOST".equalsIgnoreCase(quote.getStatus())
-                        && !"EXPIRED".equalsIgnoreCase(quote.getStatus());
+        boolean actionable = valid
+                && !"WON".equalsIgnoreCase(row.status())
+                && !"LOST".equalsIgnoreCase(row.status())
+                && !"EXPIRED".equalsIgnoreCase(row.status())
+                && (row.response() == null || row.response().isBlank());
 
         return new QuoteView(
                 row.id(),
-                quote.getQuoteId(),
-                quote.getQuoteDate(),
-                quote.getClient(),
-                quote.getRoute(),
-                quote.getServiceType(),
-                quote.getCommodity(),
-                quote.getChargeableWeightKg(),
-                quote.getQuotedAmount(),
-                quote.getValidUntil(),
-                quote.getStatus(),
+                row.quoteReference(),
+                row.quoteDate(),
+                row.client(),
+                row.route(),
+                row.serviceType(),
+                row.commodity(),
+                row.chargeableWeightKg(),
+                row.quotedAmount(),
+                row.validUntil(),
+                row.status(),
                 actionable,
-                row.response()
-        );
+                row.response());
     }
 
     private String generateToken() {
@@ -333,19 +318,12 @@ public class PublicQuoteShareService {
 
     private String hash(String raw) {
         try {
-            MessageDigest digest =
-                    MessageDigest.getInstance("SHA-256");
-
             return HexFormat.of().formatHex(
-                    digest.digest(
-                            raw.getBytes(StandardCharsets.UTF_8)
-                    )
-            );
+                    MessageDigest.getInstance("SHA-256")
+                            .digest(raw.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException(
-                    "Unable to create secure quotation token",
-                    e
-            );
+                    "Unable to create secure quotation token", e);
         }
     }
 
@@ -357,16 +335,20 @@ public class PublicQuoteShareService {
             Instant expiresAt) {
     }
 
-    private record ShareLookupRow(
-            UUID id,
-            UUID quoteId,
-            String response) {
-    }
-
     private record ShareRow(
             UUID id,
+            UUID tenantId,
             UUID quoteId,
             String response,
-            CommercialQuote quote) {
+            String quoteReference,
+            LocalDate quoteDate,
+            String client,
+            String route,
+            String serviceType,
+            String commodity,
+            java.math.BigDecimal chargeableWeightKg,
+            java.math.BigDecimal quotedAmount,
+            LocalDate validUntil,
+            String status) {
     }
 }

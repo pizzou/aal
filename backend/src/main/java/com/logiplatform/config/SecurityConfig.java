@@ -68,6 +68,22 @@ public class SecurityConfig {
                                 .sessionManagement(session -> session.sessionCreationPolicy(
                                                 SessionCreationPolicy.STATELESS))
 
+                                .exceptionHandling(exceptions -> exceptions
+                                                .authenticationEntryPoint((request, response, exception) -> {
+                                                        response.setStatus(401);
+                                                        response.setContentType("application/json");
+                                                        response.setCharacterEncoding("UTF-8");
+                                                        response.setHeader("Cache-Control", "no-store");
+                                                        response.getWriter().write("{\"error\":\"Authentication required\"}");
+                                                })
+                                                .accessDeniedHandler((request, response, exception) -> {
+                                                        response.setStatus(403);
+                                                        response.setContentType("application/json");
+                                                        response.setCharacterEncoding("UTF-8");
+                                                        response.setHeader("Cache-Control", "no-store");
+                                                        response.getWriter().write("{\"error\":\"Access denied for this account\"}");
+                                                }))
+
                                 .authorizeHttpRequests(auth -> auth
 
                                                 /*

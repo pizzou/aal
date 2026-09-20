@@ -5,8 +5,57 @@ const API_BASE = (
     : "http://localhost:8080")
 ).replace(/\/+$/, "");
 
+const ACCESS_TOKEN_STORAGE_KEY = "aal.access-token";
+const AUTH_EXPIRED_EVENT = "aal:auth-expired";
+
 let csrfToken: string | null = null;
 let csrfRequest: Promise<string> | null = null;
+let accessToken: string | null = null;
+
+function readStoredAccessToken(): string | null {
+  if (accessToken) return accessToken;
+  if (typeof window === "undefined") return null;
+
+  try {
+    const stored = window.sessionStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+    accessToken = stored && stored.trim() ? stored : null;
+    return accessToken;
+  } catch {
+    return null;
+  }
+}
+
+export function setAccessToken(token: string | null): void {
+  accessToken = token && token.trim() ? token.trim() : null;
+
+  if (typeof window === "undefined") return;
+
+  try {
+    if (accessToken) {
+      window.sessionStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, accessToken);
+    } else {
+      window.sessionStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // Session storage can be unavailable in privacy-restricted browsers.
+  }
+}
+
+export function getAccessToken(): string | null {
+  return readStoredAccessToken();
+}
+
+export function clearAccessToken(): void {
+  setAccessToken(null);
+}
+
+function notifyAuthenticationExpired(): void {
+  clearAccessToken();
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  }
+}
 
 export class ApiError extends Error {
   constructor(
@@ -33,11 +82,6 @@ export interface Page<T> {
 async function ensureCsrf(forceRefresh = false): Promise<string> {
   if (!forceRefresh && csrfToken) return csrfToken;
 
-  /*
-   * Multiple authenticated components can start at the same time. Reuse one
-   * in-flight bootstrap request so the browser does not create a CSRF request
-   * storm during application startup.
-   */
   if (csrfRequest) return csrfRequest;
 
   if (forceRefresh) csrfToken = null;
@@ -96,6 +140,15 @@ function isCsrfFailure(status: number, message: string): boolean {
   return status === 403 && /csrf/i.test(message);
 }
 
+function applyAuthenticationHeader(headers: Headers): void {
+  if (headers.has("Authorization")) return;
+
+  const token = readStoredAccessToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
@@ -110,6 +163,8 @@ export async function apiFetch<T>(
   ) {
     headers.set("Content-Type", "application/json");
   }
+
+  applyAuthenticationHeader(headers);
 
   const mutating = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
   if (mutating) headers.set("X-CSRF-Token", await ensureCsrf());
@@ -129,7 +184,6 @@ export async function apiFetch<T>(
       `Request failed with status ${response.status}`,
     );
 
-    // Recover once when the cached browser CSRF token has expired.
     if (mutating && isCsrfFailure(response.status, message)) {
       csrfToken = null;
       headers.set("X-CSRF-Token", await ensureCsrf(true));
@@ -143,7 +197,10 @@ export async function apiFetch<T>(
     }
 
     if (!response.ok) {
-      if (response.status === 401) csrfToken = null;
+      if (response.status === 401) {
+        csrfToken = null;
+        notifyAuthenticationExpired();
+      }
       throw new ApiError(response.status, message);
     }
   }
@@ -160,13 +217,17 @@ export async function apiUpload<T>(path: string, file: File): Promise<T> {
   const form = new FormData();
   form.append("file", file);
 
-  const request = (token: string) =>
-    fetch(`${API_BASE}${path}`, {
+  const request = (token: string) => {
+    const headers = new Headers({ "X-CSRF-Token": token });
+    applyAuthenticationHeader(headers);
+
+    return fetch(`${API_BASE}${path}`, {
       method: "POST",
       credentials: "include",
-      headers: { "X-CSRF-Token": token },
+      headers,
       body: form,
     });
+  };
 
   let token = await ensureCsrf();
   let response = await request(token);
@@ -190,7 +251,10 @@ export async function apiUpload<T>(path: string, file: File): Promise<T> {
     }
 
     if (!response.ok) {
-      if (response.status === 401) csrfToken = null;
+      if (response.status === 401) {
+        csrfToken = null;
+        notifyAuthenticationExpired();
+      }
       throw new ApiError(response.status, message);
     }
   }

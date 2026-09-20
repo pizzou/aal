@@ -8,7 +8,13 @@ import {
   ReactNode,
 } from "react";
 
-import { authApi, AuthSessionResponse } from "@/lib/api-client";
+import {
+  authApi,
+  AuthSessionResponse,
+  clearAccessToken,
+  getAccessToken,
+  setAccessToken,
+} from "@/lib/api-client";
 
 interface AuthState {
   accessToken: string | null;
@@ -19,18 +25,10 @@ interface AuthState {
   logout: () => void;
 }
 
+const AUTH_EXPIRED_EVENT = "aal:auth-expired";
 const AuthContext = createContext<AuthState | null>(null);
 
 let currentTenant: string | null = null;
-
-export function getAccessToken(): string | null {
-  /*
-   * Authentication is intentionally cookie-based.
-   * The HttpOnly NLS_SESSION cookie cannot and should not be read
-   * by browser JavaScript.
-   */
-  return null;
-}
 
 export function getTenantId(): string | null {
   return currentTenant;
@@ -38,11 +36,8 @@ export function getTenantId(): string | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [tenantId, setTenantId] = useState<string | null>(null);
-
   const [role, setRole] = useState<string | null>(null);
-
-  const [authenticated, setAuthenticated] = useState(false);
-
+  const [accessToken, setAccessTokenState] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -50,36 +45,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     async function restoreSession() {
       try {
-        /*
-         * authApi.session() is a GET and therefore does not require
-         * the CSRF bootstrap request.
-         *
-         * The browser automatically sends NLS_SESSION when present.
-         */
         const session: AuthSessionResponse = await authApi.session();
 
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
         if (session.role === "CUSTOMER") {
           try {
             await authApi.logout();
           } catch {
-            // Ignore cleanup errors; do not establish a customer session in the UI.
+            // Ignore cleanup errors; customer accounts are not internal sessions.
           }
+          clearAccessToken();
           currentTenant = null;
           setTenantId(null);
           setRole(null);
-          setAuthenticated(false);
+          setAccessTokenState(null);
           return;
         }
 
         currentTenant = session.tenantId;
-
         setTenantId(session.tenantId);
         setRole(session.role);
-        setAuthenticated(true);
+
+        // A bearer token is used when the frontend and API are deployed on
+        // different sites. The HttpOnly cookie remains a server-side fallback.
+        setAccessTokenState(getAccessToken() ?? "cookie");
+
         if (
           session.mustChangePassword &&
           typeof window !== "undefined" &&
@@ -88,21 +79,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           window.location.replace("/account/security");
           return;
         }
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
+      } catch {
+        if (cancelled) return;
 
-        // Anonymous session responses (401/403) are expected before login.
-        // Do not turn them into an application error or issue a logout call.
+        clearAccessToken();
         currentTenant = null;
         setTenantId(null);
         setRole(null);
-        setAuthenticated(false);
+        setAccessTokenState(null);
       } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
+        if (!cancelled) setIsLoading(false);
       }
     }
 
@@ -113,39 +99,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  function login(_token: string | null, tenant: string, userRole: string) {
-    /*
-     * The JWT is stored by the backend in the HttpOnly NLS_SESSION
-     * cookie. The frontend only stores the non-sensitive session state.
-     */
-    currentTenant = tenant;
+  useEffect(() => {
+    const handleAuthenticationExpired = () => {
+      currentTenant = null;
+      setTenantId(null);
+      setRole(null);
+      setAccessTokenState(null);
+    };
 
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthenticationExpired);
+    return () =>
+      window.removeEventListener(
+        AUTH_EXPIRED_EVENT,
+        handleAuthenticationExpired,
+      );
+  }, []);
+
+  function login(token: string | null, tenant: string, userRole: string) {
+    if (token) setAccessToken(token);
+
+    currentTenant = tenant;
     setTenantId(tenant);
     setRole(userRole);
-    setAuthenticated(true);
+    setAccessTokenState(token ?? getAccessToken() ?? "cookie");
   }
 
   async function logout() {
     try {
       await authApi.logout();
     } catch {
-      /*
-       * Clear local state even if the server-side logout request fails.
-       * The next login/session check will establish the correct state.
-       */
+      // Always clear the browser session even if the server is unavailable.
     }
 
+    clearAccessToken();
     currentTenant = null;
-
     setTenantId(null);
     setRole(null);
-    setAuthenticated(false);
+    setAccessTokenState(null);
   }
 
   return (
     <AuthContext.Provider
       value={{
-        accessToken: authenticated ? "cookie" : null,
+        accessToken,
         tenantId,
         role,
         isLoading,

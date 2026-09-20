@@ -167,7 +167,10 @@ public class SecurityConfig {
                                                                 "MANAGER",
                                                                 "OPERATIONS",
                                                                 "SALES",
-                                                                "FINANCE")
+                                                                "FINANCE",
+                                                                "DISPATCH",
+                                                                "WAREHOUSE",
+                                                                "AIR_CARGO")
 
                                                 .requestMatchers(
                                                                 org.springframework.http.HttpMethod.GET,

@@ -50,7 +50,9 @@ app:
     brevo-api-key: ${BREVO_API_KEY:}
   auth:
     otp:
-      required: ${AAL_AUTH_OTP_REQUIRED:true}
+      # Production login always requires email OTP verification.
+      # This is intentionally not environment-overridable.
+      required: true
     cookie:
       same-site: ${APP_AUTH_COOKIE_SAME_SITE:None}
 notifications:

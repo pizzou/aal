@@ -64,12 +64,7 @@ public class JwtService {
         return Jwts.builder()
                 .subject(userId.toString())
                 .claim("tenantId", tenantId.toString())
-                .claim(
-                        "role",
-                        role == null
-                                ? ""
-                                : role.trim().toUpperCase(Locale.ROOT)
-                )
+                .claim("role", normalizeRole(role))
                 .claim("tokenVersion", tokenVersion)
                 .issuedAt(Date.from(now))
                 .expiration(
@@ -81,6 +76,22 @@ public class JwtService {
                 )
                 .signWith(key)
                 .compact();
+    }
+
+    private String normalizeRole(String value) {
+        String normalized = value == null
+                ? ""
+                : value.trim().toUpperCase(Locale.ROOT);
+
+        while (normalized.startsWith("ROLE_")) {
+            normalized = normalized.substring("ROLE_".length());
+        }
+
+        if (normalized.isBlank()) {
+            throw new IllegalArgumentException("Role is required");
+        }
+
+        return normalized;
     }
 
     public String generateLoginOtpChallengeToken(

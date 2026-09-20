@@ -53,7 +53,8 @@ public class AuthService {
             UserNotificationService notifications,
             @Value("${app.single-tenant.id}") UUID tenantId,
             @Value("${app.frontend.url:http://localhost:3000}") String frontendUrl,
-            @Value("${app.auth.otp.required:false}") boolean otpRequired
+            @Value("${app.auth.otp.required:false}") boolean otpRequired,
+            @Value("${app.environment:development}") String environment
     ) {
         this.db = db;
         this.encoder = encoder;
@@ -62,7 +63,9 @@ public class AuthService {
         this.notifications = notifications;
         this.tenantId = tenantId;
         this.frontendUrl = frontendUrl;
-        this.otpRequired = otpRequired;
+        // Production authentication must always require the email OTP challenge.
+        // A misconfigured Render/container environment must not silently disable 2FA.
+        this.otpRequired = otpRequired || "production".equalsIgnoreCase(environment);
     }
 
     @Transactional(transactionManager = "authTransactionManager")

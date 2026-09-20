@@ -108,7 +108,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                 throw new JwtException("JWT tokenVersion is missing");
                         }
 
-                        role = role.trim().toUpperCase(Locale.ROOT);
+                        role = normalizeRole(role);
 
                         UUID userId = UUID.fromString(subject);
                         UUID tenantId = UUID.fromString(tenantIdClaim);
@@ -196,6 +196,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         TenantContext.clear();
                         SecurityContextHolder.clearContext();
                 }
+        }
+
+        private String normalizeRole(String value) {
+                String normalized = value == null
+                                ? ""
+                                : value.trim().toUpperCase(Locale.ROOT);
+
+                while (normalized.startsWith("ROLE_")) {
+                        normalized = normalized.substring("ROLE_".length());
+                }
+
+                if (normalized.isBlank()) {
+                        throw new JwtException("JWT role is empty");
+                }
+
+                return normalized;
         }
 
         private String extractToken(HttpServletRequest request) {

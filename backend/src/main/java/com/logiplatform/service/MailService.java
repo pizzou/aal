@@ -11,6 +11,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -223,7 +225,11 @@ public class MailService {
         );
     }
 
-    @Async
+    /**
+     * Sends the authentication OTP synchronously. Authentication must not
+     * report an OTP challenge as successfully issued while the provider has
+     * actually rejected the message.
+     */
     public void sendLoginOtp(
             User user,
             String code,
@@ -233,42 +239,35 @@ public class MailService {
                 || user.getEmail() == null
                 || user.getEmail().isBlank()
                 || code == null
-                || code.isBlank()) {
-            return;
+                || !code.matches("\\d{6}")) {
+            throw new MailDeliveryException("Invalid OTP email request");
         }
 
         if (!mailEnabled) {
-            return;
+            throw new MailDeliveryException("Transactional email is disabled");
         }
 
-        send(
-                user.getEmail(),
+        if (brevoApiKey == null || brevoApiKey.isBlank()) {
+            throw new MailDeliveryException("Transactional email provider is not configured");
+        }
+
+        if (from == null || from.isBlank()) {
+            throw new MailDeliveryException("Transactional email sender is not configured");
+        }
+
+        sendOrThrow(
+                user.getEmail().trim(),
                 "Aviation Africa Logistics - Sign-in verification code",
                 """
                 <html>
                 <body style="font-family:Arial,sans-serif;color:#172033">
                     <h2>Sign-in verification</h2>
-
                     <p>Hello %s,</p>
-
                     <p>Your Aviation Africa Logistics verification code is:</p>
-
-                    <div style="
-                        font-size:32px;
-                        font-weight:700;
-                        letter-spacing:8px;
-                        margin:24px 0;
-                        color:#0b5cab;">
-                        %s
-                    </div>
-
+                    <div style="font-size:32px;font-weight:700;letter-spacing:8px;margin:24px 0;color:#0b5cab;">%s</div>
                     <p>This code expires in %d minutes and can only be used once.</p>
-
                     <p>If you did not attempt to sign in, you can ignore this email.</p>
-
-                    <p>
-                        Aviation Africa Logistics
-                    </p>
+                    <p>Aviation Africa Logistics</p>
                 </body>
                 </html>
                 """.formatted(
@@ -404,15 +403,7 @@ public class MailService {
             String subject,
             String html) {
 
-        if (to == null || to.isBlank()) {
-            return;
-        }
-
-        if (subject == null || subject.isBlank()) {
-            return;
-        }
-
-        if (html == null) {
+        if (to == null || to.isBlank() || subject == null || subject.isBlank() || html == null) {
             return;
         }
 
@@ -421,83 +412,78 @@ public class MailService {
             return;
         }
 
-        if (brevoApiKey == null
-                || brevoApiKey.isBlank()) {
-
-            log.warn("Brevo API key is not configured; email delivery is disabled");
-
+        if (brevoApiKey == null || brevoApiKey.isBlank()) {
+            log.warn("Brevo API key is not configured; email delivery skipped");
             return;
         }
 
         if (from == null || from.isBlank()) {
-
-            log.warn("Mail sender address is not configured; email delivery is disabled");
-
+            log.warn("Mail sender address is not configured; email delivery skipped");
             return;
         }
 
         try {
+            sendOrThrow(to, subject, html);
+        } catch (MailDeliveryException ex) {
+            log.error("Email delivery failed reason={}", ex.getMessage());
+        }
+    }
 
-            HttpHeaders headers =
-                    new HttpHeaders();
+    private void sendOrThrow(
+            String to,
+            String subject,
+            String html) {
 
-            headers.setContentType(
-                    MediaType.APPLICATION_JSON);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.set("api-key", brevoApiKey);
 
-            headers.setAccept(
-                    List.of(MediaType.APPLICATION_JSON));
+        Map<String, Object> payload = Map.of(
+                "sender", Map.of(
+                        "email", from,
+                        "name", "Aviation Africa Logistics"),
+                "to", List.of(Map.of("email", to)),
+                "subject", subject,
+                "htmlContent", html);
 
-            headers.set(
-                    "api-key",
-                    brevoApiKey
-            );
-
-            Map<String, Object> payload =
-                    Map.of(
-                            "sender",
-                            Map.of(
-                                    "email",
-                                    from,
-                                    "name",
-                                    "Aviation Africa Logistics"
-                            ),
-                            "to",
-                            List.of(
-                                    Map.of(
-                                            "email",
-                                            to
-                                    )
-                            ),
-                            "subject",
-                            subject,
-                            "htmlContent",
-                            html
-                    );
-
-            ResponseEntity<String> response =
-                    restTemplate.exchange(
-                            BREVO_URL,
-                            HttpMethod.POST,
-                            new HttpEntity<>(
-                                    payload,
-                                    headers
-                            ),
-                            String.class
-                    );
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    BREVO_URL,
+                    HttpMethod.POST,
+                    new HttpEntity<>(payload, headers),
+                    String.class);
 
             if (!response.getStatusCode().is2xxSuccessful()) {
-
-                log.warn("Brevo rejected email. httpStatus={}", response.getStatusCode().value());
+                throw new MailDeliveryException(
+                        "Email provider rejected the message (HTTP " + response.getStatusCode().value() + ")");
             }
 
-        } catch (Exception ex) {
+            log.info("Transactional email accepted by provider recipient={}", maskEmail(to));
+        } catch (HttpStatusCodeException ex) {
+            log.error("Email provider rejected message httpStatus={}", ex.getStatusCode().value());
+            throw new MailDeliveryException(
+                    "Email provider rejected the message (HTTP " + ex.getStatusCode().value() + ")", ex);
+        } catch (RestClientException ex) {
+            log.error("Email provider request failed type={}", ex.getClass().getSimpleName());
+            throw new MailDeliveryException("Email provider is temporarily unavailable", ex);
+        }
+    }
 
-            /*
-             * Critical:
-             * Email-provider failure must NEVER turn a valid
-             * authentication request into HTTP 500.
-             */
-            log.error("Email delivery failed: {}", ex.getMessage(), ex);
+    private String maskEmail(String email) {
+        if (email == null || email.isBlank()) return "unknown";
+        int at = email.indexOf('@');
+        if (at <= 1) return "***" + (at >= 0 ? email.substring(at) : "");
+        return email.charAt(0) + "***" + email.substring(at);
+    }
+
+    public static final class MailDeliveryException extends RuntimeException {
+        public MailDeliveryException(String message) {
+            super(message);
+        }
+
+        public MailDeliveryException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 

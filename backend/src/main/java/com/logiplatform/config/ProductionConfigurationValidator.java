@@ -80,6 +80,11 @@ public class ProductionConfigurationValidator {
                     "Production CORS origins must use HTTPS and explicit hostnames");
         }
 
+        if (otpRequired && !mailEnabled) {
+            throw new IllegalStateException(
+                    "Production email must be enabled when login OTP is required");
+        }
+
         if (mailEnabled || otpRequired) {
             if (brevoApiKey == null || brevoApiKey.isBlank()) {
                 throw new IllegalStateException(

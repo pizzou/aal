@@ -250,7 +250,7 @@ public class AuthService {
                         u.id()
                 );
 
-                issueOtpIfNeeded(u, now);
+                issueOtpIfNeeded(u, now, false);
 
                 log.info(
                         "Authentication requires OTP userId={} email={}",
@@ -375,7 +375,7 @@ public class AuthService {
 
             stage = "issue-otp";
 
-            issueOtpIfNeeded(u, Instant.now());
+            issueOtpIfNeeded(u, Instant.now(), true);
 
         } catch (ResponseStatusException ex) {
 
@@ -404,7 +404,8 @@ public class AuthService {
 
     private void issueOtpIfNeeded(
             UserRecord u,
-            Instant now
+            Instant now,
+            boolean forceNew
     ) {
 
         boolean active =
@@ -412,7 +413,7 @@ public class AuthService {
                         && u.otpExpiresAt() != null
                         && u.otpExpiresAt().isAfter(now);
 
-        if (active) {
+        if (active && !forceNew) {
             log.debug(
                     "Existing active OTP retained userId={} expiresAt={}",
                     u.id(),
@@ -421,11 +422,8 @@ public class AuthService {
             return;
         }
 
-        String code =
-                String.format(
-                        "%06d",
-                        RANDOM.nextInt(1_000_000)
-                );
+        String code = String.format("%06d", RANDOM.nextInt(1_000_000));
+        Instant expiresAt = now.plusSeconds(OTP_MINUTES * 60L);
 
         db.update(
                 """
@@ -437,32 +435,28 @@ public class AuthService {
                    AND tenant_id=?
                 """,
                 encoder.encode(code),
-                timestamp(
-                        now.plusSeconds(
-                                OTP_MINUTES * 60L
-                        )
-                ),
+                timestamp(expiresAt),
                 u.id(),
                 tenantId
         );
 
-        User mailUser =
-                new User(
-                        tenantId,
-                        u.email(),
-                        "",
-                        u.role()
-                );
+        User mailUser = new User(tenantId, u.email(), "", u.role());
+        mailUser.setDisplayName(u.displayName());
 
-        mailUser.setDisplayName(
-                u.displayName()
-        );
-
-        mail.sendLoginOtp(
-                mailUser,
-                code,
-                OTP_MINUTES
-        );
+        try {
+            mail.sendLoginOtp(mailUser, code, OTP_MINUTES);
+        } catch (MailService.MailDeliveryException ex) {
+            clearOtp(u.id());
+            log.error(
+                    "OTP email delivery failed userId={} reason={}",
+                    u.id(),
+                    ex.getMessage());
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Unable to send the verification code. Please try again shortly.",
+                    ex
+            );
+        }
     }
 
     private void validateChallenge(

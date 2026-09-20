@@ -12,7 +12,7 @@ type NavItem = { label: string; href: string; icon: IconName };
 const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   {
     section: "CONTROL TOWER",
-    label: "Daily Operations & Profitability",
+    label: "Command Center",
     href: "/aal-control-tower",
     icon: "grid",
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES", "FINANCE"],
@@ -301,8 +301,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <Icon name="menu" />
           </button>
           <div className="topbar-context">
-            <div className="topbar-breadcrumb">
-              AVIATION AFRICA <span>/</span> Operations Control Tower
+            <div className="topbar-brand-mini">
+              <img
+                src="/branding/aal-logo.jpg"
+                alt="Aviation Africa Logistics Ltd"
+              />
+              <div>
+                <strong>
+                  AVIATION AFRICA <b>LOGISTICS LTD</b>
+                </strong>
+                <span>
+                  GLOBAL REACH <i>•</i> AFRICAN ROOTS
+                </span>
+              </div>
             </div>
             <SearchBox query={query} setQuery={setQuery} results={results} />
           </div>

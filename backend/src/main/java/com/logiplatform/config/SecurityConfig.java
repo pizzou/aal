@@ -22,6 +22,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 @Configuration
 @EnableWebSecurity
@@ -275,12 +276,17 @@ public class SecurityConfig {
 
                 CorsConfiguration config = new CorsConfiguration();
 
-                config.setAllowedOrigins(
-                                Arrays.stream(
-                                                allowedOrigins.split(","))
-                                                .map(String::trim)
-                                                .filter(origin -> !origin.isBlank())
-                                                .toList());
+                List<String> origins = Arrays.stream(allowedOrigins.split(","))
+                                .map(String::trim)
+                                .filter(origin -> !origin.isBlank())
+                                // Render/Vercel environment variables are often entered with a
+                                // trailing slash. Browsers send the Origin header without it.
+                                .map(SecurityConfig::normalizeOrigin)
+                                .filter(Objects::nonNull)
+                                .distinct()
+                                .toList();
+
+                config.setAllowedOrigins(origins);
 
                 config.setAllowedMethods(
                                 List.of(
@@ -313,6 +319,16 @@ public class SecurityConfig {
                                 config);
 
                 return source;
+        }
+
+        private static String normalizeOrigin(String origin) {
+                String value = origin == null ? "" : origin.trim();
+                while (value.endsWith("/")) {
+                        value = value.substring(0, value.length() - 1);
+                }
+                if (value.isBlank()) return null;
+                if (!value.startsWith("https://") && !value.startsWith("http://")) return null;
+                return value;
         }
 
         @Bean

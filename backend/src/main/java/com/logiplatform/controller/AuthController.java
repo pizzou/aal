@@ -34,6 +34,9 @@ public class AuthController {
     @Value("${app.environment:development}")
     private String environment;
 
+    @Value("${app.auth.cookie.same-site:None}")
+    private String cookieSameSite;
+
     public AuthController(AuthService authService) {
         this.authService = authService;
     }
@@ -100,8 +103,8 @@ public class AuthController {
 
         ResponseCookie cookie = ResponseCookie.from(CSRF_COOKIE, token)
                 .httpOnly(false)
-                .secure(isProduction())
-                .sameSite(isProduction() ? "None" : "Lax")
+                .secure(cookieSecure())
+                .sameSite(normalizedSameSite())
                 .path("/")
                 .maxAge(Duration.ofHours(8))
                 .build();
@@ -143,16 +146,16 @@ public class AuthController {
 
         ResponseCookie session = ResponseCookie.from(SESSION_COOKIE, "")
                 .httpOnly(true)
-                .secure(isProduction())
-                .sameSite(isProduction() ? "None" : "Lax")
+                .secure(cookieSecure())
+                .sameSite(normalizedSameSite())
                 .path("/")
                 .maxAge(Duration.ZERO)
                 .build();
 
         ResponseCookie csrf = ResponseCookie.from(CSRF_COOKIE, "")
                 .httpOnly(false)
-                .secure(isProduction())
-                .sameSite(isProduction() ? "None" : "Lax")
+                .secure(cookieSecure())
+                .sameSite(normalizedSameSite())
                 .path("/")
                 .maxAge(Duration.ZERO)
                 .build();
@@ -167,8 +170,8 @@ public class AuthController {
     private ResponseCookie sessionCookie(String accessToken) {
         return ResponseCookie.from(SESSION_COOKIE, accessToken)
                 .httpOnly(true)
-                .secure(isProduction())
-                .sameSite(isProduction() ? "None" : "Lax")
+                .secure(cookieSecure())
+                .sameSite(normalizedSameSite())
                 .path("/")
                 .maxAge(Duration.ofHours(1))
                 .build();
@@ -176,6 +179,17 @@ public class AuthController {
 
     private boolean isProduction() {
         return "production".equalsIgnoreCase(environment);
+    }
+
+    private String normalizedSameSite() {
+        String value = cookieSameSite == null ? "None" : cookieSameSite.trim();
+        if ("strict".equalsIgnoreCase(value)) return "Strict";
+        if ("lax".equalsIgnoreCase(value)) return "Lax";
+        return "None";
+    }
+
+    private boolean cookieSecure() {
+        return isProduction() || "None".equalsIgnoreCase(normalizedSameSite());
     }
 
     private String newCsrf() {

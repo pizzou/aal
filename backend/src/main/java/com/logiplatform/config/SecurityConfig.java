@@ -79,6 +79,7 @@ public class SecurityConfig {
                                                                 "/api/auth/password/forgot",
                                                                 "/api/auth/password/reset",
                                                                 "/api/auth/csrf",
+                                                                "/api/auth/session",
                                                                 "/api/public/commercial/**",
                                                                 "/api/public/quotes/**",
                                                                 "/api/public/tracking/**",

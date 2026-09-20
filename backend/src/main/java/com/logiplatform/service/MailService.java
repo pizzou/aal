@@ -75,7 +75,7 @@ public class MailService {
                   <div style="max-width:680px;margin:0 auto;padding:28px">
                     <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0B3B8F">AFRICA LOGISTIC AVIATION</div>
                     <h2 style="margin:10px 0 8px">We received your quote request</h2>
-                    <p>Hello %s,</p>
+                    <p>Hello {{DISPLAY_NAME}},</p>
                     <p>AAL has received your freight quotation request. Our commercial team will review the shipment details and send the quotation to this email address.</p>
                     <table style="width:100%%;border-collapse:collapse;margin:20px 0">
                       <tr><td style="padding:8px 0;color:#64748b">Reference</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
@@ -273,10 +273,10 @@ public class MailService {
                     <div style="background:#ffffff;border:1px solid #e1e7f0;border-top:0;border-radius:0 0 18px 18px;padding:30px 24px">
                       <div style="font-size:11px;font-weight:800;letter-spacing:1.4px;color:#1769D8">SECURE SIGN-IN</div>
                       <h2 style="margin:9px 0 8px;color:#071A52">Your verification code</h2>
-                      <p>Hello %s,</p>
+                      <p>Hello {{DISPLAY_NAME}},</p>
                       <p>Your Aviation Africa Logistics Ltd sign-in verification code is:</p>
-                      <div style="font-size:34px;font-weight:800;letter-spacing:9px;text-align:center;margin:26px 0;padding:18px;border-radius:14px;background:#f5f8ff;color:#071A52;border:1px solid #dce6f5">%s</div>
-                      <p>This code expires in %d minutes and can only be used once.</p>
+                      <div style="font-size:34px;font-weight:800;letter-spacing:9px;text-align:center;margin:26px 0;padding:18px;border-radius:14px;background:#f5f8ff;color:#071A52;border:1px solid #dce6f5">{{OTP_CODE}}</div>
+                      <p>This code expires in {{OTP_MINUTES}} minutes and can only be used once.</p>
                       <p style="font-size:13px;color:#667085">If you did not attempt to sign in, no action is required.</p>
                       <div style="height:3px;margin-top:24px;background:linear-gradient(90deg,#1769D8 0 45%,#FFD21F 45% 70%,#ED1C24 70% 100%)"></div>
                       <p style="font-size:12px;color:#667085">Aviation Africa Logistics Ltd · Secure Operations Platform</p>
@@ -284,11 +284,10 @@ public class MailService {
                   </div>
                 </body>
                 </html>
-                """.formatted(
-                        escape(user.getDisplayName()),
-                        escape(code),
-                        minutes
-                )
+                """
+                        .replace("{{DISPLAY_NAME}}", escape(user.getDisplayName()))
+                        .replace("{{OTP_CODE}}", escape(code))
+                        .replace("{{OTP_MINUTES}}", Integer.toString(minutes))
         );
     }
 

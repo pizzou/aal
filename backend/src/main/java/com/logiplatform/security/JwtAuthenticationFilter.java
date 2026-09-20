@@ -26,7 +26,16 @@ import java.util.UUID;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         private static final String SESSION_COOKIE_NAME = "NLS_SESSION";
-        private static final String CSRF_ENDPOINT = "/api/auth/csrf";
+        private static final List<String> PUBLIC_ENDPOINT_PREFIXES = List.of(
+                        "/api/auth/login",
+                        "/api/auth/send-login-otp",
+                        "/api/auth/password/forgot",
+                        "/api/auth/password/reset",
+                        "/api/auth/csrf",
+                        "/api/public/",
+                        "/actuator/health",
+                        "/actuator/prometheus",
+                        "/actuator/info");
 
         private final JwtService jwtService;
         private final JdbcTemplate authJdbcTemplate;
@@ -43,16 +52,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         /**
-         * The CSRF token endpoint is intentionally excluded from JWT
-         * authentication.
-         *
-         * The browser must be able to obtain a CSRF token before it has
-         * authenticated. More importantly, an expired or corrupted
-         * NLS_SESSION cookie must never prevent CSRF token generation.
+         * Public endpoints intentionally ignore an optional JWT cookie.
+         * An expired/corrupted session must never prevent a fresh login.
          */
         @Override
         protected boolean shouldNotFilter(HttpServletRequest request) {
-                return CSRF_ENDPOINT.equals(request.getRequestURI());
+                String path = request.getRequestURI();
+
+                // Public endpoints must not be blocked by a stale/expired session
+                // cookie. The authorization rules still decide whether the endpoint
+                // itself is public; this only prevents a bad optional JWT from turning
+                // a public request (especially login) into a 401.
+                return PUBLIC_ENDPOINT_PREFIXES.stream()
+                                .anyMatch(prefix ->
+                                                prefix.endsWith("/")
+                                                                ? path.startsWith(prefix)
+                                                                : path.equals(prefix));
         }
 
         @Override

@@ -88,11 +88,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           window.location.replace("/account/security");
           return;
         }
-      } catch {
+      } catch (error) {
         if (cancelled) {
           return;
         }
 
+        // Anonymous session responses (401/403) are expected before login.
+        // Do not turn them into an application error or issue a logout call.
         currentTenant = null;
         setTenantId(null);
         setRole(null);

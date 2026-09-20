@@ -1,0 +1,37 @@
+name: AAL Staging Acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jq and curl
+        run: sudo apt-get update && sudo apt-get install -y jq curl openssl
+      - name: Full HTTP acceptance
+        env:
+          BASE_URL: ${{ secrets.AAL_STAGING_API_URL }}
+          AAL_E2E_EMAIL: ${{ secrets.AAL_E2E_EMAIL }}
+          AAL_E2E_PASSWORD: ${{ secrets.AAL_E2E_PASSWORD }}
+          AAL_E2E_OTP: ${{ secrets.AAL_E2E_OTP }}
+        run: ./scripts/e2e/production-acceptance.sh
+
+  load:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: grafana/setup-k6-action@v1
+      - name: Public quote load test
+        env:
+          BASE_URL: ${{ secrets.AAL_STAGING_API_URL }}
+          TEST_EMAIL: ${{ secrets.AAL_E2E_EMAIL }}
+          RATE: '10'
+          DURATION: '2m'
+        run: k6 run scripts/load-test/public-quote.js

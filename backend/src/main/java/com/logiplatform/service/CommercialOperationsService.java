@@ -26,6 +26,7 @@ public class CommercialOperationsService {
     private final TaskRecordRepository tasks;
     private final ExpenseRecordRepository expenses;
     private final ShipmentRepository shipments;
+    private final ShipmentTrackingEventRepository trackingEvents;
 
     private final BillingService billing;
     private final FinancePostingService finance;
@@ -38,6 +39,7 @@ public class CommercialOperationsService {
             TaskRecordRepository tasks,
             ExpenseRecordRepository expenses,
             ShipmentRepository shipments,
+            ShipmentTrackingEventRepository trackingEvents,
             BillingService billing,
             FinancePostingService finance) {
 
@@ -48,6 +50,7 @@ public class CommercialOperationsService {
         this.tasks = tasks;
         this.expenses = expenses;
         this.shipments = shipments;
+        this.trackingEvents = trackingEvents;
         this.billing = billing;
         this.finance = finance;
     }
@@ -115,6 +118,13 @@ public class CommercialOperationsService {
         Shipment shipment = new Shipment(tenantId,ref,o,d,mode,null,null);
         shipment.updateCommandCenterFields(quote.getClient(),null,quote.getCommodity(),null,o,null,d,quote.getChargeableWeightKg(),null,null,null,quote.getServiceType(),null,quote.getSupplierCost(),quote.getOtherCost(),quote.getQuotedAmount(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,"UNPAID",quote.getOwner(),null,null,null,null,null,quote.getNotes(),"USD");
         Shipment saved=shipments.save(shipment);
+        trackingEvents.save(new ShipmentTrackingEvent(
+                tenantId,
+                saved.getId(),
+                TrackingEventType.BOOKED,
+                o,
+                "Shipment booked from quotation " + quote.getQuoteId(),
+                java.time.Instant.now()));
         quote.changeStatus("CONVERTED");
         quotes.save(quote);
         return new QuoteToShipmentResponse(quote.getId(),quote.getQuoteId(),saved.getId(),saved.getReferenceCode(),"CONVERTED","Quote converted to shipment");

@@ -1,0 +1,8 @@
+[Unit]
+Description=AAL PostgreSQL PITR base backup
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/aal/production.env
+ExecStart=/opt/aal/AAL-F/scripts/pitr-base-backup.sh

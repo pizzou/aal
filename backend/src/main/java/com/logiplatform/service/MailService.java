@@ -36,7 +36,7 @@ public class MailService {
     @Value("${app.mail.brevo-api-key:}")
     private String brevoApiKey;
 
-    @Value("${app.frontend.url:https://aal-a.vercel.app}")
+    @Value("${app.frontend.url:https://portal.africalogisticaviation.com}")
     private String frontendUrl;
 
     public MailService() {

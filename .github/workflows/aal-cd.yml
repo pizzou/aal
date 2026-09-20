@@ -1,0 +1,46 @@
+name: AAL Container Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ghcr.io/${{ env.IMAGE_OWNER }}/aal-backend:${{ github.sha }}
+            ghcr.io/${{ env.IMAGE_OWNER }}/aal-backend:${{ github.ref_name }}
+
+      - name: Publish frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+          tags: |
+            ghcr.io/${{ env.IMAGE_OWNER }}/aal-frontend:${{ github.sha }}
+            ghcr.io/${{ env.IMAGE_OWNER }}/aal-frontend:${{ github.ref_name }}

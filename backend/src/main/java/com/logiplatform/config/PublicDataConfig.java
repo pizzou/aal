@@ -4,6 +4,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 
@@ -22,5 +24,11 @@ public class PublicDataConfig {
     public JdbcTemplate publicJdbcTemplate(
             @Qualifier("rawDataSource") DataSource rawDataSource) {
         return new JdbcTemplate(rawDataSource);
+    }
+
+    @Bean(name = "publicTransactionManager")
+    public PlatformTransactionManager publicTransactionManager(
+            @Qualifier("rawDataSource") DataSource rawDataSource) {
+        return new DataSourceTransactionManager(rawDataSource);
     }
 }

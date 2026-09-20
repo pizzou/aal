@@ -1,0 +1,66 @@
+groups:
+  - name: aal-production
+    rules:
+      - alert: AALBackendDown
+        expr: up{job="aal-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: AAL backend is down
+
+      - alert: AALBackendHigh5xx
+        expr: |
+          sum(rate(http_server_requests_seconds_count{job="aal-backend",status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(http_server_requests_seconds_count{job="aal-backend"}[5m])), 1)
+          > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: AAL backend 5xx rate is above 5%
+
+      - alert: AALBackendHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_server_requests_seconds_bucket{job="aal-backend"}[5m])) by (le)
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: AAL backend p95 latency is above 2 seconds
+
+      - alert: AALJvmHeapHigh
+        expr: jvm_memory_used_bytes{job="aal-backend",area="heap"} / jvm_memory_max_bytes{job="aal-backend",area="heap"} > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: AAL JVM heap usage is above 85%
+
+      - alert: AALDatabasePoolHigh
+        expr: hikaricp_connections_active{job="aal-backend"} / clamp_min(hikaricp_connections_max{job="aal-backend"}, 1) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: AAL database connection pool utilization is above 85%
+
+      - alert: AALNotificationQueueHigh
+        expr: notification_queue_depth{job="aal-backend"} > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: AAL notification queue exceeds 100 pending messages
+
+      - alert: AALNotificationFailuresHigh
+        expr: notification_queue_failed{job="aal-backend"} > 25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: AAL notification queue has more than 25 failed messages

@@ -150,16 +150,26 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
         private String clientKey(
                         HttpServletRequest request) {
 
+                String realIp = request.getHeader("X-Real-IP");
+                if (isUsableIp(realIp)) {
+                        return realIp.trim();
+                }
+
                 String forwardedFor = request.getHeader("X-Forwarded-For");
-
-                if (forwardedFor != null
-                                && !forwardedFor.isBlank()) {
-
-                        return forwardedFor
-                                        .split(",")[0]
-                                        .trim();
+                if (forwardedFor != null && !forwardedFor.isBlank()) {
+                        String first = forwardedFor.split(",", 2)[0].trim();
+                        if (isUsableIp(first)) {
+                                return first;
+                        }
                 }
 
                 return request.getRemoteAddr();
+        }
+
+        private boolean isUsableIp(String value) {
+                if (value == null || value.isBlank() || value.length() > 64) {
+                        return false;
+                }
+                return value.matches("[0-9a-fA-F:.]+") || value.equalsIgnoreCase("unknown");
         }
 }

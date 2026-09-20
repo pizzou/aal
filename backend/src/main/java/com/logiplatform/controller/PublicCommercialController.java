@@ -1,151 +1,80 @@
 package com.logiplatform.controller;
 
-import com.logiplatform.dto.CommercialDtos.QuoteRequest;
-import com.logiplatform.dto.CommercialDtos.QuoteResponse;
-import com.logiplatform.dto.ShipmentDtos.CreateShipmentRequest;
-import com.logiplatform.dto.ShipmentDtos.ShipmentResponse;
-import com.logiplatform.service.CommercialOperationsService;
-import com.logiplatform.service.ShipmentService;
-import com.logiplatform.service.MailService;
-import com.logiplatform.dto.CommandCenterShipmentDtos.UpdateRequest;
-import com.logiplatform.dto.ShipmentDtos.UpdateStatusRequest;
+import com.logiplatform.dto.PublicCommercialDtos.PublicQuoteRequestResponse;
+import com.logiplatform.service.PublicBookingService;
+import com.logiplatform.service.PublicQuoteRequestService;
 import com.logiplatform.tenancy.TenantContext;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.PositiveOrZero;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/public/commercial")
 public class PublicCommercialController {
 
-    private final CommercialOperationsService commercial;
-    private final ShipmentService shipments;
+    private final PublicQuoteRequestService publicQuotes;
+    private final PublicBookingService bookings;
     private final UUID tenantId;
-    private final MailService mail;
 
     public PublicCommercialController(
-            CommercialOperationsService commercial,
-            ShipmentService shipments,
-            @Value("${app.single-tenant.id}") UUID tenantId,
-            MailService mail) {
-        this.commercial = commercial;
-        this.shipments = shipments;
+            PublicQuoteRequestService publicQuotes,
+            PublicBookingService bookings,
+            @Value("${app.single-tenant.id}") UUID tenantId) {
+        this.publicQuotes = publicQuotes;
+        this.bookings = bookings;
         this.tenantId = tenantId;
-        this.mail = mail;
     }
 
     @PostMapping("/quotes")
-    public ResponseEntity<QuoteResponse> requestQuote(@Valid @RequestBody PublicQuoteRequest request) {
-        return withTenant(() -> {
-            String quoteId = "WEB-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
-            String client = firstNonBlank(request.company(), request.contactName(), request.email());
-            String route = request.origin().trim() + " → " + request.destination().trim();
-            String notes = joinNotes(request.email(), request.phone(), request.packages(), request.volumeCbm(), request.notes());
-            QuoteRequest quote = new QuoteRequest(
-                    quoteId,
-                    LocalDate.now(),
-                    client,
-                    route,
-                    request.serviceType(),
-                    request.commodity(),
-                    nz(request.chargeableWeightKg()),
-                    BigDecimal.ZERO,
-                    BigDecimal.ZERO,
-                    BigDecimal.ZERO,
-                    BigDecimal.ZERO,
-                    LocalDate.now().plusDays(7),
-                    "REQUESTED",
-                    "WEB",
-                    null,
-                    notes,
-                    "PUBLIC_REQUEST",
-                    request.email(),
-                    request.contactName(),
-                    request.phone());
-            QuoteResponse response = commercial.createQuote(quote);
-            mail.sendQuoteRequestReceived(
-                    request.email(),
-                    request.contactName(),
-                    response.quoteId(),
-                    route,
-                    request.serviceType());
-            return ResponseEntity.ok(response);
-        });
+    public ResponseEntity<PublicQuoteRequestResponse> requestQuote(
+            @Valid @RequestBody PublicQuoteRequest request) {
+        return withTenant(() -> ResponseEntity.ok(publicQuotes.create(request)));
+    }
+
+    @GetMapping("/quote-requests/{token}")
+    public ResponseEntity<PublicQuoteRequestResponse> quoteRequest(
+            @PathVariable String token) {
+        return ResponseEntity.ok(publicQuotes.view(token));
     }
 
     @PostMapping("/bookings")
-    public ResponseEntity<PublicBookingResponse> book(@Valid @RequestBody PublicBookingRequest request) {
+    public ResponseEntity<PublicBookingService.BookingResult> book(
+            @Valid @RequestBody PublicBookingRequest request) {
         return withTenant(() -> {
-            String reference = request.customerReference() == null || request.customerReference().isBlank()
-                    ? "WEB-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase()
-                    : request.customerReference().trim();
-            String normalizedMode = normalizeTransportMode(request.serviceType());
-            ShipmentResponse shipment = shipments.create(new CreateShipmentRequest(
-                    reference,
-                    request.origin().trim(),
-                    request.destination().trim(),
-                    normalizedMode,
-                    request.carrier(),
-                    null));
-            shipment = shipments.updateStatus(
-                    shipment.id(),
-                    new UpdateStatusRequest("BOOKED"));
-
-            shipments.updateCommandCenter(
-                    shipment.id(),
-                    new UpdateRequest(
-                            request.company(),
-                            request.contactName(),
-                            null,
-                            null,
-                            request.origin().trim(),
-                            null,
-                            request.destination().trim(),
-                            null,
-                            null,
-                            null,
-                            normalizedMode.equals("AIR") ? request.carrier() : null,
-                            normalizedMode,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            "UNPAID",
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            "PUBLIC WEB BOOKING",
-                            "USD",
-                            LocalDate.now(),
-                            "BOOKED"));
-            if (request.email() != null && !request.email().isBlank()) {
-                shipments.updateNotificationEmail(
-                        shipment.id(),
-                        new com.logiplatform.dto.ShipmentDtos.UpdateNotificationEmailRequest(request.email()));
+            PublicBookingService.BookingResult result;
+            if (request.quoteRequestToken() != null && !request.quoteRequestToken().isBlank()) {
+                result = bookings.bookFromQuoteRequest(
+                        request.quoteRequestToken(),
+                        request.selectedMode() == null || request.selectedMode().isBlank()
+                                ? request.serviceType()
+                                : request.selectedMode(),
+                        request.customerReference());
+            } else {
+                result = bookings.bookDirect(
+                        request.origin(),
+                        request.destination(),
+                        request.serviceType(),
+                        request.customerReference(),
+                        request.carrier(),
+                        request.company(),
+                        request.contactName(),
+                        request.email(),
+                        request.commodity(),
+                        request.packages());
             }
-
-            return ResponseEntity.ok(new PublicBookingResponse(
-                    shipment.id(),
-                    shipment.referenceCode(),
-                    shipment.trackingToken(),
-                    shipment.status(),
-                    "Booking received by AAL"));
+            return ResponseEntity.ok(result);
         });
     }
 
@@ -157,34 +86,6 @@ public class PublicCommercialController {
             TenantContext.clear();
         }
     }
-
-    private static String normalizeTransportMode(String raw) {
-        String value = raw == null ? "ROAD" : raw.trim().toUpperCase();
-        return switch (value) {
-            case "AIR", "AIRFREIGHT", "AIR FREIGHT" -> "AIR";
-            case "SEA", "SEA FREIGHT", "SEAFREIGHT" -> "SEA";
-            case "ROAD", "ROAD FREIGHT", "ROADFREIGHT" -> "ROAD";
-            case "RAIL", "RAIL FREIGHT", "RAILFREIGHT" -> "RAIL";
-            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid transport mode: " + raw);
-        };
-    }
-
-    private static String firstNonBlank(String... values) {
-        for (String value : values) if (value != null && !value.isBlank()) return value.trim();
-        return "Web customer";
-    }
-
-    private static BigDecimal nz(BigDecimal value) { return value == null ? BigDecimal.ZERO : value; }
-
-    private static String joinNotes(String email, String phone, Integer packages, BigDecimal volume, String notes) {
-        return "PUBLIC WEB REQUEST | Email: " + nullToDash(email)
-                + " | Phone: " + nullToDash(phone)
-                + " | Packages: " + (packages == null ? "-" : packages)
-                + " | Volume CBM: " + (volume == null ? "-" : volume)
-                + (notes == null || notes.isBlank() ? "" : " | " + notes.trim());
-    }
-
-    private static String nullToDash(String value) { return value == null || value.isBlank() ? "-" : value.trim(); }
 
     public record PublicQuoteRequest(
             @NotBlank String origin,
@@ -198,7 +99,8 @@ public class PublicCommercialController {
             @NotBlank String contactName,
             @NotBlank @Email String email,
             String phone,
-            String notes) {}
+            String notes) {
+    }
 
     public record PublicBookingRequest(
             @NotBlank String origin,
@@ -209,7 +111,10 @@ public class PublicCommercialController {
             String company,
             @NotBlank String contactName,
             @NotBlank @Email String email,
-            String phone) {}
-
-    public record PublicBookingResponse(UUID shipmentId, String reference, UUID trackingToken, String status, String message) {}
+            String phone,
+            String commodity,
+            @PositiveOrZero Integer packages,
+            String quoteRequestToken,
+            String selectedMode) {
+    }
 }

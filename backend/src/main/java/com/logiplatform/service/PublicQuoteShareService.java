@@ -36,7 +36,7 @@ public class PublicQuoteShareService {
     private final ShipmentRepository shipments;
     private final SecureRandom random = new SecureRandom();
 
-    @Value("${app.frontend.url:http://localhost:3000}")
+    @Value("${app.frontend.url:https://portal.africalogisticaviation.com}")
     private String frontendUrl;
 
     public PublicQuoteShareService(
@@ -135,9 +135,9 @@ public class PublicQuoteShareService {
      * Public endpoint: deliberately independent of TenantContext. The raw auth
      * datasource is used, and every query is constrained by the hashed token.
      */
-    @Transactional
+    @Transactional(transactionManager = "publicTransactionManager")
     public QuoteView view(String token) {
-        ShareRow row = find(token);
+        ShareRow row = find(token, false);
         if (row == null) {
             throw new ResponseStatusException(
                     HttpStatus.NOT_FOUND,
@@ -157,9 +157,9 @@ public class PublicQuoteShareService {
      * login or tenant context. The update is explicitly scoped by tenant and
      * quote id so it cannot affect another quotation.
      */
-    @Transactional
+    @Transactional(transactionManager = "publicTransactionManager")
     public QuoteResponseAction respond(String token, String action) {
-        ShareRow row = find(token);
+        ShareRow row = find(token, true);
         if (row == null) {
             throw new ResponseStatusException(
                     HttpStatus.NOT_FOUND,
@@ -193,55 +193,13 @@ public class PublicQuoteShareService {
                     "This quotation is no longer actionable.");
         }
 
-        // Serialize responses for the same share token so two browser clicks
-        // cannot race and produce conflicting WON/LOST outcomes.
-        ShareRow locked = db.queryForObject(
-                "SELECT s.id, s.tenant_id, s.quote_id, s.response, s.booked_shipment_id, "
-                        + "q.quote_id AS quote_reference, q.quote_date, q.client, q.route, "
-                        + "q.service_type, q.commodity, q.chargeable_weight_kg, q.quoted_amount, "
-                        + "q.valid_until, q.status "
-                        + "FROM commercial_quote_shares s "
-                        + "JOIN commercial_quotes q ON q.id=s.quote_id AND q.tenant_id=s.tenant_id "
-                        + "WHERE s.id=? FOR UPDATE",
-                (rs, n) -> new ShareRow(
-                        rs.getObject("id", UUID.class),
-                        rs.getObject("tenant_id", UUID.class),
-                        rs.getObject("quote_id", UUID.class),
-                        rs.getString("response"),
-                        rs.getObject("booked_shipment_id", UUID.class),
-                        rs.getString("quote_reference"),
-                        rs.getObject("quote_date", LocalDate.class),
-                        rs.getString("client"),
-                        rs.getString("route"),
-                        rs.getString("service_type"),
-                        rs.getString("commodity"),
-                        rs.getBigDecimal("chargeable_weight_kg"),
-                        rs.getBigDecimal("quoted_amount"),
-                        rs.getObject("valid_until", LocalDate.class),
-                        rs.getString("status")),
-                row.id());
-
-        if (locked.response() != null && !locked.response().isBlank()) {
-            return new QuoteResponseAction(
-                    locked.response(),
-                    "This quotation has already received your response.");
-        }
-
-        if ("WON".equalsIgnoreCase(locked.status())
-                || "LOST".equalsIgnoreCase(locked.status())
-                || "EXPIRED".equalsIgnoreCase(locked.status())) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "This quotation is no longer actionable.");
-        }
-
         String newStatus = "ACCEPTED".equals(normalized) ? "WON" : "LOST";
 
         int updated = db.update(
                 "UPDATE commercial_quotes SET status=? WHERE id=? AND tenant_id=?",
                 newStatus,
-                locked.quoteId(),
-                locked.tenantId());
+                row.quoteId(),
+                row.tenantId());
 
         if (updated != 1) {
             throw new ResponseStatusException(
@@ -252,55 +210,83 @@ public class PublicQuoteShareService {
         db.update(
                 "UPDATE commercial_quote_shares SET response=?,responded_at=now() WHERE id=? AND response IS NULL",
                 normalized,
-                locked.id());
+                row.id());
 
         return new QuoteResponseAction(
                 normalized,
                 "Your response has been recorded. AAL will follow up with you.");
     }
 
-    @Transactional
+    @Transactional(transactionManager = "publicTransactionManager")
     public PublicBookingResult book(String token, String shipmentReference) {
-        ShareRow row = find(token);
+        ShareRow row = find(token, true);
         if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Quotation link is invalid or expired");
         }
         if (row.validUntil() != null && row.validUntil().isBefore(LocalDate.now())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This quotation has expired.");
         }
-        if ("CONVERTED".equalsIgnoreCase(row.status()) && row.bookedShipmentId() == null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This quotation has already been converted to a shipment.");
-        }
-        if (!"ACCEPTED".equalsIgnoreCase(row.response()) && !"WON".equalsIgnoreCase(row.status()) && !"CONVERTED".equalsIgnoreCase(row.status())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Accept the quotation before booking it.");
-        }
-
-        UUID existingShipmentId = row.bookedShipmentId();
-        if (existingShipmentId != null) {
+        if (row.bookedShipmentId() != null) {
             TenantContext.setTenantId(row.tenantId());
             try {
-                Shipment existing = shipments.findByIdAndTenantId(existingShipmentId, row.tenantId()).orElse(null);
+                Shipment existing = shipments.findByIdAndTenantId(row.bookedShipmentId(), row.tenantId()).orElse(null);
                 if (existing != null) {
                     return new PublicBookingResult(existing.getId(), existing.getReferenceCode(), existing.getTrackingToken(), existing.getStatus().name(), "Booking already confirmed.");
                 }
             } finally {
                 TenantContext.clear();
             }
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "The quotation booking record is inconsistent.");
+        }
+        if (!"ACCEPTED".equalsIgnoreCase(row.response()) && !"WON".equalsIgnoreCase(row.status()) && !"CONVERTED".equalsIgnoreCase(row.status())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Accept the quotation before booking it.");
+        }
+
+        int claimed = db.update(
+                "UPDATE commercial_quote_shares SET booking_claimed_at=now() "
+                        + "WHERE id=? AND booked_shipment_id IS NULL AND (booking_claimed_at IS NULL "
+                        + "OR booking_claimed_at < now() - interval '10 minutes')",
+                row.id());
+        if (claimed != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This quotation is already being booked. Please retry shortly.");
         }
 
         TenantContext.setTenantId(row.tenantId());
         try {
-            var converted = commercialOperations.convertQuoteToShipment(row.quoteId(), shipmentReference, null, null);
-            Shipment shipment = shipments.findByIdAndTenantId(converted.shipmentId(), row.tenantId())
+            String reference = shipmentReference == null || shipmentReference.isBlank()
+                    ? "AAL-" + row.quoteReference()
+                    : shipmentReference.trim();
+            UUID shipmentId;
+            try {
+                var converted = commercialOperations.convertQuoteToShipment(row.quoteId(), reference, null, null);
+                shipmentId = converted.shipmentId();
+            } catch (ResponseStatusException ex) {
+                Shipment existing = shipments.findByTenantIdAndReferenceCode(row.tenantId(), reference).orElse(null);
+                if (existing == null) {
+                    throw ex;
+                }
+                shipmentId = existing.getId();
+            }
+
+            Shipment shipment = shipments.findByIdAndTenantId(shipmentId, row.tenantId())
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Shipment was created but could not be loaded"));
-            db.update("UPDATE commercial_quote_shares SET booked_shipment_id=?, booked_at=now() WHERE id=?", shipment.getId(), row.id());
+            db.update("UPDATE commercial_quote_shares SET booked_shipment_id=?, booked_at=now(), booking_claimed_at=NULL WHERE id=?",
+                    shipment.getId(), row.id());
             return new PublicBookingResult(shipment.getId(), shipment.getReferenceCode(), shipment.getTrackingToken(), shipment.getStatus().name(), "Booking confirmed.");
+        } catch (RuntimeException ex) {
+            db.update("UPDATE commercial_quote_shares SET booking_claimed_at=NULL WHERE id=? AND booked_shipment_id IS NULL",
+                    row.id());
+            throw ex;
         } finally {
             TenantContext.clear();
         }
     }
 
     private ShareRow find(String token) {
+        return find(token, false);
+    }
+
+    private ShareRow find(String token, boolean forUpdate) {
         if (token == null || token.isBlank() || token.length() > 200) {
             return null;
         }
@@ -316,7 +302,8 @@ public class PublicQuoteShareService {
                         + "FROM commercial_quote_shares s "
                         + "JOIN commercial_quotes q "
                         + "ON q.id=s.quote_id AND q.tenant_id=s.tenant_id "
-                        + "WHERE s.token_hash=? AND s.expires_at>now()",
+                        + "WHERE s.token_hash=? AND s.expires_at>now()"
+                        + (forUpdate ? " FOR UPDATE" : ""),
                 (rs, n) -> new ShareRow(
                         rs.getObject("id", UUID.class),
                         rs.getObject("tenant_id", UUID.class),

@@ -43,6 +43,7 @@ public class AuthService {
     private final UserNotificationService notifications;
     private final UUID tenantId;
     private final String frontendUrl;
+    private final boolean otpRequired;
 
     public AuthService(
             @Qualifier("authJdbcTemplate") JdbcTemplate db,
@@ -51,7 +52,8 @@ public class AuthService {
             MailService mail,
             UserNotificationService notifications,
             @Value("${app.single-tenant.id}") UUID tenantId,
-            @Value("${app.frontend.url:http://localhost:3000}") String frontendUrl
+            @Value("${app.frontend.url:http://localhost:3000}") String frontendUrl,
+            @Value("${app.auth.otp.required:false}") boolean otpRequired
     ) {
         this.db = db;
         this.encoder = encoder;
@@ -60,6 +62,7 @@ public class AuthService {
         this.notifications = notifications;
         this.tenantId = tenantId;
         this.frontendUrl = frontendUrl;
+        this.otpRequired = otpRequired;
     }
 
     @Transactional(transactionManager = "authTransactionManager")
@@ -214,6 +217,11 @@ public class AuthService {
                     tenantId
             );
 
+            if (!otpRequired) {
+                stage = "generate-session-token";
+                return success(u);
+            }
+
             if (request.otp() == null || request.otp().isBlank()) {
 
                 stage = "generate-otp-challenge";
@@ -321,6 +329,13 @@ public class AuthService {
 
     @Transactional(transactionManager = "authTransactionManager")
     public void sendLoginOtp(String challenge) {
+
+        if (!otpRequired) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Login verification is not enabled"
+            );
+        }
 
         String stage = "validate-login-otp-request";
 

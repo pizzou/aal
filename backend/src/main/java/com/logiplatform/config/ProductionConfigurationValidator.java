@@ -17,7 +17,8 @@ public class ProductionConfigurationValidator {
             @Value("${app.frontend.url}") String frontendUrl,
             @Value("${app.mail.enabled:false}") boolean mailEnabled,
             @Value("${app.mail.brevo-api-key:}") String brevoApiKey,
-            @Value("${app.mail.from:}") String mailFrom) {
+            @Value("${app.mail.from:}") String mailFrom,
+            @Value("${app.auth.otp.required:true}") boolean otpRequired) {
 
         if (jwtSecret == null
                 || jwtSecret.isBlank()
@@ -67,21 +68,26 @@ public class ProductionConfigurationValidator {
 
         if (frontendUrl == null
                 || frontendUrl.isBlank()
-                || !(frontendUrl.startsWith("https://") || frontendUrl.startsWith("http://"))
+                || !frontendUrl.startsWith("https://")
                 || frontendUrl.contains("localhost")
                 || frontendUrl.contains("127.0.0.1")) {
             throw new IllegalStateException(
                     "Production requires a public APP_FRONTEND_URL without localhost");
         }
 
-        if (mailEnabled) {
+        if (origins.trim().equalsIgnoreCase("*") || origins.contains("http://")) {
+            throw new IllegalStateException(
+                    "Production CORS origins must use HTTPS and explicit hostnames");
+        }
+
+        if (mailEnabled || otpRequired) {
             if (brevoApiKey == null || brevoApiKey.isBlank()) {
                 throw new IllegalStateException(
-                        "AAL_MAIL_ENABLED=true requires BREVO_API_KEY");
+                        "Production authentication/email requires BREVO_API_KEY");
             }
-            if (mailFrom == null || mailFrom.isBlank() || !mailFrom.contains("@")) {
+            if (mailFrom == null || mailFrom.isBlank() || !mailFrom.contains("@") || mailFrom.contains("localhost")) {
                 throw new IllegalStateException(
-                        "AAL_MAIL_ENABLED=true requires a valid AAL_MAIL_FROM address");
+                        "Production email requires a valid AAL_MAIL_FROM address");
             }
         }
     }

@@ -1,0 +1,8 @@
+[Unit]
+Description=Upload AAL backups to object storage
+After=aal-logical-backup.service aal-pitr-base-backup.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/aal/production.env
+ExecStart=/opt/aal/AAL-F/scripts/offsite-backup.sh

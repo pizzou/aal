@@ -13,6 +13,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
@@ -35,20 +37,23 @@ public class PublicQuoteRequestService {
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    @Value("${app.frontend.url:https://aal-a.vercel.app}")
+    @Value("${app.frontend.url:https://portal.africalogisticaviation.com}")
     private String frontendUrl;
 
-    private final JdbcTemplate db;
+    private final JdbcTemplate publicDb;
+    private final JdbcTemplate tenantDb;
     private final RateEngineService rates;
     private final CommercialOperationsService commercial;
     private final MailService mail;
 
     public PublicQuoteRequestService(
-            @Qualifier("publicJdbcTemplate") JdbcTemplate db,
+            @Qualifier("publicJdbcTemplate") JdbcTemplate publicDb,
+            @Qualifier("tenantJdbcTemplate") JdbcTemplate tenantDb,
             RateEngineService rates,
             CommercialOperationsService commercial,
             MailService mail) {
-        this.db = db;
+        this.publicDb = publicDb;
+        this.tenantDb = tenantDb;
         this.rates = rates;
         this.commercial = commercial;
         this.mail = mail;
@@ -103,7 +108,7 @@ public class PublicQuoteRequestService {
         String tokenHash = hash(rawToken);
         Instant expiresAt = Instant.now().plusSeconds(7L * 24L * 3600L);
 
-        db.update(
+        tenantDb.update(
                 """
                 INSERT INTO public_quote_requests(
                     id, tenant_id, token_hash, quote_id, origin, destination,
@@ -136,22 +141,24 @@ public class PublicQuoteRequestService {
 
         String resultUrl = frontendUrl.replaceAll("/$", "") + "/quote/results/" + rawToken;
 
-        if (options.isEmpty()) {
-            mail.sendQuoteRequestReceived(
-                    request.email(),
-                    request.contactName(),
-                    createdQuote.quoteId(),
-                    route,
-                    request.serviceType());
-        } else {
-            mail.sendPublicQuoteResult(
-                    request.email(),
-                    request.contactName(),
-                    createdQuote.quoteId(),
-                    route,
-                    options,
-                    resultUrl);
-        }
+        afterCommit(() -> {
+            if (options.isEmpty()) {
+                mail.sendQuoteRequestReceived(
+                        request.email(),
+                        request.contactName(),
+                        createdQuote.quoteId(),
+                        route,
+                        request.serviceType());
+            } else {
+                mail.sendPublicQuoteResult(
+                        request.email(),
+                        request.contactName(),
+                        createdQuote.quoteId(),
+                        route,
+                        options,
+                        resultUrl);
+            }
+        });
 
         return new PublicQuoteRequestResponse(
                 rawToken,
@@ -267,6 +274,7 @@ public class PublicQuoteRequestService {
         return List.copyOf(options);
     }
 
+    @Transactional
     public BookingContext prepareBooking(String token, String selectedMode) {
         RequestRow row = find(token);
 
@@ -280,6 +288,48 @@ public class PublicQuoteRequestService {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "This quote request has already been booked.");
+        }
+
+        int claimed = tenantDb.update(
+                """
+                UPDATE public_quote_requests
+                   SET status='BOOKING',
+                       booking_claimed_at=now()
+                 WHERE token_hash=?
+                   AND expires_at>now()
+                   AND booked_shipment_id IS NULL
+                   AND (
+                        status='REQUESTED'
+                        OR (
+                            status='BOOKING'
+                            AND booking_claimed_at < now() - interval '10 minutes'
+                        )
+                   )
+                """,
+                hash(token));
+
+        if (claimed != 1) {
+            RequestRow latest = find(token);
+            if (latest == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Quote request is invalid or expired");
+            }
+            if ("BOOKED".equalsIgnoreCase(latest.status())) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "This quote request has already been booked.");
+            }
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This quote request is already being booked. Please retry shortly.");
+        }
+
+        row = find(token);
+        if (row == null || !"BOOKING".equalsIgnoreCase(row.status())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "The quote booking could not be claimed. Please retry.");
         }
 
         String mode = normalizeMode(
@@ -306,7 +356,6 @@ public class PublicQuoteRequestService {
 
         for (PublicQuoteOption option :
                 preview(row.tenantId(), input, toLocalDate(row.validUntil()))) {
-
             if (mode.equals(option.mode())) {
                 quotedAmount = option.totalCharge();
                 currency = option.currency();
@@ -330,23 +379,50 @@ public class PublicQuoteRequestService {
                 currency);
     }
 
+    @Transactional
     public void markBooked(String token, UUID shipmentId) {
-        RequestRow row = find(token);
+        if (token == null || token.isBlank() || shipmentId == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Booking token and shipment id are required");
+        }
 
-        if (row == null) {
+        int updated = tenantDb.update(
+                """
+                UPDATE public_quote_requests
+                   SET status='BOOKED',
+                       booked_shipment_id=?,
+                       booked_at=now(),
+                       booking_claimed_at=NULL
+                 WHERE token_hash=?
+                   AND status='BOOKING'
+                   AND booked_shipment_id IS NULL
+                """,
+                shipmentId,
+                hash(token));
+
+        if (updated != 1) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Booking claim was lost or the quote was already booked.");
+        }
+    }
+
+    @Transactional
+    public void releaseBookingClaim(String token) {
+        if (token == null || token.isBlank()) {
             return;
         }
 
-        db.update(
+        tenantDb.update(
                 """
                 UPDATE public_quote_requests
-                SET status='BOOKED',
-                    booked_shipment_id=?,
-                    booked_at=now()
-                WHERE token_hash=?
-                  AND booked_shipment_id IS NULL
+                   SET status='REQUESTED',
+                       booking_claimed_at=NULL
+                 WHERE token_hash=?
+                   AND status='BOOKING'
+                   AND booked_shipment_id IS NULL
                 """,
-                shipmentId,
                 hash(token));
     }
 
@@ -358,7 +434,7 @@ public class PublicQuoteRequestService {
         String tokenHash = hash(token);
 
         try {
-            return db.queryForObject(
+            return publicDb.queryForObject(
                     """
                     SELECT
                         p.id,
@@ -413,6 +489,19 @@ public class PublicQuoteRequestService {
         }
     }
 
+
+    private static void afterCommit(Runnable callback) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            callback.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                callback.run();
+            }
+        });
+    }
     private static String generateToken() {
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);

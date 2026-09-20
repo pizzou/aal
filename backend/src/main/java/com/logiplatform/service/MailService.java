@@ -30,7 +30,7 @@ public class MailService {
     @Value("${app.mail.enabled:false}")
     private boolean mailEnabled;
 
-    @Value("${app.mail.from:}")
+    @Value("${app.mail.from:pmpumuropizzou@gmail.com}")
     private String from;
 
     @Value("${app.mail.brevo-api-key:}")
@@ -474,19 +474,48 @@ public class MailService {
                     String.class);
 
             if (!response.getStatusCode().is2xxSuccessful()) {
+                String providerDetail = summarizeProviderResponse(response.getBody());
+                log.error(
+                        "Brevo rejected email httpStatus={} sender={} recipient={} detail={}",
+                        response.getStatusCode().value(),
+                        maskEmail(from),
+                        maskEmail(to),
+                        providerDetail);
                 throw new MailDeliveryException(
-                        "Email provider rejected the message (HTTP " + response.getStatusCode().value() + ")");
+                        "Email provider rejected the message (HTTP " + response.getStatusCode().value() + ")",
+                        null);
             }
 
-            log.info("Transactional email accepted by provider recipient={}", maskEmail(to));
+            log.info(
+                    "Transactional email accepted by Brevo recipient={} sender={} providerResponse={}",
+                    maskEmail(to),
+                    maskEmail(from),
+                    summarizeProviderResponse(response.getBody()));
         } catch (HttpStatusCodeException ex) {
-            log.error("Email provider rejected message httpStatus={}", ex.getStatusCode().value());
+            String providerDetail = summarizeProviderResponse(ex.getResponseBodyAsString());
+            log.error(
+                    "Brevo rejected email httpStatus={} sender={} recipient={} detail={}",
+                    ex.getStatusCode().value(),
+                    maskEmail(from),
+                    maskEmail(to),
+                    providerDetail);
             throw new MailDeliveryException(
                     "Email provider rejected the message (HTTP " + ex.getStatusCode().value() + ")", ex);
         } catch (RestClientException ex) {
             log.error("Email provider request failed type={}", ex.getClass().getSimpleName());
             throw new MailDeliveryException("Email provider is temporarily unavailable", ex);
         }
+    }
+
+    private String summarizeProviderResponse(String body) {
+        if (body == null || body.isBlank()) {
+            return "no-provider-detail";
+        }
+        String compact = body.replaceAll("\\s+", " ").trim();
+        if (compact.length() > 1000) {
+            return compact.substring(0, 1000) + "...";
+        }
+        return compact;
     }
 
     private String maskEmail(String email) {

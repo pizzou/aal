@@ -46,7 +46,7 @@ app:
     url: ${APP_FRONTEND_URL:https://portal.africalogisticaviation.com}
   mail:
     enabled: ${AAL_MAIL_ENABLED:true}
-    from: ${AAL_MAIL_FROM:no-reply@africalogisticaviation.rw}
+    from: ${AAL_BREVO_SENDER_EMAIL:pmpumuropizzou@gmail.com}
     brevo-api-key: ${BREVO_API_KEY:}
   auth:
     otp:
@@ -58,7 +58,7 @@ app:
 notifications:
   smtp:
     enabled: ${NOTIFICATIONS_SMTP_ENABLED:false}
-  from-address: ${NOTIFICATIONS_FROM_ADDRESS:no-reply@africalogisticaviation.rw}
+  from-address: ${NOTIFICATIONS_FROM_ADDRESS:${AAL_BREVO_SENDER_EMAIL:pmpumuropizzou@gmail.com}}
 flightstatus:
   aviationstack:
     enabled: ${FLIGHTSTATUS_ENABLED:false}

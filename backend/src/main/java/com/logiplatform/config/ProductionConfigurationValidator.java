@@ -130,9 +130,20 @@ public class ProductionConfigurationValidator {
                 throw new IllegalStateException(
                         "Production email requires a valid HTTPS BREVO_API_URL");
             }
-            if (mailFrom == null || mailFrom.isBlank() || !mailFrom.contains("@") || mailFrom.contains("localhost")) {
+            if (mailFrom == null
+                    || mailFrom.isBlank()
+                    || !mailFrom.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
+                    || mailFrom.contains("localhost")) {
                 throw new IllegalStateException(
-                        "Production email requires a valid AAL_MAIL_FROM address");
+                        "Production email requires a valid Brevo sender email address");
+            }
+
+            // AAL authentication mail must always use the sender that is verified
+            // in the Brevo account. This deliberately prevents a stale legacy
+            // AAL_MAIL_FROM deployment variable from changing the sender.
+            if (!"pmpumuropizzou@gmail.com".equalsIgnoreCase(mailFrom.trim())) {
+                throw new IllegalStateException(
+                        "Production Brevo sender must be pmpumuropizzou@gmail.com");
             }
         }
     }

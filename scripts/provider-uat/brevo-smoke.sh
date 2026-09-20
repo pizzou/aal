@@ -2,7 +2,7 @@
 set -euo pipefail
 
 : "${BREVO_API_KEY:?Set BREVO_API_KEY}"
-: "${AAL_MAIL_FROM:?Set AAL_MAIL_FROM}"
+: "${AAL_BREVO_SENDER_EMAIL:=pmpumuropizzou@gmail.com}"
 : "${UAT_EMAIL:?Set UAT_EMAIL}"
 
 curl --fail-with-body --silent --show-error --max-time 30 \
@@ -10,7 +10,7 @@ curl --fail-with-body --silent --show-error --max-time 30 \
   -H 'accept: application/json' \
   -H 'content-type: application/json' \
   -H "api-key: ${BREVO_API_KEY}" \
-  -d '{"sender":{"email":"'"$AAL_MAIL_FROM"'","name":"Africa Logistic Aviation"},"to":[{"email":"'"$UAT_EMAIL"'"}],"subject":"AAL production UAT","htmlContent":"<p>AAL production email UAT passed.</p>"}' \
+  -d '{"sender":{"email":"'"$AAL_BREVO_SENDER_EMAIL"'","name":"Africa Logistic Aviation"},"to":[{"email":"'"$UAT_EMAIL"'"}],"subject":"AAL production UAT","htmlContent":"<p>AAL production email UAT passed.</p>"}' \
   | tee /tmp/aal-brevo-response.json
 
 echo "Brevo UAT email accepted by provider."

@@ -4,12 +4,15 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 
+import java.net.URI;
+
 @Configuration
 @Profile("prod")
 public class ProductionConfigurationValidator {
 
     public ProductionConfigurationValidator(
             @Value("${jwt.secret}") String jwtSecret,
+            @Value("${spring.datasource.url}") String dbUrl,
             @Value("${spring.datasource.username}") String dbUser,
             @Value("${spring.datasource.password}") String dbPassword,
             @Value("${security.cors.allowed-origins}") String origins,
@@ -17,6 +20,7 @@ public class ProductionConfigurationValidator {
             @Value("${app.frontend.url}") String frontendUrl,
             @Value("${app.mail.enabled:false}") boolean mailEnabled,
             @Value("${app.mail.brevo-api-key:}") String brevoApiKey,
+            @Value("${app.mail.brevo-url:https://api.brevo.com/v3/smtp/email}") String brevoUrl,
             @Value("${app.mail.from:}") String mailFrom,
             @Value("${app.auth.otp.required:true}") boolean otpRequired) {
 
@@ -30,21 +34,53 @@ public class ProductionConfigurationValidator {
                     "Production requires a strong JWT_SECRET of at least 32 bytes");
         }
 
-        if (dbUser == null
-                || dbUser.isBlank()
-                || dbUser.equalsIgnoreCase("postgres")
-                || dbUser.equalsIgnoreCase("logi")) {
+        if (dbUrl == null
+                || dbUrl.isBlank()
+                || dbUrl.contains("${")) {
+
+            throw new IllegalStateException(
+                    "Production requires SPRING_DATASOURCE_URL (or DATABASE_URL) to be configured");
+        }
+
+        boolean postgresJdbc = dbUrl.startsWith("jdbc:postgresql:");
+        boolean postgresUri = dbUrl.startsWith("postgresql://") || dbUrl.startsWith("postgres://");
+        if (!postgresJdbc && !postgresUri) {
+            throw new IllegalStateException(
+                    "Production requires a PostgreSQL datasource URL");
+        }
+
+        String effectiveDbUser = dbUser;
+        String effectiveDbPassword = dbPassword;
+        if (postgresUri) {
+            try {
+                String userInfo = URI.create(dbUrl).getUserInfo();
+                if ((effectiveDbUser == null || effectiveDbUser.isBlank()) && userInfo != null) {
+                    String[] credentials = userInfo.split(":", 2);
+                    effectiveDbUser = credentials[0];
+                    if ((effectiveDbPassword == null || effectiveDbPassword.isBlank()) && credentials.length == 2) {
+                        effectiveDbPassword = credentials[1];
+                    }
+                }
+            } catch (IllegalArgumentException ex) {
+                throw new IllegalStateException("Production DATABASE_URL is not a valid PostgreSQL URI", ex);
+            }
+        }
+
+        if (effectiveDbUser == null
+                || effectiveDbUser.isBlank()
+                || effectiveDbUser.equalsIgnoreCase("postgres")
+                || effectiveDbUser.equalsIgnoreCase("logi")) {
 
             throw new IllegalStateException(
                     "Production must use a dedicated least-privilege application database role");
         }
 
-        if (dbPassword == null
-                || dbPassword.isBlank()
-                || dbPassword.contains("change-me")
-                || dbPassword.contains("dev_pw")
-                || dbPassword.equalsIgnoreCase("password")
-                || dbPassword.equalsIgnoreCase("postgres")) {
+        if (effectiveDbPassword == null
+                || effectiveDbPassword.isBlank()
+                || effectiveDbPassword.contains("change-me")
+                || effectiveDbPassword.contains("dev_pw")
+                || effectiveDbPassword.equalsIgnoreCase("password")
+                || effectiveDbPassword.equalsIgnoreCase("postgres")) {
 
             throw new IllegalStateException(
                     "Production database password is not configured with a production secret");
@@ -89,6 +125,10 @@ public class ProductionConfigurationValidator {
             if (brevoApiKey == null || brevoApiKey.isBlank()) {
                 throw new IllegalStateException(
                         "Production authentication/email requires BREVO_API_KEY");
+            }
+            if (brevoUrl == null || brevoUrl.isBlank() || !brevoUrl.startsWith("https://")) {
+                throw new IllegalStateException(
+                        "Production email requires a valid HTTPS BREVO_API_URL");
             }
             if (mailFrom == null || mailFrom.isBlank() || !mailFrom.contains("@") || mailFrom.contains("localhost")) {
                 throw new IllegalStateException(

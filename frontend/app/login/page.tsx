@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authApi, ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import Icon from "@/components/Icon";
+
+const RESEND_COOLDOWN_SECONDS = 30;
 
 export default function LoginPage() {
   const router = useRouter();
@@ -18,20 +20,38 @@ export default function LoginPage() {
   const [step, setStep] = useState<"credentials" | "otp">("credentials");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resendIn, setResendIn] = useState(0);
+
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const timer = window.setInterval(() => {
+      setResendIn((value) => Math.max(0, value - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendIn]);
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (busy) return;
+
     setBusy(true);
     setError("");
 
     try {
       if (step === "credentials") {
+        /*
+         * The backend issues and sends the first OTP atomically during login.
+         * Do not call /send-login-otp here: doing so would generate a second
+         * code immediately after the first one and could leave the user with
+         * two different verification emails.
+         */
         const r = await authApi.login(email, password);
 
         if (r.otpRequired && r.otpChallengeToken) {
           setChallenge(r.otpChallengeToken);
-          await authApi.sendLoginOtp(r.otpChallengeToken);
+          setOtp("");
           setStep("otp");
+          setResendIn(RESEND_COOLDOWN_SECONDS);
           return;
         }
 
@@ -41,6 +61,10 @@ export default function LoginPage() {
 
       if (!challenge) {
         throw new Error("Verification session expired. Sign in again.");
+      }
+
+      if (!/^\d{6}$/.test(otp)) {
+        throw new Error("Enter the 6-digit verification code.");
       }
 
       const r = await authApi.login(email, password, otp, challenge);
@@ -59,26 +83,39 @@ export default function LoginPage() {
   }
 
   async function resendOtp() {
-    if (!challenge) return;
+    if (!challenge || busy || resendIn > 0) return;
 
     setBusy(true);
     setError("");
 
     try {
       await authApi.sendLoginOtp(challenge);
+      setOtp("");
+      setResendIn(RESEND_COOLDOWN_SECONDS);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not resend code");
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Could not resend the verification code",
+      );
     } finally {
       setBusy(false);
     }
   }
 
-  async function finish(r: any) {
+  async function finish(r: {
+    accessToken: string | null;
+    tenantId: string;
+    role: string;
+    mustChangePassword: boolean;
+  }) {
     if (r.role === "CUSTOMER") {
       try {
         await authApi.logout();
       } catch {
-        // The account remains inaccessible to the internal workspace even if logout cleanup fails.
+        // Keep the internal workspace closed even if cleanup fails.
       }
       setError(
         "Customer portal access is disabled. Customers use AAL's public quote, booking and tracking services without an account.",
@@ -89,144 +126,116 @@ export default function LoginPage() {
     login(r.accessToken, r.tenantId, r.role);
     const next = search.get("next");
     const destination = next?.startsWith("/") ? next : "/aal-control-tower";
-    router.push(r.mustChangePassword ? "/account/security" : destination);
+    router.replace(r.mustChangePassword ? "/account/security" : destination);
+  }
+
+  function backToCredentials() {
+    setStep("credentials");
+    setChallenge(null);
+    setOtp("");
+    setError("");
+    setResendIn(0);
   }
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        gridTemplateColumns: "1.1fr .9fr",
-        background: "#f5f7fb",
-      }}
-    >
-      <section
-        style={{
-          background: "linear-gradient(145deg,#08111f,#102a56)",
-          color: "#fff",
-          padding: "8vh 8vw",
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "space-between",
-        }}
-      >
-        <div>
-          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <div className="brand-mark">A</div>
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 20 }}>
-                Africa Logistic Aviation
-              </div>
-              <div style={{ opacity: 0.65, fontSize: 12 }}>
-                Logistics Operations Platform
-              </div>
-            </div>
-          </div>
-
-          <div style={{ maxWidth: 620, marginTop: "18vh" }}>
-            <div
-              style={{
-                color: "#84caff",
-                fontWeight: 700,
-                fontSize: 12,
-                letterSpacing: ".12em",
-              }}
-            >
-              AAL OPERATIONS CONTROL TOWER
-            </div>
-            <h1
-              style={{
-                fontSize: "clamp(38px,5vw,68px)",
-                lineHeight: 1.02,
-                letterSpacing: "-.05em",
-                margin: "16px 0",
-              }}
-            >
-              Move freight with clarity, speed and control.
-            </h1>
-            <p
-              style={{
-                fontSize: 17,
-                lineHeight: 1.7,
-                color: "#cbd5e1",
-              }}
-            >
-              Coordinate air cargo, road operations, warehouse inventory,
-              documents, billing and shipment visibility from one controlled AAL
-              operations workspace.
-            </p>
+    <main className="aal-login-shell">
+      <section className="aal-login-brand-panel">
+        <div className="aal-login-brand-header">
+          <img
+            src="/branding/aal-logo.jpg"
+            alt="Aviation Africa Logistics Ltd"
+            className="aal-login-logo-compact"
+          />
+          <div>
+            <strong>AVIATION AFRICA LOGISTICS LTD</strong>
+            <span>GLOBAL REACH · AFRICAN ROOTS</span>
           </div>
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            gap: 22,
-            color: "#98a2b3",
-            fontSize: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <span>Single client workspace</span>
-          <span>Air cargo ready</span>
-          <span>Multimodal execution</span>
-          <span>Secure operations</span>
+        <div className="aal-login-brand-content">
+          <div className="aal-login-brand-art">
+            <img
+              src="/branding/aal-brand.png"
+              alt="Aviation Africa Logistics Ltd"
+            />
+          </div>
+          <div className="eyebrow aal-login-eyebrow">
+            OPERATIONS CONTROL TOWER
+          </div>
+          <h1>Move freight with clarity, speed and control.</h1>
+          <p>
+            Coordinate air cargo, road, ocean, rail, warehouse, customs, finance
+            and shipment visibility from one secure logistics workspace.
+          </p>
+        </div>
+
+        <div className="aal-login-capabilities">
+          <span>
+            <b className="brand-accent-yellow">AIR</b> FREIGHT
+          </span>
+          <span>
+            <b className="brand-accent-red">OCEAN</b> FREIGHT
+          </span>
+          <span>
+            <b className="brand-accent-yellow">ROAD</b> FREIGHT
+          </span>
+          <span>
+            <b className="brand-accent-red">RAIL</b> FREIGHT
+          </span>
+          <span>
+            <b className="brand-accent-blue">WAREHOUSE</b>
+          </span>
         </div>
       </section>
 
-      <section style={{ display: "grid", placeItems: "center", padding: 24 }}>
-        <div
-          style={{
-            width: "min(430px,100%)",
-            background: "#fff",
-            border: "1px solid #e4e7ec",
-            borderRadius: 16,
-            padding: 32,
-            boxShadow: "0 20px 60px rgba(16,24,40,.08)",
-          }}
-        >
+      <section className="aal-login-form-panel">
+        <div className="aal-login-card">
+          <div className="aal-login-card-logo">
+            <img src="/branding/aal-logo.jpg" alt="AAL logo" />
+          </div>
           <div className="eyebrow">SECURE AAL WORKSPACE</div>
-          <h2 style={{ fontSize: 28, margin: "7px 0" }}>
-            {step === "otp" ? "Verify your sign-in" : "Welcome back"}
-          </h2>
+          <h2>{step === "otp" ? "Verify your sign-in" : "Welcome back"}</h2>
           <p className="page-subtitle">
             {step === "otp"
               ? `A 6-digit verification code was sent to ${email}. It expires in 5 minutes.`
-              : "Sign in to the Africa Logistic Aviation operations control tower."}
+              : "Sign in to the Aviation Africa Logistics operations control tower."}
           </p>
 
-          <form
-            onSubmit={submit}
-            style={{ display: "grid", gap: 14, marginTop: 25 }}
-          >
+          <form className="aal-login-form" onSubmit={submit}>
             {step === "credentials" ? (
               <>
                 <div className="field">
-                  <label>Operations email</label>
+                  <label htmlFor="aal-email">Operations email</label>
                   <input
+                    id="aal-email"
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
                     autoComplete="username"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    placeholder="name@company.com"
                   />
                 </div>
                 <div className="field">
-                  <label>Password</label>
+                  <label htmlFor="aal-password">Password</label>
                   <input
+                    id="aal-password"
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
                     autoComplete="current-password"
+                    placeholder="Enter your password"
                   />
                 </div>
               </>
             ) : (
               <div className="field">
-                <label>Email verification code</label>
+                <label htmlFor="aal-otp">Email verification code</label>
                 <input
+                  id="aal-otp"
                   inputMode="numeric"
                   pattern="[0-9]{6}"
                   maxLength={6}
@@ -234,14 +243,19 @@ export default function LoginPage() {
                   onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
                   required
                   autoFocus
+                  autoComplete="one-time-code"
                   placeholder="000000"
+                  className="aal-otp-input"
                 />
               </div>
             )}
 
             {error && <div className="alert alert-error">{error}</div>}
 
-            <button className="btn btn-primary" disabled={busy}>
+            <button
+              className="btn btn-primary btn-large btn-block"
+              disabled={busy}
+            >
               {busy
                 ? step === "otp"
                   ? "Verifying…"
@@ -256,20 +270,19 @@ export default function LoginPage() {
               <>
                 <button
                   type="button"
-                  className="btn"
-                  disabled={busy || !challenge}
-                  onClick={resendOtp}
+                  className="btn btn-block"
+                  disabled={busy || resendIn > 0 || !challenge}
+                  onClick={() => void resendOtp()}
                 >
-                  Resend code
+                  {resendIn > 0
+                    ? `Resend code in ${resendIn}s`
+                    : "Resend verification code"}
                 </button>
                 <button
                   type="button"
-                  className="btn"
-                  onClick={() => {
-                    setStep("credentials");
-                    setChallenge(null);
-                    setOtp("");
-                  }}
+                  className="aal-secondary-link"
+                  onClick={backToCredentials}
+                  disabled={busy}
                 >
                   Back to sign in
                 </button>
@@ -278,26 +291,17 @@ export default function LoginPage() {
           </form>
 
           {step === "credentials" && (
-            <div style={{ marginTop: 16, textAlign: "right" }}>
-              <a href="/forgot-password" className="page-subtitle">
-                Forgot password?
-              </a>
+            <div className="aal-login-forgot">
+              <a href="/forgot-password">Forgot password?</a>
             </div>
           )}
 
-          <div
-            style={{
-              marginTop: 22,
-              paddingTop: 18,
-              borderTop: "1px solid #eaecf0",
-              color: "#667085",
-              fontSize: 11,
-              lineHeight: 1.6,
-            }}
-          >
-            This workspace is provisioned exclusively for Africa Logistic
-            Aviation. New organizations and self-service registration are
-            disabled.
+          <div className="aal-login-security-note">
+            <Icon name="shield" size={14} />
+            <span>
+              Protected with secure session cookies, CSRF controls and email
+              verification.
+            </span>
           </div>
         </div>
       </section>

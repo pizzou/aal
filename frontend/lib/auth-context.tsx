@@ -15,7 +15,7 @@ interface AuthState {
   tenantId: string | null;
   role: string | null;
   isLoading: boolean;
-  login: (token: string, tenant: string, role: string) => void;
+  login: (token: string | null, tenant: string, role: string) => void;
   logout: () => void;
 }
 
@@ -111,7 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  function login(_token: string, tenant: string, userRole: string) {
+  function login(_token: string | null, tenant: string, userRole: string) {
     /*
      * The JWT is stored by the backend in the HttpOnly NLS_SESSION
      * cookie. The frontend only stores the non-sensitive session state.

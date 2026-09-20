@@ -180,10 +180,26 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   if (isLoading)
     return (
       <div className="app-loading">
-        <div className="loading-mark">A</div>
+        <div
+          className="loading-mark"
+          style={{
+            width: 64,
+            height: 64,
+            borderRadius: 16,
+            overflow: "hidden",
+            padding: 0,
+            background: "#071A52",
+          }}
+        >
+          <img
+            src="/branding/aal-logo.jpg"
+            alt="Aviation Africa Logistics Ltd"
+            className="aal-logo"
+          />
+        </div>
         <div>
-          <strong>Africa Logistic Aviation</strong>
-          <span>Loading secure workspace…</span>
+          <strong>Aviation Africa Logistics Ltd</strong>
+          <span>Loading secure operations workspace…</span>
         </div>
       </div>
     );
@@ -286,7 +302,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </button>
           <div className="topbar-context">
             <div className="topbar-breadcrumb">
-              AAL <span>/</span> Operations Control Tower
+              AVIATION AFRICA <span>/</span> Operations Control Tower
             </div>
             <SearchBox query={query} setQuery={setQuery} results={results} />
           </div>
@@ -315,13 +331,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
 function Brand() {
   return (
-    <div className="brand">
-      <div className="brand-mark">
-        <Icon name="plane" size={20} />
+    <div className="brand" aria-label="Aviation Africa Logistics Ltd">
+      <div className="brand-logo-frame">
+        <img
+          src="/branding/aal-logo.jpg"
+          alt="Aviation Africa Logistics Ltd logo"
+          className="aal-logo"
+        />
       </div>
       <div className="brand-copy">
-        <div className="brand-title">AAL</div>
-        <div className="brand-subtitle">AFRICA LOGISTIC AVIATION</div>
+        <div className="brand-title">AVIATION AFRICA</div>
+        <div className="brand-subtitle">
+          LOGISTICS LTD · GLOBAL REACH · AFRICAN ROOTS
+        </div>
       </div>
     </div>
   );

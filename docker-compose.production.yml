@@ -72,9 +72,9 @@ services:
       kafka: { condition: service_started }
     environment:
       SPRING_PROFILES_ACTIVE: prod
-      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
-      DB_USERNAME: ${APP_DB_USER}
-      DB_PASSWORD: ${APP_DB_PASSWORD}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-aal_app}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD}
@@ -86,11 +86,13 @@ services:
       AAL_AUTH_OTP_REQUIRED: ${AAL_AUTH_OTP_REQUIRED:true}
       AAL_MAIL_ENABLED: ${AAL_MAIL_ENABLED:true}
       AAL_MAIL_FROM: ${AAL_MAIL_FROM:no-reply@africalogisticaviation.rw}
+      AAL_MAIL_SENDER_NAME: ${AAL_MAIL_SENDER_NAME:-Aviation Africa Logistics Ltd}
+      BREVO_API_URL: ${BREVO_API_URL:-https://api.brevo.com/v3/smtp/email}
       BREVO_API_KEY: ${BREVO_API_KEY}
       NOTIFICATIONS_SMTP_ENABLED: ${NOTIFICATIONS_SMTP_ENABLED:false}
       NOTIFICATIONS_FROM_ADDRESS: ${NOTIFICATIONS_FROM_ADDRESS:no-reply@africalogisticaviation.rw}
       AAL_TENANT_ID: ${AAL_TENANT_ID:-7c7d3b7c-3f20-4d3d-9c11-6f7d8f2a6b01}
-      AAL_TENANT_NAME: ${AAL_TENANT_NAME:-Africa Logistic Aviation}
+      AAL_TENANT_NAME: ${AAL_TENANT_NAME:-Aviation Africa Logistics Ltd}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       AAL_GPS_KAFKA_TOPIC: ${AAL_GPS_KAFKA_TOPIC:-aal.gps.position}
     expose: ["8080"]

@@ -11,6 +11,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,8 +24,6 @@ public class MailService {
 
     private static final Logger log = LoggerFactory.getLogger(MailService.class);
 
-    private static final String BREVO_URL =
-            "https://api.brevo.com/v3/smtp/email";
 
     private final RestTemplate restTemplate;
 
@@ -35,6 +35,12 @@ public class MailService {
 
     @Value("${app.mail.brevo-api-key:}")
     private String brevoApiKey;
+
+    @Value("${app.mail.brevo-url:https://api.brevo.com/v3/smtp/email}")
+    private String brevoUrl;
+
+    @Value("${app.mail.sender-name:Aviation Africa Logistics Ltd}")
+    private String senderName;
 
     @Value("${app.frontend.url:https://portal.africalogisticaviation.com}")
     private String frontendUrl;
@@ -63,11 +69,11 @@ public class MailService {
 
         send(
                 recipientEmail.trim(),
-                "Aviation Africa Logistics - Quote request received " + escape(quoteReference),
+                "Aviation Africa Logistics Ltd - Quote request received " + escape(quoteReference),
                 """
                 <html><body style="font-family:Arial,sans-serif;color:#172033;line-height:1.55">
                   <div style="max-width:680px;margin:0 auto;padding:28px">
-                    <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0b5cab">AFRICA LOGISTIC AVIATION</div>
+                    <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0B3B8F">AFRICA LOGISTIC AVIATION</div>
                     <h2 style="margin:10px 0 8px">We received your quote request</h2>
                     <p>Hello %s,</p>
                     <p>AAL has received your freight quotation request. Our commercial team will review the shipment details and send the quotation to this email address.</p>
@@ -78,7 +84,7 @@ public class MailService {
                     </table>
                     <p>No account is required. When the quotation is ready, AAL will send you a secure link where you can review, accept and book the shipment.</p>
                     <p style="font-size:13px;color:#64748b">Please keep this email for your reference.</p>
-                    <p>Africa Logistic Aviation</p>
+                    <p>Aviation Africa Logistics Ltd</p>
                   </div>
                 </body></html>
                 """.formatted(
@@ -117,11 +123,11 @@ public class MailService {
 
         send(
                 recipientEmail.trim(),
-                "Aviation Africa Logistics - Quote options " + escape(quoteReference),
+                "Aviation Africa Logistics Ltd - Quote options " + escape(quoteReference),
                 """
                 <html><body style=\"font-family:Arial,sans-serif;color:#172033;line-height:1.55\">
                   <div style=\"max-width:680px;margin:0 auto;padding:28px\">
-                    <div style=\"font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0b5cab\">AFRICA LOGISTIC AVIATION</div>
+                    <div style=\"font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0B3B8F\">AFRICA LOGISTIC AVIATION</div>
                     <h2 style=\"margin:10px 0 8px\">Your quote options are ready</h2>
                     <p>Hello %s,</p>
                     <p>Your request <strong>%s</strong> is ready to review online.</p>
@@ -129,9 +135,9 @@ public class MailService {
                     <table style=\"width:100%%;border-collapse:collapse;margin:20px 0\">
                       %s
                     </table>
-                    <p><a href=\"%s\" style=\"display:inline-block;padding:13px 22px;background:#0b5cab;color:#fff;text-decoration:none;border-radius:7px;font-weight:700\">View quote options</a></p>
+                    <p><a href=\"%s\" style=\"display:inline-block;padding:13px 22px;background:#0B3B8F;color:#fff;text-decoration:none;border-radius:7px;font-weight:700\">View quote options</a></p>
                     <p style=\"font-size:13px;color:#64748b\">No account is required. You can select an option and continue to booking.</p>
-                    <p>Africa Logistic Aviation</p>
+                    <p>Aviation Africa Logistics Ltd</p>
                   </div>
                 </body></html>
                 """.formatted(
@@ -158,11 +164,11 @@ public class MailService {
 
         send(
                 recipientEmail.trim(),
-                "Aviation Africa Logistics - Quotation " + escape(quoteReference),
+                "Aviation Africa Logistics Ltd - Quotation " + escape(quoteReference),
                 """
                 <html><body style="font-family:Arial,sans-serif;color:#172033;line-height:1.55">
                   <div style="max-width:680px;margin:0 auto;padding:28px">
-                    <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0b5cab">AVIATION AFRICA LOGISTICS</div>
+                    <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0B3B8F">AVIATION AFRICA LOGISTICS</div>
                     <h2 style="margin:10px 0 8px">Your freight quotation is ready</h2>
                     <p>Hello %s,</p>
                     <p>AAL has prepared quotation <strong>%s</strong> for your logistics requirements.</p>
@@ -172,9 +178,9 @@ public class MailService {
                       <tr><td style="padding:8px 0;color:#64748b">Quoted total</td><td style="padding:8px 0;font-weight:700">%s</td></tr>
                       <tr><td style="padding:8px 0;color:#64748b">Valid until</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
                     </table>
-                    <p><a href="%s" style="display:inline-block;padding:13px 22px;background:#0b5cab;color:#fff;text-decoration:none;border-radius:7px;font-weight:700">View quotation</a></p>
+                    <p><a href="%s" style="display:inline-block;padding:13px 22px;background:#0B3B8F;color:#fff;text-decoration:none;border-radius:7px;font-weight:700">View quotation</a></p>
                     <p style="font-size:13px;color:#64748b">You can review the quotation securely online and accept or decline it from the quotation page.</p>
-                    <p>Aviation Africa Logistics</p>
+                    <p>Aviation Africa Logistics Ltd</p>
                   </div>
                 </body></html>
                 """.formatted(
@@ -197,11 +203,11 @@ public class MailService {
 
         send(
                 recipientEmail.trim(),
-                "Aviation Africa Logistics - Booking " + escape(bookingReference),
+                "Aviation Africa Logistics Ltd - Booking " + escape(bookingReference),
                 """
                 <html><body style="font-family:Arial,sans-serif;color:#172033;line-height:1.55">
                   <div style="max-width:680px;margin:0 auto;padding:28px">
-                    <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0b5cab">AFRICA LOGISTIC AVIATION</div>
+                    <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0B3B8F">AFRICA LOGISTIC AVIATION</div>
                     <h2 style="margin:10px 0 8px">Your booking has been received</h2>
                     <p>Hello %s,</p>
                     <p>AAL has received booking <strong>%s</strong>.</p>
@@ -209,9 +215,9 @@ public class MailService {
                       <tr><td style="padding:8px 0;color:#64748b">Route</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
                       <tr><td style="padding:8px 0;color:#64748b">Tracking token</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
                     </table>
-                    <p><a href="%s" style="display:inline-block;padding:13px 22px;background:#0b5cab;color:#fff;text-decoration:none;border-radius:7px;font-weight:700">Track shipment</a></p>
+                    <p><a href="%s" style="display:inline-block;padding:13px 22px;background:#0B3B8F;color:#fff;text-decoration:none;border-radius:7px;font-weight:700">Track shipment</a></p>
                     <p style="font-size:13px;color:#64748b">No account is required to track this shipment.</p>
-                    <p>Africa Logistic Aviation</p>
+                    <p>Aviation Africa Logistics Ltd</p>
                   </div>
                 </body></html>
                 """.formatted(
@@ -223,7 +229,11 @@ public class MailService {
         );
     }
 
-    @Async
+    /**
+     * Sends the authentication OTP synchronously. Authentication must not
+     * report an OTP challenge as successfully issued while the provider has
+     * actually rejected the message.
+     */
     public void sendLoginOtp(
             User user,
             String code,
@@ -233,42 +243,45 @@ public class MailService {
                 || user.getEmail() == null
                 || user.getEmail().isBlank()
                 || code == null
-                || code.isBlank()) {
-            return;
+                || !code.matches("\\d{6}")) {
+            throw new MailDeliveryException("Invalid OTP email request");
         }
 
         if (!mailEnabled) {
-            return;
+            throw new MailDeliveryException("Transactional email is disabled");
         }
 
-        send(
-                user.getEmail(),
-                "Aviation Africa Logistics - Sign-in verification code",
+        if (brevoApiKey == null || brevoApiKey.isBlank()) {
+            throw new MailDeliveryException("Transactional email provider is not configured");
+        }
+
+        if (from == null || from.isBlank()) {
+            throw new MailDeliveryException("Transactional email sender is not configured");
+        }
+
+        sendOrThrow(
+                user.getEmail().trim(),
+                "Aviation Africa Logistics Ltd - Sign-in verification code",
                 """
                 <html>
-                <body style="font-family:Arial,sans-serif;color:#172033">
-                    <h2>Sign-in verification</h2>
-
-                    <p>Hello %s,</p>
-
-                    <p>Your Aviation Africa Logistics verification code is:</p>
-
-                    <div style="
-                        font-size:32px;
-                        font-weight:700;
-                        letter-spacing:8px;
-                        margin:24px 0;
-                        color:#0b5cab;">
-                        %s
+                <body style="margin:0;background:#f5f8ff;font-family:Arial,sans-serif;color:#172033">
+                  <div style="max-width:620px;margin:0 auto;padding:32px 18px">
+                    <div style="background:#071A52;border-radius:18px 18px 0 0;padding:22px 24px;color:#ffffff">
+                      <div style="font-size:12px;font-weight:800;letter-spacing:1.8px">AVIATION AFRICA LOGISTICS LTD</div>
+                      <div style="margin-top:5px;font-size:9px;color:#FFD21F;font-weight:800;letter-spacing:1.5px">GLOBAL REACH · AFRICAN ROOTS</div>
                     </div>
-
-                    <p>This code expires in %d minutes and can only be used once.</p>
-
-                    <p>If you did not attempt to sign in, you can ignore this email.</p>
-
-                    <p>
-                        Aviation Africa Logistics
-                    </p>
+                    <div style="background:#ffffff;border:1px solid #e1e7f0;border-top:0;border-radius:0 0 18px 18px;padding:30px 24px">
+                      <div style="font-size:11px;font-weight:800;letter-spacing:1.4px;color:#1769D8">SECURE SIGN-IN</div>
+                      <h2 style="margin:9px 0 8px;color:#071A52">Your verification code</h2>
+                      <p>Hello %s,</p>
+                      <p>Your Aviation Africa Logistics Ltd sign-in verification code is:</p>
+                      <div style="font-size:34px;font-weight:800;letter-spacing:9px;text-align:center;margin:26px 0;padding:18px;border-radius:14px;background:#f5f8ff;color:#071A52;border:1px solid #dce6f5">%s</div>
+                      <p>This code expires in %d minutes and can only be used once.</p>
+                      <p style="font-size:13px;color:#667085">If you did not attempt to sign in, no action is required.</p>
+                      <div style="height:3px;margin-top:24px;background:linear-gradient(90deg,#1769D8 0 45%,#FFD21F 45% 70%,#ED1C24 70% 100%)"></div>
+                      <p style="font-size:12px;color:#667085">Aviation Africa Logistics Ltd · Secure Operations Platform</p>
+                    </div>
+                  </div>
                 </body>
                 </html>
                 """.formatted(
@@ -300,7 +313,7 @@ public class MailService {
 
         send(
                 user.getEmail(),
-                "Aviation Africa Logistics - Password reset",
+                "Aviation Africa Logistics Ltd - Password reset",
                 """
                 <html>
                 <body style="font-family:Arial,sans-serif;color:#172033">
@@ -310,7 +323,7 @@ public class MailService {
 
                     <p>
                         A password reset was requested for your
-                        Aviation Africa Logistics account.
+                        Aviation Africa Logistics Ltd account.
                     </p>
 
                     <p>
@@ -318,7 +331,7 @@ public class MailService {
                            style="
                            display:inline-block;
                            padding:12px 20px;
-                           background:#0b5cab;
+                           background:#0B3B8F;
                            color:#ffffff;
                            text-decoration:none;
                            border-radius:6px;">
@@ -357,7 +370,7 @@ public class MailService {
 
         send(
                 user.getEmail(),
-                "Aviation Africa Logistics - Your account",
+                "Aviation Africa Logistics Ltd - Your account",
                 """
                 <html>
                 <body style="font-family:Arial,sans-serif;color:#172033">
@@ -365,7 +378,7 @@ public class MailService {
 
                     <p>Hello %s,</p>
 
-                    <p>Your Aviation Africa Logistics account has been created.</p>
+                    <p>Your Aviation Africa Logistics Ltd account has been created.</p>
 
                     <p>
                         <strong>Email:</strong> %s<br>
@@ -377,7 +390,7 @@ public class MailService {
                            style="
                            display:inline-block;
                            padding:12px 20px;
-                           background:#0b5cab;
+                           background:#0B3B8F;
                            color:#ffffff;
                            text-decoration:none;
                            border-radius:6px;">
@@ -404,15 +417,7 @@ public class MailService {
             String subject,
             String html) {
 
-        if (to == null || to.isBlank()) {
-            return;
-        }
-
-        if (subject == null || subject.isBlank()) {
-            return;
-        }
-
-        if (html == null) {
+        if (to == null || to.isBlank() || subject == null || subject.isBlank() || html == null) {
             return;
         }
 
@@ -421,83 +426,84 @@ public class MailService {
             return;
         }
 
-        if (brevoApiKey == null
-                || brevoApiKey.isBlank()) {
-
-            log.warn("Brevo API key is not configured; email delivery is disabled");
-
+        if (brevoApiKey == null || brevoApiKey.isBlank()) {
+            log.warn("Brevo API key is not configured; email delivery skipped");
             return;
         }
 
         if (from == null || from.isBlank()) {
-
-            log.warn("Mail sender address is not configured; email delivery is disabled");
-
+            log.warn("Mail sender address is not configured; email delivery skipped");
             return;
         }
 
         try {
+            sendOrThrow(to, subject, html);
+        } catch (MailDeliveryException ex) {
+            log.error("Email delivery failed reason={}", ex.getMessage());
+        }
+    }
 
-            HttpHeaders headers =
-                    new HttpHeaders();
+    private void sendOrThrow(
+            String to,
+            String subject,
+            String html) {
 
-            headers.setContentType(
-                    MediaType.APPLICATION_JSON);
+        if (brevoUrl == null || brevoUrl.isBlank()) {
+            throw new MailDeliveryException("Transactional email provider URL is not configured");
+        }
 
-            headers.setAccept(
-                    List.of(MediaType.APPLICATION_JSON));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.set("api-key", brevoApiKey);
 
-            headers.set(
-                    "api-key",
-                    brevoApiKey
-            );
+        Map<String, Object> payload = Map.of(
+                "sender", Map.of(
+                        "email", from,
+                        "name", senderName == null || senderName.isBlank()
+                                ? "Aviation Africa Logistics Ltd"
+                                : senderName.trim()),
+                "to", List.of(Map.of("email", to)),
+                "subject", subject,
+                "htmlContent", html);
 
-            Map<String, Object> payload =
-                    Map.of(
-                            "sender",
-                            Map.of(
-                                    "email",
-                                    from,
-                                    "name",
-                                    "Aviation Africa Logistics"
-                            ),
-                            "to",
-                            List.of(
-                                    Map.of(
-                                            "email",
-                                            to
-                                    )
-                            ),
-                            "subject",
-                            subject,
-                            "htmlContent",
-                            html
-                    );
-
-            ResponseEntity<String> response =
-                    restTemplate.exchange(
-                            BREVO_URL,
-                            HttpMethod.POST,
-                            new HttpEntity<>(
-                                    payload,
-                                    headers
-                            ),
-                            String.class
-                    );
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    brevoUrl.trim(),
+                    HttpMethod.POST,
+                    new HttpEntity<>(payload, headers),
+                    String.class);
 
             if (!response.getStatusCode().is2xxSuccessful()) {
-
-                log.warn("Brevo rejected email. httpStatus={}", response.getStatusCode().value());
+                throw new MailDeliveryException(
+                        "Email provider rejected the message (HTTP " + response.getStatusCode().value() + ")");
             }
 
-        } catch (Exception ex) {
+            log.info("Transactional email accepted by provider recipient={}", maskEmail(to));
+        } catch (HttpStatusCodeException ex) {
+            log.error("Email provider rejected message httpStatus={}", ex.getStatusCode().value());
+            throw new MailDeliveryException(
+                    "Email provider rejected the message (HTTP " + ex.getStatusCode().value() + ")", ex);
+        } catch (RestClientException ex) {
+            log.error("Email provider request failed type={}", ex.getClass().getSimpleName());
+            throw new MailDeliveryException("Email provider is temporarily unavailable", ex);
+        }
+    }
 
-            /*
-             * Critical:
-             * Email-provider failure must NEVER turn a valid
-             * authentication request into HTTP 500.
-             */
-            log.error("Email delivery failed: {}", ex.getMessage(), ex);
+    private String maskEmail(String email) {
+        if (email == null || email.isBlank()) return "unknown";
+        int at = email.indexOf('@');
+        if (at <= 1) return "***" + (at >= 0 ? email.substring(at) : "");
+        return email.charAt(0) + "***" + email.substring(at);
+    }
+
+    public static final class MailDeliveryException extends RuntimeException {
+        public MailDeliveryException(String message) {
+            super(message);
+        }
+
+        public MailDeliveryException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 

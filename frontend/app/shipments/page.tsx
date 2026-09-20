@@ -150,8 +150,8 @@ export default function ShipmentsPage() {
           <h1 className="page-title">Shipments</h1>
 
           <p className="page-subtitle">
-            The digital daily shipment ledger for Africa Logistic Aviation —
-            operational, cargo and financial information in one controlled
+            The digital daily shipment ledger for Aviation Africa Logistics Ltd
+            — operational, cargo and financial information in one controlled
             record.
           </p>
         </div>

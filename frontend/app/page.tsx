@@ -43,12 +43,15 @@ export default function Home() {
     <main className="kn-public-shell kn-public-home">
       <header className="kn-header">
         <Link href="/" className="kn-brand" aria-label="AAL home">
-          <span className="kn-brand-mark">
-            <Icon name="plane" size={20} />
+          <span className="kn-brand-mark kn-brand-image">
+            <img
+              src="/branding/aal-logo.jpg"
+              alt="Aviation Africa Logistics Ltd"
+            />
           </span>
           <span>
-            <strong>AAL</strong>
-            <small>AVIATION AFRICA LOGISTIC </small>
+            <strong>AVIATION AFRICA</strong>
+            <small>LOGISTICS LTD · GLOBAL REACH · AFRICAN ROOTS</small>
           </span>
         </Link>
 
@@ -164,7 +167,7 @@ export default function Home() {
       </section>
 
       <footer className="kn-public-footer">
-        <span>© {new Date().getFullYear()} Aviation Africa Logistic </span>
+        <span>© {new Date().getFullYear()} Aviation Africa Logistics Ltd </span>
         <span>Quote · Book · Track</span>
         <Link href="/login">AAL team sign in</Link>
       </footer>

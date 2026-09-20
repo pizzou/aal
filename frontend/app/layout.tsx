@@ -1,13 +1,31 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import AppShell from "@/components/AppShell";
 
 export const metadata: Metadata = {
-  title: "AAL — Quote, Book & Track Freight",
-
+  title: "Aviation Africa Logistics Ltd | Global Logistics Control Tower",
   description:
-    "Africa Logistic Aviation public freight experience: request quotes, book shipments and track cargo across air, sea, road and multimodal logistics.",
+    "Aviation Africa Logistics Ltd — secure multimodal logistics operations across air, ocean, road, rail, warehousing, customs and shipment visibility.",
+  applicationName: "Aviation Africa Logistics Ltd",
+  keywords: [
+    "Aviation Africa Logistics",
+    "AAL",
+    "logistics",
+    "freight",
+    "air cargo",
+    "multimodal logistics",
+    "Africa logistics",
+  ],
+  icons: {
+    icon: "/branding/aal-logo.jpg",
+    apple: "/branding/aal-logo.jpg",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#071A52",
+  colorScheme: "light",
 };
 
 export default function RootLayout({

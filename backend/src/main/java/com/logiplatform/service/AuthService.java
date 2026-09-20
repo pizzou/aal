@@ -33,6 +33,7 @@ public class AuthService {
     private static final int LOCK_MINUTES = 15;
     private static final int MAX_OTP_ATTEMPTS = 5;
     private static final int OTP_MINUTES = 5;
+    private static final int OTP_RESEND_COOLDOWN_SECONDS = 30;
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -422,6 +423,20 @@ public class AuthService {
             return;
         }
 
+        if (forceNew
+                && u.otpSentAt() != null
+                && u.otpSentAt().plusSeconds(OTP_RESEND_COOLDOWN_SECONDS).isAfter(now)) {
+            long remaining = Math.max(1,
+                    java.time.Duration.between(
+                            now,
+                            u.otpSentAt().plusSeconds(OTP_RESEND_COOLDOWN_SECONDS)
+                    ).getSeconds());
+            throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    "A new verification code can be requested in " + remaining + " seconds"
+            );
+        }
+
         String code = String.format("%06d", RANDOM.nextInt(1_000_000));
         Instant expiresAt = now.plusSeconds(OTP_MINUTES * 60L);
 
@@ -430,12 +445,14 @@ public class AuthService {
                 UPDATE users
                    SET login_otp_hash=?,
                        login_otp_expires_at=?,
+                       login_otp_sent_at=?,
                        login_otp_attempts=0
                  WHERE id=?
                    AND tenant_id=?
                 """,
                 encoder.encode(code),
                 timestamp(expiresAt),
+                timestamp(now),
                 u.id(),
                 tenantId
         );
@@ -545,6 +562,7 @@ public class AuthService {
                         UPDATE users
                            SET login_otp_hash=NULL,
                                login_otp_expires_at=NULL,
+                               login_otp_sent_at=NULL,
                                login_otp_attempts=0
                          WHERE id=?
                            AND tenant_id=?
@@ -572,6 +590,7 @@ public class AuthService {
                 UPDATE users
                    SET login_otp_hash=NULL,
                        login_otp_expires_at=NULL,
+                       login_otp_sent_at=NULL,
                        login_otp_attempts=0
                  WHERE id=?
                    AND tenant_id=?
@@ -649,7 +668,8 @@ public class AuthService {
                 UPDATE users
                    SET token_version=token_version+1,
                        login_otp_hash=NULL,
-                       login_otp_expires_at=NULL
+                       login_otp_expires_at=NULL,
+                       login_otp_sent_at=NULL
                  WHERE id=?
                    AND tenant_id=?
                 """,
@@ -777,7 +797,8 @@ public class AuthService {
                        must_change_password=false,
                        token_version=token_version+1,
                        login_otp_hash=NULL,
-                       login_otp_expires_at=NULL
+                       login_otp_expires_at=NULL,
+                       login_otp_sent_at=NULL
                  WHERE id=?
                    AND tenant_id=?
                 """,
@@ -819,6 +840,7 @@ public class AuthService {
                         must_change_password,
                         login_otp_hash,
                         login_otp_expires_at,
+                        login_otp_sent_at,
                         login_otp_attempts
                     FROM users
                     WHERE email=?
@@ -869,6 +891,13 @@ public class AuthService {
                                             : rs.getTimestamp(
                                                     "login_otp_expires_at"
                                             ).toInstant(),
+                                    rs.getTimestamp(
+                                            "login_otp_sent_at"
+                                    ) == null
+                                            ? null
+                                            : rs.getTimestamp(
+                                                    "login_otp_sent_at"
+                                            ).toInstant(),
                                     rs.getInt(
                                             "login_otp_attempts"
                                     )
@@ -908,6 +937,7 @@ public class AuthService {
                         must_change_password,
                         login_otp_hash,
                         login_otp_expires_at,
+                        login_otp_sent_at,
                         login_otp_attempts
                     FROM users
                     WHERE id=?
@@ -957,6 +987,13 @@ public class AuthService {
                                             ? null
                                             : rs.getTimestamp(
                                                     "login_otp_expires_at"
+                                            ).toInstant(),
+                                    rs.getTimestamp(
+                                            "login_otp_sent_at"
+                                    ) == null
+                                            ? null
+                                            : rs.getTimestamp(
+                                                    "login_otp_sent_at"
                                             ).toInstant(),
                                     rs.getInt(
                                             "login_otp_attempts"
@@ -1080,6 +1117,7 @@ public class AuthService {
             boolean mustChangePassword,
             String otpHash,
             Instant otpExpiresAt,
+            Instant otpSentAt,
             int otpAttempts
     ) {
     }

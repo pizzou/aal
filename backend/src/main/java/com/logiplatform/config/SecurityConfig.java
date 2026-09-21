@@ -31,6 +31,9 @@ public class SecurityConfig {
         @Value("${security.cors.allowed-origins:http://localhost:3000}")
         private String allowedOrigins;
 
+        @Value("${app.frontend.url:http://localhost:3000}")
+        private String frontendUrl;
+
         private final JwtAuthenticationFilter jwtAuthenticationFilter;
         private final AuthRateLimitFilter authRateLimitFilter;
         private final BrowserCsrfFilter browserCsrfFilter;
@@ -313,7 +316,7 @@ public class SecurityConfig {
 
                 CorsConfiguration config = new CorsConfiguration();
 
-                List<String> origins = Arrays.stream(allowedOrigins.split(","))
+                List<String> origins = Arrays.stream((allowedOrigins + "," + frontendUrl).split(","))
                                 .map(String::trim)
                                 .filter(origin -> !origin.isBlank())
                                 // Render/Vercel environment variables are often entered with a

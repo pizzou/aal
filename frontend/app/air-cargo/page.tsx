@@ -172,7 +172,7 @@ export default function AirCargoPage() {
           <Link className="btn" href="/shipments">
             <Icon name="ship" size={15} /> Shipment ledger
           </Link>
-          <Link className="btn" href="/command-center">
+          <Link className="btn" href="/aal-control-tower">
             <Icon name="file" size={15} /> Commercial
           </Link>
         </div>

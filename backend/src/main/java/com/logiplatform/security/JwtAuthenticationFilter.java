@@ -197,6 +197,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         SecurityContextHolder.clearContext();
                         TenantContext.clear();
 
+                        // Browser sessions can retain an expired bearer token while the
+                        // user is trying to authenticate again. Public authentication and
+                        // public customer flows must not be blocked by that stale token.
+                        if (isPublicWithoutBearer(request)) {
+                                chain.doFilter(request, response);
+                                return;
+                        }
+
                         response.setStatus(
                                         HttpServletResponse.SC_UNAUTHORIZED);
 
@@ -211,6 +219,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         TenantContext.clear();
                         SecurityContextHolder.clearContext();
                 }
+        }
+
+
+        private boolean isPublicWithoutBearer(HttpServletRequest request) {
+                String path = request.getRequestURI();
+                if (path == null) return false;
+
+                return path.equals("/api/auth/login")
+                                || path.equals("/api/auth/send-login-otp")
+                                || path.equals("/api/auth/password/forgot")
+                                || path.equals("/api/auth/password/reset")
+                                || path.equals("/api/auth/csrf")
+                                || path.startsWith("/api/public/");
         }
 
         private String normalizeRole(String value) {

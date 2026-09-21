@@ -140,8 +140,24 @@ function isCsrfFailure(status: number, message: string): boolean {
   return status === 403 && /csrf/i.test(message);
 }
 
-function applyAuthenticationHeader(headers: Headers): void {
-  if (headers.has("Authorization")) return;
+const PUBLIC_BEARER_EXEMPT_PATHS = new Set([
+  "/api/auth/login",
+  "/api/auth/send-login-otp",
+  "/api/auth/password/forgot",
+  "/api/auth/password/reset",
+  "/api/auth/csrf",
+]);
+
+function shouldAttachAuthentication(path: string): boolean {
+  const pathname = path.split("?", 1)[0];
+  return (
+    !PUBLIC_BEARER_EXEMPT_PATHS.has(pathname) &&
+    !pathname.startsWith("/api/public/")
+  );
+}
+
+function applyAuthenticationHeader(headers: Headers, path: string): void {
+  if (headers.has("Authorization") || !shouldAttachAuthentication(path)) return;
 
   const token = readStoredAccessToken();
   if (token) {
@@ -164,7 +180,7 @@ export async function apiFetch<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  applyAuthenticationHeader(headers);
+  applyAuthenticationHeader(headers, path);
 
   const mutating = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
   if (mutating) headers.set("X-CSRF-Token", await ensureCsrf());
@@ -192,60 +208,6 @@ export async function apiFetch<T>(
         message = await extractErrorMessage(
           response,
           `Request failed with status ${response.status}`,
-        );
-      }
-    }
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        csrfToken = null;
-        notifyAuthenticationExpired();
-      }
-      throw new ApiError(response.status, message);
-    }
-  }
-
-  if (response.status === 204) return undefined as T;
-
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) return undefined as T;
-
-  return (await response.json()) as T;
-}
-
-export async function apiUpload<T>(path: string, file: File): Promise<T> {
-  const form = new FormData();
-  form.append("file", file);
-
-  const request = (token: string) => {
-    const headers = new Headers({ "X-CSRF-Token": token });
-    applyAuthenticationHeader(headers);
-
-    return fetch(`${API_BASE}${path}`, {
-      method: "POST",
-      credentials: "include",
-      headers,
-      body: form,
-    });
-  };
-
-  let token = await ensureCsrf();
-  let response = await request(token);
-
-  if (!response.ok) {
-    let message = await extractErrorMessage(
-      response,
-      `Upload failed with status ${response.status}`,
-    );
-
-    if (isCsrfFailure(response.status, message)) {
-      csrfToken = null;
-      token = await ensureCsrf(true);
-      response = await request(token);
-      if (!response.ok) {
-        message = await extractErrorMessage(
-          response,
-          `Upload failed with status ${response.status}`,
         );
       }
     }
@@ -689,8 +651,6 @@ export const commandCenterApi = {
     apiFetch<ManagementReport>(
       `/api/command-center/dashboard${asOf ? `?asOf=${encodeURIComponent(asOf)}` : ""}`,
     ),
-  importExcel: (file: File) =>
-    apiUpload<Record<string, number>>("/api/command-center/import/excel", file),
   dailyOperations: (date: string) =>
     apiFetch<DailyOperationsResponse>(
       `/api/command-center/daily-operations?date=${encodeURIComponent(date)}`,
@@ -1615,31 +1575,6 @@ export function openOperationsEventStream(handlers: {
   return () => source.close();
 }
 
-export const enterprisePlatformApi = {
-  carriers: () => apiFetch<any[]>("/api/platform/enterprise/carriers"),
-  lanes: () => apiFetch<any[]>("/api/platform/enterprise/lanes"),
-  locations: () => apiFetch<any[]>("/api/platform/enterprise/locations"),
-  pricingRules: () => apiFetch<any[]>("/api/platform/enterprise/pricing-rules"),
-  price: (data: Record<string, unknown>) =>
-    apiFetch<any>("/api/platform/enterprise/pricing/quote", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  convertLead: (clientId: string) =>
-    apiFetch<any>(`/api/platform/enterprise/clients/${clientId}/convert-lead`, {
-      method: "POST",
-    }),
-  clientActivities: (clientId: string) =>
-    apiFetch<any[]>(`/api/platform/enterprise/clients/${clientId}/activities`),
-  createActivity: (clientId: string, data: Record<string, unknown>) =>
-    apiFetch<any>(`/api/platform/enterprise/clients/${clientId}/activities`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  customsWorkflows: () =>
-    apiFetch<any[]>("/api/platform/enterprise/customs/workflows"),
-};
-
 export const auditApi = {
   list: (page = 0, size = 50) =>
     apiFetch<{
@@ -1994,190 +1929,6 @@ export const aalBusinessApi = {
     ),
 };
 
-export type PlatformFxRate = {
-  id: string;
-  rateDate: string;
-  baseCurrency: string;
-  quoteCurrency: string;
-  rate: number;
-  source: string | null;
-};
-export type PlatformPeriod = {
-  id: string;
-  periodStart: string;
-  periodEnd: string;
-  status: string;
-  closedAt: string | null;
-  notes: string | null;
-};
-export type PlatformAdjustment = {
-  id: string;
-  adjustmentNo: string;
-  adjustmentType: string;
-  invoiceId: string | null;
-  shipmentId: string | null;
-  amount: number;
-  currency: string;
-  reason: string;
-  status: string;
-};
-export type PlatformGeofence = {
-  id: string;
-  name: string;
-  latitude: number;
-  longitude: number;
-  radiusM: number;
-  active: boolean;
-};
-export type PlatformIntegration = {
-  id: string;
-  code: string;
-  displayName: string;
-  protocol: string;
-  baseUrl: string | null;
-  enabled: boolean;
-  healthStatus: string;
-  lastSuccessAt: string | null;
-  lastFailureAt: string | null;
-  lastError: string | null;
-};
-export const platformApi = {
-  setupMfa: (userId: string) =>
-    apiFetch<{ secret: string; otpauthUri: string; enabled: boolean }>(
-      `/api/platform/mfa/${userId}/setup`,
-      { method: "POST" },
-    ),
-  verifyMfa: (userId: string, code: string) =>
-    apiFetch<{
-      configured: boolean;
-      enabled: boolean;
-      verifiedAt: string | null;
-    }>(`/api/platform/mfa/${userId}/verify`, {
-      method: "POST",
-      body: JSON.stringify({ code }),
-    }),
-  mfaStatus: (userId: string) =>
-    apiFetch<{
-      configured: boolean;
-      enabled: boolean;
-      verifiedAt: string | null;
-    }>(`/api/platform/mfa/${userId}`),
-  fxRates: (from: string, to: string) =>
-    apiFetch<PlatformFxRate[]>(`/api/platform/fx-rates?from=${from}&to=${to}`),
-  upsertFx: (data: Record<string, unknown>) =>
-    apiFetch<PlatformFxRate>("/api/platform/fx-rates", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  periods: () => apiFetch<PlatformPeriod[]>("/api/platform/finance-periods"),
-  openPeriod: (data: Record<string, unknown>) =>
-    apiFetch<PlatformPeriod>("/api/platform/finance-periods", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  closePeriod: (id: string) =>
-    apiFetch<PlatformPeriod>(`/api/platform/finance-periods/${id}/close`, {
-      method: "POST",
-    }),
-  adjustments: () =>
-    apiFetch<PlatformAdjustment[]>("/api/platform/adjustments"),
-  createAdjustment: (data: Record<string, unknown>) =>
-    apiFetch<PlatformAdjustment>("/api/platform/adjustments", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  geofences: () => apiFetch<PlatformGeofence[]>("/api/platform/geofences"),
-  createGeofence: (data: Record<string, unknown>) =>
-    apiFetch<PlatformGeofence>("/api/platform/geofences", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  evaluateGeofences: (latitude: number, longitude: number) =>
-    apiFetch<
-      Array<{ distanceM: number; inside: boolean; geofenceName: string }>
-    >(
-      `/api/platform/geofences/evaluate?latitude=${latitude}&longitude=${longitude}`,
-    ),
-  integrations: () =>
-    apiFetch<PlatformIntegration[]>("/api/platform/integrations"),
-  registerIntegration: (data: Record<string, unknown>) =>
-    apiFetch<PlatformIntegration>("/api/platform/integrations", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-};
-
-export interface CustomerShipment {
-  id: string;
-  referenceCode: string;
-  status: string;
-  mode: string;
-  origin: string;
-  destination: string;
-  eta: string | null;
-  carrier: string | null;
-  trackingToken: string;
-}
-export interface CustomerQuote {
-  id: string;
-  quoteId: string;
-  quoteDate: string;
-  client: string;
-  route: string | null;
-  serviceType: string | null;
-  quotedAmount: number | null;
-  currency: string | null;
-  validUntil: string | null;
-  status: string;
-}
-export interface CustomerInvoice {
-  id: string;
-  invoiceNo: string;
-  shipmentId: string | null;
-  amount: number;
-  paid: number;
-  outstanding: number;
-  currency: string;
-  status: string;
-  dueDate: string | null;
-}
-export interface TrackingEvent {
-  id: string;
-  eventType: string;
-  location: string | null;
-  notes: string | null;
-  occurredAt: string;
-}
-export interface CustomerDocument {
-  id: string;
-  shipmentId: string;
-  type: string;
-  uri: string;
-  createdAt: string;
-}
-export const customerApi = {
-  profile: () =>
-    apiFetch<{
-      userId: string;
-      email: string;
-      clientId: string;
-      company: string;
-      contact: string;
-      phone: string;
-      country: string;
-      city: string;
-    }>("/api/customer/profile"),
-  shipments: () => apiFetch<CustomerShipment[]>("/api/customer/shipments"),
-  shipment: (id: string) =>
-    apiFetch<CustomerShipment>(`/api/customer/shipments/${id}`),
-  events: (id: string) =>
-    apiFetch<TrackingEvent[]>(`/api/customer/shipments/${id}/events`),
-  documents: (id: string) =>
-    apiFetch<CustomerDocument[]>(`/api/customer/shipments/${id}/documents`),
-  quotes: () => apiFetch<CustomerQuote[]>("/api/customer/quotes"),
-  invoices: () => apiFetch<CustomerInvoice[]>("/api/customer/invoices"),
-};
-
 export interface AalSystemSetting {
   group: string;
   key: string;
@@ -2362,72 +2113,4 @@ export const advancedLogisticsApi = {
     ),
   integrations: () =>
     apiFetch<Record<string, unknown>[]>("/api/advanced-logistics/integrations"),
-};
-
-export const enterpriseCompletionApi = {
-  checklist: () =>
-    apiFetch<Record<string, unknown>[]>("/api/enterprise-completion/checklist"),
-  carrierContract: (data: Record<string, unknown>) =>
-    apiFetch<Record<string, unknown>>(
-      "/api/enterprise-completion/carriers/contracts",
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      },
-    ),
-  carrierSettlement: (data: Record<string, unknown>) =>
-    apiFetch<Record<string, unknown>>(
-      "/api/enterprise-completion/carriers/settlements",
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      },
-    ),
-  financeNote: (data: Record<string, unknown>) =>
-    apiFetch<Record<string, unknown>>(
-      "/api/enterprise-completion/finance/notes",
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      },
-    ),
-  taxRule: (data: Record<string, unknown>) =>
-    apiFetch<Record<string, unknown>>(
-      "/api/enterprise-completion/finance/tax-rules",
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      },
-    ),
-  customerStatement: (client: string) =>
-    apiFetch<Record<string, unknown>[]>(
-      `/api/enterprise-completion/finance/customer-statements?client=${encodeURIComponent(client)}`,
-    ),
-  supplierStatement: (supplier: string) =>
-    apiFetch<Record<string, unknown>[]>(
-      `/api/enterprise-completion/finance/supplier-statements?supplier=${encodeURIComponent(supplier)}`,
-    ),
-  closePeriod: (id: string) =>
-    apiFetch<Record<string, unknown>>(
-      `/api/enterprise-completion/finance/periods/${id}/close`,
-      { method: "POST" },
-    ),
-  accountingExport: (data: Record<string, unknown>) =>
-    apiFetch<Record<string, unknown>>(
-      "/api/enterprise-completion/finance/accounting-export",
-      { method: "POST", body: JSON.stringify(data) },
-    ),
-  forecast: () =>
-    apiFetch<Record<string, unknown>>(
-      "/api/enterprise-completion/analytics/forecast",
-    ),
-  integrationHealth: (code: string) =>
-    apiFetch<Record<string, unknown>>(
-      `/api/enterprise-completion/integrations/${encodeURIComponent(code)}/health`,
-    ),
-  automationTick: (data: Record<string, unknown>) =>
-    apiFetch<Record<string, unknown>>(
-      "/api/enterprise-completion/automation/tick",
-      { method: "POST", body: JSON.stringify(data) },
-    ),
 };

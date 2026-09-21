@@ -15,22 +15,15 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     label: "Command Center",
     href: "/aal-control-tower",
     icon: "grid",
-    roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES", "FINANCE"],
-  },
-  {
-    section: "CONTROL TOWER",
-    label: "Advanced Logistics OS",
-    href: "/advanced-logistics",
-    icon: "grid",
     roles: [
       "ADMIN",
       "MANAGER",
       "OPERATIONS",
       "SALES",
       "FINANCE",
-      "AIR_CARGO",
-      "WAREHOUSE",
       "DISPATCH",
+      "WAREHOUSE",
+      "AIR_CARGO",
     ],
   },
   {
@@ -41,27 +34,25 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES", "FINANCE"],
   },
   {
-    section: "CONTROL TOWER",
-    label: "Enterprise Readiness",
-    href: "/enterprise-completion",
-    icon: "check",
-    roles: [
-      "ADMIN",
-      "MANAGER",
-      "OPERATIONS",
-      "SALES",
-      "FINANCE",
-      "DISPATCH",
-      "WAREHOUSE",
-      "AIR_CARGO",
-    ],
-  },
-  {
     section: "OPERATIONS",
     label: "Air Cargo",
     href: "/air-cargo",
     icon: "plane",
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "AIR_CARGO"],
+  },
+  {
+    section: "OPERATIONS",
+    label: "Multimodal Control",
+    href: "/multimodal",
+    icon: "globe",
+    roles: [
+      "ADMIN",
+      "MANAGER",
+      "OPERATIONS",
+      "AIR_CARGO",
+      "DISPATCH",
+      "WAREHOUSE",
+    ],
   },
   {
     section: "OPERATIONS",
@@ -120,32 +111,25 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     roles: ["ADMIN", "MANAGER", "FINANCE"],
   },
   {
-    section: "DATA & PLATFORM",
-    label: "Excel Data Migration",
-    href: "/command-center",
-    icon: "file",
-    roles: ["ADMIN", "MANAGER", "OPERATIONS"],
+    section: "COMMERCIAL & FINANCE",
+    label: "Management Reports",
+    href: "/reports",
+    icon: "chart",
+    roles: ["ADMIN", "MANAGER", "FINANCE", "OPERATIONS", "SALES"],
   },
   {
-    section: "DATA & PLATFORM",
+    section: "GOVERNANCE",
     label: "Audit Trail",
     href: "/audit",
     icon: "shield",
     roles: ["ADMIN", "MANAGER"],
   },
   {
-    section: "DATA & PLATFORM",
+    section: "GOVERNANCE",
     label: "Settings",
     href: "/settings",
     icon: "shield",
     roles: ["ADMIN", "MANAGER", "FINANCE", "OPERATIONS"],
-  },
-  {
-    section: "DATA & PLATFORM",
-    label: "Multimodal Mode Control",
-    href: "/multimodal",
-    icon: "globe",
-    roles: ["ADMIN", "MANAGER", "OPERATIONS", "AIR_CARGO"],
   },
   {
     section: "ADMINISTRATION",
@@ -175,6 +159,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     path.startsWith("/quote/view/") ||
     path.startsWith("/quote/results/") ||
     path === "/";
+
+  useEffect(() => {
+    if (bare || isLoading || accessToken) return;
+    const next = `${path}${typeof window !== "undefined" ? window.location.search : ""}`;
+    router.replace(
+      `/login?next=${encodeURIComponent(next || "/aal-control-tower")}`,
+    );
+  }, [accessToken, bare, isLoading, path, router]);
 
   useEffect(() => {
     if (role === "CUSTOMER" && accessToken) {
@@ -243,7 +235,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </div>
     );
 
-  if (!accessToken) return <>{children}</>;
+  if (!accessToken) {
+    return (
+      <div className="app-loading">
+        <div className="loading-mark" aria-hidden="true" />
+        <div>
+          <strong>Aviation Africa Logistics Ltd</strong>
+          <span>Redirecting to secure sign-in…</span>
+        </div>
+      </div>
+    );
+  }
 
   // Customer accounts are intentionally not supported in the internal UI.
   // AuthProvider clears them before this shell normally renders, but this guard
@@ -307,15 +309,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <div className="sidebar-footer">
-          <Link className="nav-link footer-link" href="/quote">
-            <span className="nav-icon">
-              <Icon name="plus" size={17} />
-            </span>
-            <span className="nav-link-copy">
-              <strong>Public quote flow</strong>
-              <small>Open customer-facing quote page</small>
-            </span>
-          </Link>
           <button
             className="nav-link nav-button footer-link"
             onClick={doLogout}

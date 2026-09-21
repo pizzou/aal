@@ -125,22 +125,12 @@ export default function LoginPage() {
 
     login(r.accessToken, r.tenantId, r.role);
 
-    // Validate the newly established authenticated context before navigation.
-    // This prevents the dashboard from rendering while the API still sees an
-    // anonymous browser session.
-    try {
-      await authApi.session();
-    } catch (error) {
-      await authApi.logout().catch(() => undefined);
-      throw error instanceof ApiError
-        ? error
-        : new Error(
-            "The authenticated session could not be established. Please sign in again.",
-          );
-    }
-
     const next = search.get("next");
-    const destination = next?.startsWith("/") ? next : "/aal-control-tower";
+    const destination =
+      next && next.startsWith("/") && !next.startsWith("/login")
+        ? next
+        : "/aal-control-tower";
+
     router.replace(r.mustChangePassword ? "/account/security" : destination);
   }
 

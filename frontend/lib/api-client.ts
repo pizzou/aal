@@ -797,6 +797,28 @@ export interface GpsPosition {
   speedKmh: number | null;
   headingDegrees: number | null;
   recordedAt: string;
+  source?: string;
+  deviceId?: string | null;
+  accuracyMeters?: number | null;
+  batteryPercent?: number | null;
+}
+
+export interface GpsStatus {
+  vehicleId: string;
+  latest: GpsPosition | null;
+  source: string;
+  health: string;
+  stale: boolean;
+  ageSeconds: number;
+  checkedAt: string;
+}
+
+export interface TraccarDevice {
+  id: string;
+  vehicleId: string;
+  provider: string;
+  externalDeviceId: string;
+  enabled: boolean;
 }
 
 export const gpsApi = {
@@ -808,6 +830,10 @@ export const gpsApi = {
       speedKmh?: number;
       headingDegrees?: number;
       recordedAt?: string;
+      source?: string;
+      deviceId?: string;
+      accuracyMeters?: number;
+      batteryPercent?: number;
     },
   ) =>
     apiFetch<GpsPosition>(`/api/vehicles/${vehicleId}/gps`, {
@@ -818,8 +844,30 @@ export const gpsApi = {
   latest: (vehicleId: string) =>
     apiFetch<GpsPosition>(`/api/vehicles/${vehicleId}/gps/latest`),
 
+  status: (vehicleId: string) =>
+    apiFetch<GpsStatus>(`/api/vehicles/${vehicleId}/gps/status`),
+
   history: (vehicleId: string) =>
     apiFetch<Page<GpsPosition>>(`/api/vehicles/${vehicleId}/gps/history`),
+};
+
+export const traccarGpsApi = {
+  device: (vehicleId: string) =>
+    apiFetch<TraccarDevice>(`/api/vehicles/${vehicleId}/gps/traccar/device`),
+
+  saveDevice: (
+    vehicleId: string,
+    data: { provider?: string; externalDeviceId: string; enabled: boolean },
+  ) =>
+    apiFetch<TraccarDevice>(`/api/vehicles/${vehicleId}/gps/traccar/device`, {
+      method: "POST",
+      body: JSON.stringify({ ...data, provider: "TRACCAR" }),
+    }),
+
+  sync: (vehicleId: string) =>
+    apiFetch<GpsPosition>(`/api/vehicles/${vehicleId}/gps/traccar/sync`, {
+      method: "POST",
+    }),
 };
 
 export interface PlannedShipment {
@@ -2314,4 +2362,72 @@ export const advancedLogisticsApi = {
     ),
   integrations: () =>
     apiFetch<Record<string, unknown>[]>("/api/advanced-logistics/integrations"),
+};
+
+export const enterpriseCompletionApi = {
+  checklist: () =>
+    apiFetch<Record<string, unknown>[]>("/api/enterprise-completion/checklist"),
+  carrierContract: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/enterprise-completion/carriers/contracts",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  carrierSettlement: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/enterprise-completion/carriers/settlements",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  financeNote: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/enterprise-completion/finance/notes",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  taxRule: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/enterprise-completion/finance/tax-rules",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  customerStatement: (client: string) =>
+    apiFetch<Record<string, unknown>[]>(
+      `/api/enterprise-completion/finance/customer-statements?client=${encodeURIComponent(client)}`,
+    ),
+  supplierStatement: (supplier: string) =>
+    apiFetch<Record<string, unknown>[]>(
+      `/api/enterprise-completion/finance/supplier-statements?supplier=${encodeURIComponent(supplier)}`,
+    ),
+  closePeriod: (id: string) =>
+    apiFetch<Record<string, unknown>>(
+      `/api/enterprise-completion/finance/periods/${id}/close`,
+      { method: "POST" },
+    ),
+  accountingExport: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/enterprise-completion/finance/accounting-export",
+      { method: "POST", body: JSON.stringify(data) },
+    ),
+  forecast: () =>
+    apiFetch<Record<string, unknown>>(
+      "/api/enterprise-completion/analytics/forecast",
+    ),
+  integrationHealth: (code: string) =>
+    apiFetch<Record<string, unknown>>(
+      `/api/enterprise-completion/integrations/${encodeURIComponent(code)}/health`,
+    ),
+  automationTick: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/enterprise-completion/automation/tick",
+      { method: "POST", body: JSON.stringify(data) },
+    ),
 };

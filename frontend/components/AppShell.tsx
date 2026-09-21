@@ -41,6 +41,22 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES", "FINANCE"],
   },
   {
+    section: "CONTROL TOWER",
+    label: "Enterprise Readiness",
+    href: "/enterprise-completion",
+    icon: "check",
+    roles: [
+      "ADMIN",
+      "MANAGER",
+      "OPERATIONS",
+      "SALES",
+      "FINANCE",
+      "DISPATCH",
+      "WAREHOUSE",
+      "AIR_CARGO",
+    ],
+  },
+  {
     section: "OPERATIONS",
     label: "Air Cargo",
     href: "/air-cargo",

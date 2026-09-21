@@ -9,6 +9,9 @@ import com.logiplatform.repository.RateCardRepository;
 import com.logiplatform.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -45,11 +48,14 @@ public class RateEngineService {
 
     private final RateCardRepository rateCardRepository;
     private final AccessorialChargeRepository accessorialChargeRepository;
+    private final JdbcTemplate tenantDb;
 
     public RateEngineService(RateCardRepository rateCardRepository,
-                              AccessorialChargeRepository accessorialChargeRepository) {
+                              AccessorialChargeRepository accessorialChargeRepository,
+                              @Qualifier("tenantJdbcTemplate") JdbcTemplate tenantDb) {
         this.rateCardRepository = rateCardRepository;
         this.accessorialChargeRepository = accessorialChargeRepository;
+        this.tenantDb = tenantDb;
     }
 
     @Transactional
@@ -91,16 +97,45 @@ public class RateEngineService {
     @Transactional(readOnly = true)
     public QuoteResponse quote(QuoteRequest request) {
         UUID tenantId = TenantContext.getTenantId();
-        RateCard rateCard = rateCardRepository.findByTenantIdAndTransportMode(tenantId, request.transportMode())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "No rate card configured for transport mode " + request.transportMode()));
+        String mode = request.transportMode().trim().toUpperCase();
+        java.util.Map<String,Object> advanced = null;
+        try {
+            advanced = tenantDb.queryForMap(
+                "SELECT * FROM pricing_rules WHERE mode=? AND active=true AND valid_from<=CURRENT_DATE " +
+                "AND (valid_until IS NULL OR valid_until>=CURRENT_DATE) " +
+                "ORDER BY priority ASC, valid_from DESC LIMIT 1", mode);
+        } catch (EmptyResultDataAccessException ignored) {
+        }
 
-        BigDecimal rawWeightCharge = rateCard.getBaseRatePerKg().multiply(request.weightKg())
+        RateCard rateCard = rateCardRepository.findByTenantIdAndTransportMode(tenantId, mode)
+                .orElse(null);
+
+        BigDecimal baseRate;
+        BigDecimal minCharge;
+        BigDecimal fuelPercent;
+        String currency;
+        if (advanced != null) {
+            baseRate = advanced.get("rate_per_kg") == null ? BigDecimal.ZERO : (BigDecimal) advanced.get("rate_per_kg");
+            minCharge = advanced.get("min_charge") == null ? BigDecimal.ZERO : (BigDecimal) advanced.get("min_charge");
+            fuelPercent = advanced.get("fuel_percent") == null ? BigDecimal.ZERO : (BigDecimal) advanced.get("fuel_percent");
+            currency = advanced.get("currency") == null ? "USD" : advanced.get("currency").toString();
+        } else {
+            if (rateCard == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "No rate card configured for transport mode " + request.transportMode());
+            }
+            baseRate = rateCard.getBaseRatePerKg();
+            minCharge = rateCard.getMinCharge();
+            fuelPercent = rateCard.getFuelSurchargePercent();
+            currency = rateCard.getCurrency();
+        }
+
+        BigDecimal rawWeightCharge = baseRate.multiply(request.weightKg())
                 .setScale(2, RoundingMode.HALF_UP);
-        BigDecimal baseCharge = rawWeightCharge.max(rateCard.getMinCharge());
+        BigDecimal baseCharge = rawWeightCharge.max(minCharge);
 
         BigDecimal fuelSurcharge = baseCharge
-                .multiply(rateCard.getFuelSurchargePercent())
+                .multiply(fuelPercent)
                 .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
 
         List<String> requestedCodes = request.accessorialCodes() != null ? request.accessorialCodes() : List.of();
@@ -116,7 +151,7 @@ public class RateEngineService {
 
         return new QuoteResponse(rawWeightCharge, baseCharge, fuelSurcharge, accessorialTotal,
                 applied.stream().map(AccessorialResponse::from).toList(),
-                total, rateCard.getCurrency(), "RULES_BASED");
+                total, currency, advanced != null ? "PRICING_RULE" : "RULES_BASED");
     }
 }
 

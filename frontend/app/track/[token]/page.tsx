@@ -12,6 +12,9 @@ export default function PublicTrackingResult() {
   const params = useParams<{ token: string }>();
   const [data, setData] = useState<PublicShipmentView | null>(null);
   const [error, setError] = useState("");
+  const [feedbackRating, setFeedbackRating] = useState(5);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [feedbackSent, setFeedbackSent] = useState(false);
   useEffect(() => {
     if (params.token)
       publicTrackingApi
@@ -161,6 +164,58 @@ export default function PublicTrackingResult() {
             )}
           </div>
         </div>
+        <section className="track-panel" style={{ marginTop: 18 }}>
+          <div className="track-panel-title">
+            <span>CUSTOMER FEEDBACK</span>
+            <strong>How was your shipment experience?</strong>
+          </div>
+          {feedbackSent ? (
+            <div className="empty">
+              Thank you. Your feedback has been received by AAL.
+            </div>
+          ) : (
+            <form
+              onSubmit={async (event) => {
+                event.preventDefault();
+                try {
+                  await publicTrackingApi.feedback(params.token, {
+                    rating: feedbackRating,
+                    category: "SHIPMENT_EXPERIENCE",
+                    comment: feedbackComment.trim() || undefined,
+                  });
+                  setFeedbackSent(true);
+                } catch (e) {
+                  setError(
+                    e instanceof ApiError
+                      ? e.message
+                      : "Unable to send feedback.",
+                  );
+                }
+              }}
+              style={{ display: "grid", gap: 10 }}
+            >
+              <select
+                value={feedbackRating}
+                onChange={(e) => setFeedbackRating(Number(e.target.value))}
+              >
+                {[5, 4, 3, 2, 1].map((value) => (
+                  <option key={value} value={value}>
+                    {value} / 5
+                  </option>
+                ))}
+              </select>
+              <textarea
+                value={feedbackComment}
+                onChange={(e) => setFeedbackComment(e.target.value)}
+                placeholder="Tell AAL about your experience"
+                rows={4}
+              />
+              <button className="public-main-button" type="submit">
+                Send feedback
+              </button>
+            </form>
+          )}
+        </section>
         <div className="track-cta">
           <Link href="/track">Track another shipment</Link>
           <Link href="/">AAL home</Link>

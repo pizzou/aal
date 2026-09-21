@@ -124,6 +124,17 @@ public class SecurityConfig {
                                                 .requestMatchers("/api/platform/**")
                                                 .hasAnyRole("ADMIN", "MANAGER", "FINANCE", "OPERATIONS")
 
+                                                .requestMatchers("/api/advanced-logistics/**")
+                                                .hasAnyRole(
+                                                                "ADMIN",
+                                                                "MANAGER",
+                                                                "OPERATIONS",
+                                                                "SALES",
+                                                                "FINANCE",
+                                                                "DISPATCH",
+                                                                "WAREHOUSE",
+                                                                "AIR_CARGO")
+
                                                 .requestMatchers("/api/settings/**")
                                                 .hasAnyRole("ADMIN", "MANAGER", "FINANCE", "OPERATIONS")
 

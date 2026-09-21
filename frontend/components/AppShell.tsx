@@ -19,6 +19,22 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "CONTROL TOWER",
+    label: "Advanced Logistics OS",
+    href: "/advanced-logistics",
+    icon: "grid",
+    roles: [
+      "ADMIN",
+      "MANAGER",
+      "OPERATIONS",
+      "SALES",
+      "FINANCE",
+      "AIR_CARGO",
+      "WAREHOUSE",
+      "DISPATCH",
+    ],
+  },
+  {
+    section: "CONTROL TOWER",
     label: "Shipment Register",
     href: "/shipments",
     icon: "ship",
@@ -37,6 +53,13 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     href: "/trips",
     icon: "truck",
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "DISPATCH"],
+  },
+  {
+    section: "OPERATIONS",
+    label: "Mobile Operations",
+    href: "/mobile-ops",
+    icon: "truck",
+    roles: ["ADMIN", "MANAGER", "OPERATIONS", "DISPATCH", "WAREHOUSE"],
   },
   {
     section: "OPERATIONS",
@@ -82,7 +105,7 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "DATA & PLATFORM",
-    label: "Legacy Data Migration",
+    label: "Excel Data Migration",
     href: "/command-center",
     icon: "file",
     roles: ["ADMIN", "MANAGER", "OPERATIONS"],

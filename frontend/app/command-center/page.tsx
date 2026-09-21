@@ -47,8 +47,8 @@ export default function CommandCenterImportPage() {
     <main className="page">
       <div className="page-head">
         <div>
-          <div className="eyebrow">AAL DATA MIGRATION</div>
-          <h1 className="page-title">Workbook Import Center</h1>
+          <div className="eyebrow">EXCEL DATA MIGRATION</div>
+          <h1 className="page-title">Excel Migration Center</h1>
           <p className="page-subtitle">
             Controlled migration from the AAL MOTHERSHIP and Command Center
             workbooks into the production shipment, commercial and finance
@@ -152,8 +152,8 @@ export default function CommandCenterImportPage() {
           <ul className="card-muted" style={{ lineHeight: 1.8 }}>
             <li>Tenant-scoped records only.</li>
             <li>
-              Duplicate shipment, quote, invoice and workbook identifiers are
-              rejected.
+              Duplicate shipment, quote and invoice identifiers are skipped; an
+              identical workbook is idempotent and will not create another copy.
             </li>
             <li>
               Invoice collections are represented as payment records with
@@ -161,6 +161,14 @@ export default function CommandCenterImportPage() {
             </li>
             <li>Financial values remain BigDecimal on the server.</li>
             <li>Calculated values are regenerated from source inputs.</li>
+            <li>
+              Legacy workbook data is imported into the canonical Shipment
+              Register, Sales & Quotations and Billing & Receivables modules.
+            </li>
+            <li>
+              The original workbook SHA-256 is recorded so the same file can be
+              safely re-submitted without duplication.
+            </li>
           </ul>
         </div>
         <div className="card">

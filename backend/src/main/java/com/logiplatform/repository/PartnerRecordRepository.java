@@ -18,4 +18,9 @@ public interface PartnerRecordRepository
             UUID tenantId,
             String partnerId);
 
+    Optional<PartnerRecord> findFirstByTenantIdAndCompanyIgnoreCaseAndCountryIgnoreCase(
+            UUID tenantId,
+            String company,
+            String country);
+
 }

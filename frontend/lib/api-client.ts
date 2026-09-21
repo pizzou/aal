@@ -665,6 +665,11 @@ export const publicTrackingApi = {
     apiFetch<PublicShipmentView>(
       `/api/public/tracking/${encodeURIComponent(token)}`,
     ),
+  feedback: (token: string, data: Record<string, unknown>) =>
+    apiFetch<{ id: string; status: string }>(
+      `/api/public/tracking/${encodeURIComponent(token)}/feedback`,
+      { method: "POST", body: JSON.stringify(data) },
+    ),
 };
 
 /*
@@ -2148,4 +2153,165 @@ export const settingsApi = {
       `/api/settings?group=${encodeURIComponent(group)}&key=${encodeURIComponent(key)}`,
       { method: "DELETE" },
     ),
+};
+
+export interface AdvancedShipment360 {
+  shipment: Record<string, unknown>;
+  parties: Record<string, unknown>[];
+  cargo: Record<string, unknown>[];
+  pieces: Record<string, unknown>[];
+  legs: Record<string, unknown>[];
+  journeyLegs: Record<string, unknown>[];
+  milestones: Record<string, unknown>[];
+  legMilestones: Record<string, unknown>[];
+  documents: Record<string, unknown>[];
+  legDocuments: Record<string, unknown>[];
+  costs: Record<string, unknown>[];
+  tracking: Record<string, unknown>[];
+  invoices: Record<string, unknown>[];
+  payments: Record<string, unknown>[];
+  exceptions: Record<string, unknown>[];
+  customs: Record<string, unknown>[];
+  customsWorkflows: Record<string, unknown>[];
+  pod: Record<string, unknown>[];
+  oceanCharges: Record<string, unknown>[];
+  supplierBills: Record<string, unknown>[];
+  readiness: Record<string, unknown>[];
+  profitability: Record<string, unknown>;
+}
+
+export interface AdvancedAnalytics {
+  shipments: Record<string, number>;
+  receivables: Record<string, number>;
+  modes: Array<Record<string, unknown>>;
+  customers: Array<Record<string, unknown>>;
+  carriers: Array<Record<string, unknown>>;
+}
+
+export const advancedLogisticsApi = {
+  capabilities: () =>
+    apiFetch<Record<string, unknown>>("/api/advanced-logistics/capabilities"),
+  shipment360: (id: string) =>
+    apiFetch<AdvancedShipment360>(
+      `/api/advanced-logistics/shipments/${id}/360`,
+    ),
+  analytics: () =>
+    apiFetch<AdvancedAnalytics>("/api/advanced-logistics/analytics"),
+  readiness: (id: string) =>
+    apiFetch<Record<string, unknown>>(
+      `/api/advanced-logistics/shipments/${id}/readiness`,
+      { method: "POST", body: JSON.stringify({ trigger: "MANUAL" }) },
+    ),
+  evaluateExceptions: (id: string) =>
+    apiFetch<Record<string, unknown>>(
+      `/api/advanced-logistics/shipments/${id}/exceptions/evaluate`,
+      { method: "POST" },
+    ),
+  ratePreview: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/advanced-logistics/rating/preview",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  addQuoteCharge: (quoteId: string, data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      `/api/advanced-logistics/quotes/${quoteId}/charges`,
+      { method: "POST", body: JSON.stringify(data) },
+    ),
+  oceanCharge: (shipmentId: string, data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      `/api/advanced-logistics/ocean/shipments/${shipmentId}/charges`,
+      { method: "POST", body: JSON.stringify(data) },
+    ),
+  warehouseBarcode: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/advanced-logistics/warehouse/barcodes",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  cycleCount: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/advanced-logistics/warehouse/cycle-counts",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  customsLine: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/api/advanced-logistics/customs/lines", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  supplierBill: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/advanced-logistics/finance/supplier-bills",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  bankTransaction: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/advanced-logistics/finance/bank-transactions",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  carrierPerformance: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/advanced-logistics/carriers/performance",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  feedback: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/advanced-logistics/customer-feedback",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  webhook: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/api/advanced-logistics/webhooks", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  mobileSync: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/api/advanced-logistics/mobile/sync", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  workflowRule: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/advanced-logistics/workflow-rules",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  documentSignature: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/advanced-logistics/documents/signatures",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  runAutomation: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/advanced-logistics/automation/run",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  integrations: () =>
+    apiFetch<Record<string, unknown>[]>("/api/advanced-logistics/integrations"),
 };

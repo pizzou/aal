@@ -173,4 +173,24 @@ public class PublicTrackingService {
                                 documents,
                                 pod);
         }
+
+        public java.util.Map<String,Object> feedback(UUID token, PublicFeedbackRequest request) {
+                if (request.rating() == null || request.rating() < 1 || request.rating() > 5) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "rating must be between 1 and 5");
+                }
+                try {
+                        java.util.Map<String,Object> shipment = db.queryForMap(
+                                "SELECT id, tenant_id FROM shipments WHERE tracking_token=? AND tracking_revoked=false AND (tracking_expires_at IS NULL OR tracking_expires_at>now())",
+                                token);
+                        UUID id = UUID.randomUUID();
+                        db.update(
+                                "INSERT INTO customer_feedback(id,tenant_id,shipment_id,rating,category,comment,contact_email) VALUES(?,?,?,?,?,?,?)",
+                                id, shipment.get("tenant_id"), shipment.get("id"), request.rating(),
+                                request.category(), request.comment(), request.contactEmail());
+                        return java.util.Map.of("id", id, "status", "RECEIVED");
+                } catch (EmptyResultDataAccessException e) {
+                        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracking link not found");
+                }
+        }
+
 }

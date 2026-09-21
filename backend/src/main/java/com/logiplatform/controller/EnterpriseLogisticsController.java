@@ -16,10 +16,9 @@ import java.util.*;
 @RequestMapping("/api/enterprise")
 public class EnterpriseLogisticsController {
     private final JdbcTemplate jdbc;
-    private final com.logiplatform.service.OperationsEventStreamService events;
 
-    public EnterpriseLogisticsController(@Qualifier("tenantJdbcTemplate") JdbcTemplate jdbc, com.logiplatform.service.OperationsEventStreamService events) {
-        this.jdbc = jdbc; this.events = events;
+    public EnterpriseLogisticsController(@Qualifier("tenantJdbcTemplate") JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
     }
 
     private UUID tenant() {
@@ -33,35 +32,29 @@ public class EnterpriseLogisticsController {
                 tenant());
     }
 
+    /**
+     * Legacy enterprise quote endpoints intentionally no longer write to a second
+     * quote store. Sales & Quotations (/api/commercial/quotes) is canonical.
+     */
     @GetMapping("/quotes")
-    public List<Map<String, Object>> quotes() {
-        return jdbc.queryForList(
-                "select id,quote_number as \"quoteNumber\",client_id as \"clientId\",shipment_id as \"shipmentId\",status,currency,subtotal,tax_amount as \"taxAmount\",discount_amount as \"discountAmount\",total_amount as \"totalAmount\",target_margin_percent as \"targetMarginPercent\",valid_until as \"validUntil\",created_at as \"createdAt\" from logistics_quotes where tenant_id=? order by created_at desc",
-                tenant());
+    public void legacyQuotes() {
+        throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.GONE,
+                "Enterprise quote storage was consolidated into Sales & Quotations. Use /api/commercial/quotes.");
     }
 
     @PostMapping("/quotes")
-    public Map<String, Object> createQuote(@Valid @RequestBody EnterpriseLogisticsDtos.QuoteRequest r) {
-        UUID id = UUID.randomUUID();
-        jdbc.update(
-                "insert into logistics_quotes(id,tenant_id,quote_number,client_id,shipment_id,currency,valid_until,target_margin_percent,terms) values(?,?,?,?,?,?,?,?,?)",
-                id, tenant(), r.quoteNumber(), r.clientId(), r.shipmentId(), r.currency(), r.validUntil(),
-                r.targetMarginPercent(), r.terms());
-        return Map.of("id", id, "quoteNumber", r.quoteNumber(), "status", "DRAFT");
+    public void legacyCreateQuote() {
+        throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.GONE,
+                "Enterprise quote storage was consolidated into Sales & Quotations. Use /api/commercial/quotes.");
     }
 
     @PostMapping("/quotes/{quoteId}/lines")
-    public Map<String, Object> addQuoteLine(@PathVariable UUID quoteId,
-            @Valid @RequestBody EnterpriseLogisticsDtos.QuoteLineRequest r) {
-        UUID id = UUID.randomUUID();
-        jdbc.update(
-                "insert into logistics_quote_lines(id,tenant_id,quote_id,line_no,description,mode,quantity,unit_price,cost_amount,sell_amount,currency) values(?,?,?,?,?,?,?,?,?,?,?)",
-                id, tenant(), quoteId, r.lineNo(), r.description(), r.mode(), r.quantity(), n(r.unitPrice()),
-                n(r.costAmount()), n(r.sellAmount()), r.currency());
-        jdbc.update(
-                "update logistics_quotes q set subtotal=x.subtotal,total_amount=x.total_amount,updated_at=now() from (select quote_id,sum(sell_amount) subtotal,sum(sell_amount) total_amount from logistics_quote_lines where tenant_id=? and quote_id=? group by quote_id) x where q.id=? and q.tenant_id=?",
-                tenant(), quoteId, quoteId, tenant());
-        return Map.of("id", id, "quoteId", quoteId);
+    public void legacyQuoteLine(@PathVariable UUID quoteId) {
+        throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.GONE,
+                "Enterprise quote lines were consolidated into Sales & Quotations.");
     }
 
     @GetMapping("/tasks")
@@ -96,7 +89,6 @@ public class EnterpriseLogisticsController {
                 "insert into shipment_milestones(id,tenant_id,shipment_id,milestone_code,milestone_name,sequence_no,planned_at,estimated_at,status,source,notes) values(?,?,?,?,?,?,?,?,?,?,?) on conflict(tenant_id,shipment_id,milestone_code) do update set milestone_name=excluded.milestone_name,planned_at=excluded.planned_at,estimated_at=excluded.estimated_at,status=excluded.status,notes=excluded.notes,updated_at=now()",
                 id, tenant(), shipmentId, r.code(), r.name(), r.sequenceNo(), r.plannedAt(), r.estimatedAt(),
                 r.status(), r.source(), r.notes());
-        events.publish(tenant(), "milestone", Map.of("shipmentId", shipmentId, "code", r.code(), "name", r.name(), "status", r.status()));
         return Map.of("shipmentId", shipmentId, "milestoneCode", r.code());
     }
 

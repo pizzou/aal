@@ -29,4 +29,11 @@ public final class PublicTrackingDtos {
 
         public record PublicPod(String recipientName, Instant deliveredAt, boolean evidenceAvailable) {
         }
+
+        public record PublicFeedbackRequest(
+                Integer rating,
+                String category,
+                String comment,
+                String contactEmail) {
+        }
 }

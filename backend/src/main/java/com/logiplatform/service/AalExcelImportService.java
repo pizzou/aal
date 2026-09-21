@@ -1,6 +1,7 @@
 
 package com.logiplatform.service;
 
+import com.logiplatform.model.AalImportBatch;
 import com.logiplatform.model.ClientRecord;
 import com.logiplatform.model.CommercialInvoice;
 import com.logiplatform.model.CommercialQuote;
@@ -24,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
+import java.security.MessageDigest;
 import java.math.BigDecimal;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
@@ -61,8 +63,7 @@ public class AalExcelImportService {
         private final TaskRecordRepository tasks;
         private final ExpenseRecordRepository expenses;
         private final FinancePostingService financePostingService;
-        private final QuoteLifecycleService quoteLifecycleService;
-        private final MilestoneOrchestrationService milestoneOrchestrationService;
+        private final com.logiplatform.repository.AalImportBatchRepository importBatches;
 
         public AalExcelImportService(
                         ShipmentRepository shipments,
@@ -73,8 +74,7 @@ public class AalExcelImportService {
                         TaskRecordRepository tasks,
                         ExpenseRecordRepository expenses,
                         FinancePostingService financePostingService,
-                        QuoteLifecycleService quoteLifecycleService,
-                        MilestoneOrchestrationService milestoneOrchestrationService) {
+                        com.logiplatform.repository.AalImportBatchRepository importBatches) {
 
                 this.shipments = shipments;
                 this.quotes = quotes;
@@ -84,8 +84,7 @@ public class AalExcelImportService {
                 this.tasks = tasks;
                 this.expenses = expenses;
                 this.financePostingService = financePostingService;
-        this.quoteLifecycleService = quoteLifecycleService;
-                this.milestoneOrchestrationService = milestoneOrchestrationService;
+                this.importBatches = importBatches;
         }
 
         /**
@@ -109,113 +108,94 @@ public class AalExcelImportService {
          * .xlsx and .xlsm are supported through Apache POI.
          */
         @Transactional
-        public ImportResult importWorkbook(
-                        MultipartFile file) {
-
-                if (file == null || file.isEmpty()) {
-                        throw new IllegalArgumentException(
-                                        "Excel file is empty");
-                }
-
-                if (file.getSize() > 10L * 1024L * 1024L) {
-                        throw new IllegalArgumentException(
-                                        "Excel file exceeds the 10 MB import limit");
-                }
-
-                String filename = file.getOriginalFilename();
-
-                if (filename == null
-                                || !(filename.toLowerCase(Locale.ROOT).endsWith(".xlsx")
-                                                || filename.toLowerCase(Locale.ROOT).endsWith(".xlsm"))) {
-
-                        throw new IllegalArgumentException(
-                                        "Only .xlsx and .xlsm AAL workbooks are supported");
-                }
+        public ImportResult importWorkbook(MultipartFile file) {
+                validateWorkbook(file);
 
                 UUID tenant = TenantContext.getTenantId();
-
                 if (tenant == null) {
-                        throw new IllegalStateException(
-                                        "No tenant context is available");
+                        throw new IllegalStateException("No tenant context is available");
                 }
 
-                int shipmentCount = 0;
-                int quoteCount = 0;
-                int invoiceCount = 0;
-                int clientCount = 0;
-                int partnerCount = 0;
-                int taskCount = 0;
-                int expenseCount = 0;
+                final byte[] bytes;
+                try {
+                        bytes = file.getBytes();
+                } catch (Exception e) {
+                        throw new IllegalArgumentException("Unable to read AAL workbook", e);
+                }
 
-                try (
-                                InputStream input = file.getInputStream();
-                                Workbook workbook = WorkbookFactory.create(input)) {
+                String sha256 = sha256(bytes);
+                Optional<AalImportBatch> previous = importBatches.findByTenantIdAndSourceSha256(tenant, sha256);
+                if (previous.isPresent() && "COMPLETED".equalsIgnoreCase(previous.get().getStatus())) {
+                        return toResult(previous.get().counts());
+                }
 
+                AalImportBatch batch = previous.orElseGet(() ->
+                        importBatches.save(new AalImportBatch(tenant,
+                                Optional.ofNullable(file.getOriginalFilename()).orElse("AAL-workbook"), sha256)));
+
+                try (InputStream input = new java.io.ByteArrayInputStream(bytes);
+                     Workbook workbook = WorkbookFactory.create(input)) {
+
+                        // Two-pass import is intentional. Shipments must exist before invoices
+                        // are linked, regardless of workbook sheet ordering.
+                        List<Sheet> shipmentSheets = new ArrayList<>();
+                        List<Sheet> commercialSheets = new ArrayList<>();
+                        List<Sheet> supportingSheets = new ArrayList<>();
                         for (Sheet sheet : workbook) {
-
                                 String name = sheet.getSheetName().trim();
-
-                                if (name.equalsIgnoreCase("Shipments")
-                                                || MONTHS.contains(name)) {
-
-                                        shipmentCount += importShipments(
-                                                        sheet,
-                                                        tenant);
-
-                                } else if (name.equalsIgnoreCase("Quotations")) {
-
-                                        quoteCount += importQuotes(
-                                                        sheet,
-                                                        tenant);
-
-                                } else if (name.equalsIgnoreCase("Invoices")) {
-
-                                        invoiceCount += importInvoices(
-                                                        sheet,
-                                                        tenant);
-
-                                } else if (name.equalsIgnoreCase("Clients")) {
-
-                                        clientCount += importClients(
-                                                        sheet,
-                                                        tenant);
-
-                                } else if (name.equalsIgnoreCase("Partners")) {
-
-                                        partnerCount += importPartners(
-                                                        sheet,
-                                                        tenant);
-
-                                } else if (name.equalsIgnoreCase("Tasks")) {
-
-                                        taskCount += importTasks(
-                                                        sheet,
-                                                        tenant);
-
-                                } else if (name.equalsIgnoreCase("Expenses")) {
-
-                                        expenseCount += importExpenses(
-                                                        sheet,
-                                                        tenant);
-                                }
+                                if (name.equalsIgnoreCase("Shipments") || MONTHS.contains(name)) shipmentSheets.add(sheet);
+                                else if (name.equalsIgnoreCase("Quotations") || name.equalsIgnoreCase("Invoices")) commercialSheets.add(sheet);
+                                else if (name.equalsIgnoreCase("Clients") || name.equalsIgnoreCase("Partners") || name.equalsIgnoreCase("Tasks") || name.equalsIgnoreCase("Expenses")) supportingSheets.add(sheet);
                         }
 
+                        int shipments = 0, quotes = 0, invoices = 0, clients = 0, partners = 0, tasks = 0, expenses = 0;
+                        for (Sheet sheet : shipmentSheets) shipments += importShipments(sheet, tenant);
+                        for (Sheet sheet : supportingSheets) {
+                                String name = sheet.getSheetName().trim();
+                                if (name.equalsIgnoreCase("Clients")) clients += importClients(sheet, tenant);
+                                else if (name.equalsIgnoreCase("Partners")) partners += importPartners(sheet, tenant);
+                                else if (name.equalsIgnoreCase("Tasks")) tasks += importTasks(sheet, tenant);
+                                else if (name.equalsIgnoreCase("Expenses")) expenses += importExpenses(sheet, tenant);
+                        }
+                        for (Sheet sheet : commercialSheets) {
+                                String name = sheet.getSheetName().trim();
+                                if (name.equalsIgnoreCase("Quotations")) quotes += importQuotes(sheet, tenant);
+                                else if (name.equalsIgnoreCase("Invoices")) invoices += importInvoices(sheet, tenant);
+                        }
+
+                        AalImportBatch.AalImportCounts counts = new AalImportBatch.AalImportCounts(
+                                shipments, quotes, invoices, clients, partners, tasks, expenses);
+                        batch.complete(counts);
+                        importBatches.save(batch);
+                        return toResult(counts);
                 } catch (Exception e) {
-
-                        throw new IllegalArgumentException(
-                                        "Unable to import AAL workbook: "
-                                                        + rootMessage(e),
-                                        e);
+                        batch.fail();
+                        importBatches.save(batch);
+                        throw new IllegalArgumentException("Unable to import AAL workbook: " + rootMessage(e), e);
                 }
+        }
 
-                return new ImportResult(
-                                shipmentCount,
-                                quoteCount,
-                                invoiceCount,
-                                clientCount,
-                                partnerCount,
-                                taskCount,
-                                expenseCount);
+        private static void validateWorkbook(MultipartFile file) {
+                if (file == null || file.isEmpty()) throw new IllegalArgumentException("Excel file is empty");
+                if (file.getSize() > 10L * 1024L * 1024L) throw new IllegalArgumentException("Excel file exceeds the 10 MB import limit");
+                String filename = file.getOriginalFilename();
+                if (filename == null || !(filename.toLowerCase(Locale.ROOT).endsWith(".xlsx") || filename.toLowerCase(Locale.ROOT).endsWith(".xlsm")))
+                        throw new IllegalArgumentException("Only .xlsx and .xlsm AAL workbooks are supported");
+        }
+
+        private static String sha256(byte[] bytes) {
+                try {
+                        byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+                        StringBuilder out = new StringBuilder(64);
+                        for (byte b : digest) out.append(String.format(Locale.ROOT, "%02x", b));
+                        return out.toString();
+                } catch (Exception e) {
+                        throw new IllegalStateException("SHA-256 is unavailable", e);
+                }
+        }
+
+        private static ImportResult toResult(AalImportBatch.AalImportCounts c) {
+                return new ImportResult(c.shipments(), c.quotations(), c.invoices(), c.clients(), c.partners(), c.tasks(), c.expenses());
         }
 
         private int importShipments(
@@ -267,12 +247,7 @@ public class AalExcelImportService {
                                 continue;
                         }
 
-                        String reference = value(
-                                        row,
-                                        headerMap,
-                                        monthly
-                                                        ? "AWB NO"
-                                                        : "Shipment ID");
+                        String reference = normalizeKey(value(row, headerMap, monthly ? "AWB NO" : "Shipment ID"));
 
                         if (blank(reference)) {
                                 continue;
@@ -584,7 +559,6 @@ public class AalExcelImportService {
                         }
 
                         Shipment saved = shipments.save(shipment);
-                        milestoneOrchestrationService.initialize(saved.getId(), saved.getTransportMode().name(), saved.getOriginAddress(), saved.getDestinationAddress());
 
                         if (supplierPaid.compareTo(previousSupplierPaid) > 0) {
 
@@ -619,10 +593,7 @@ public class AalExcelImportService {
                                 continue;
                         }
 
-                        String quoteId = value(
-                                        row,
-                                        headerMap,
-                                        "Quote ID");
+                        String quoteId = normalizeKey(value(row, headerMap, "Quote ID"));
 
                         if (blank(quoteId)
                                         || quotes
@@ -681,7 +652,7 @@ public class AalExcelImportService {
                                                 .subtract(other);
                         }
 
-                        CommercialQuote importedQuote = quotes.save(
+                        quotes.save(
                                         new CommercialQuote(
                                                         tenant,
                                                         quoteId,
@@ -735,7 +706,6 @@ public class AalExcelImportService {
                                                                         headerMap,
                                                                         "Notes"),
                                                         "IMPORTED"));
-                quoteLifecycleService.ensureInitialVersion(importedQuote.getId());
 
                         count++;
                 }
@@ -760,10 +730,7 @@ public class AalExcelImportService {
                                 continue;
                         }
 
-                        String invoiceNo = value(
-                                        row,
-                                        headerMap,
-                                        "Invoice No.");
+                        String invoiceNo = normalizeKey(value(row, headerMap, "Invoice No."));
 
                         /*
                          * Invoice records are identified by invoice number.
@@ -879,13 +846,11 @@ public class AalExcelImportService {
                                         headerMap,
                                         "Client ID");
 
-                        if (blank(clientId)
-                                        || clients
-                                                        .findByTenantIdAndClientId(
-                                                                        tenant,
-                                                                        clientId)
-                                                        .isPresent()) {
-
+                        String company = value(row, headerMap, "Client / Company");
+                        if (blank(clientId) || clients.findByTenantIdAndClientId(tenant, clientId).isPresent()) {
+                                continue;
+                        }
+                        if (!blank(company) && clients.findFirstByTenantIdAndClientCompanyIgnoreCase(tenant, company).isPresent()) {
                                 continue;
                         }
 
@@ -1253,6 +1218,11 @@ public class AalExcelImportService {
                 return count;
         }
 
+        private static String normalizeKey(String value) {
+                if (value == null) return "";
+                return value.trim().replaceAll("\\s+", " ").toUpperCase(Locale.ROOT);
+        }
+
         private static void requireHeaders(
                         Map<String, Integer> headers,
                         String... required) {
@@ -1328,9 +1298,20 @@ public class AalExcelImportService {
                         return "";
                 }
 
-                return new DataFormatter()
-                                .formatCellValue(cell)
-                                .trim();
+                DataFormatter formatter = new DataFormatter();
+                if (cell.getCellType() == CellType.FORMULA) {
+                        CellType cached = cell.getCachedFormulaResultType();
+                        if (cached == CellType.NUMERIC) {
+                                return formatter.formatRawCellContents(
+                                                cell.getNumericCellValue(),
+                                                cell.getCellStyle().getDataFormat(),
+                                                cell.getCellStyle().getDataFormatString()).trim();
+                        }
+                        if (cached == CellType.BOOLEAN) return Boolean.toString(cell.getBooleanCellValue());
+                        if (cached == CellType.STRING) return cell.getStringCellValue().trim();
+                        return "";
+                }
+                return formatter.formatCellValue(cell).trim();
         }
 
         private static BigDecimal decimal(
@@ -1413,17 +1394,17 @@ public class AalExcelImportService {
                         return null;
                 }
 
-                if (cell.getCellType() == CellType.NUMERIC
+                if ((cell.getCellType() == CellType.NUMERIC || cell.getCellType() == CellType.FORMULA)
                                 && DateUtil.isCellDateFormatted(cell)) {
-
-                        return cell
-                                        .getLocalDateTimeCellValue()
-                                        .toLocalDate();
+                        if (cell.getCellType() == CellType.NUMERIC) {
+                                return cell.getLocalDateTimeCellValue().toLocalDate();
+                        }
+                        if (cell.getCachedFormulaResultType() == CellType.NUMERIC) {
+                                return DateUtil.getJavaDate(cell.getNumericCellValue()).toInstant().atZone(ZoneOffset.UTC).toLocalDate();
+                        }
                 }
 
-                String raw = new DataFormatter()
-                                .formatCellValue(cell)
-                                .trim();
+                String raw = value(row, headers, header);
 
                 if (raw.isBlank()) {
                         return null;

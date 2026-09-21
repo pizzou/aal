@@ -135,18 +135,17 @@ class PublicQuoteShareServiceTest extends TenantTestSupport {
                 "RULES_BASED");
 
         CommercialQuote saved = quoteRepository.saveAndFlush(quote);
+        UUID versionId = UUID.randomUUID();
+        authJdbcTemplate.update(
+                "INSERT INTO commercial_quote_versions(id,tenant_id,quote_id,version_no,snapshot_json,currency,amount,status,locked,locked_at) VALUES(?,?,?,?,?,?,?,?,true,now())",
+                versionId, tenantId, saved.getId(), 1, "{\"quoteId\":\"" + quoteReference + "\",\"quotedAmount\":700}", "USD", new BigDecimal("700.0000"), "LOCKED");
         String tokenHash = sha256(rawToken);
 
         authJdbcTemplate.update(
                 "INSERT INTO commercial_quote_shares "
-                        + "(id,tenant_id,quote_id,token_hash,recipient_email,expires_at) "
-                        + "VALUES(?,?,?,?,?,?)",
-                UUID.randomUUID(),
-                tenantId,
-                saved.getId(),
-                tokenHash,
-                "customer@example.com",
-                Instant.now().plusSeconds(3600));
+                        + "(id,tenant_id,quote_id,quote_version_id,token_hash,recipient_email,expires_at) "
+                        + "VALUES(?,?,?,?,?,?,?)",
+                UUID.randomUUID(), tenantId, saved.getId(), versionId, tokenHash, "customer@example.com", Instant.now().plusSeconds(3600));
     }
 
     private static String sha256(String raw) {

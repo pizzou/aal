@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import static com.logiplatform.dto.AirCargoDtos.AwbRequest;
@@ -107,21 +108,24 @@ public class AirCargoDocumentService {
 
     @Transactional
     public Map<String, Object> createDocument(DocumentRequest request) {
-        CargoDocument document = docs.save(new CargoDocument(
-                TenantContext.getTenantId(),
-                request.shipmentId(),
-                request.documentType(),
-                request.templateCode(),
-                request.fileUri(),
-                request.contentHash()));
+        UUID tenant = TenantContext.getTenantId();
+        List<CargoDocument> previous = docs.findAllByTenantIdAndShipmentIdOrderByCreatedAtDesc(tenant, request.shipmentId());
+        CargoDocument prior = previous.stream().filter(d -> d.getDocumentType().equalsIgnoreCase(request.documentType())).findFirst().orElse(null);
+        int version = prior == null ? 1 : prior.getVersionNo() + 1;
+        CargoDocument document = new CargoDocument(tenant, request.shipmentId(), request.documentType(), request.templateCode(), request.fileUri(), request.contentHash());
+        UUID user = null; try { Object p = SecurityContextHolder.getContext().getAuthentication().getPrincipal(); if (p instanceof com.logiplatform.security.TenantPrincipal tp) user = tp.userId(); } catch (Exception ignored) {}
+        document.setLifecycle(version, prior == null ? null : prior.getId(), user, false, null, null, request.contentHash());
+        CargoDocument saved = docs.save(document);
 
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("id", document.getId());
-        response.put("documentType", document.getDocumentType());
-        response.put("templateCode", document.getTemplateCode());
-        response.put("fileUri", document.getFileUri());
-        response.put("contentHash", document.getContentHash());
-        response.put("status", document.getStatus());
+        response.put("id", saved.getId());
+        response.put("documentType", saved.getDocumentType());
+        response.put("templateCode", saved.getTemplateCode());
+        response.put("fileUri", saved.getFileUri());
+        response.put("contentHash", saved.getContentHash());
+        response.put("status", saved.getStatus());
+        response.put("versionNo", saved.getVersionNo());
+        response.put("supersedesDocumentId", saved.getSupersedesDocumentId());
         return response;
     }
 

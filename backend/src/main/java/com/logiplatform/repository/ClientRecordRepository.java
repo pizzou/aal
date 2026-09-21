@@ -21,4 +21,6 @@ public interface ClientRecordRepository
     Optional<ClientRecord> findFirstByTenantIdAndClientCompanyIgnoreCase(
             UUID tenantId, String clientCompany);
 
+    Optional<ClientRecord> findFirstByTenantIdAndEmailIgnoreCase(UUID tenantId, String email);
+
 }

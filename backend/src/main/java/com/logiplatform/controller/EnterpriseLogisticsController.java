@@ -16,9 +16,10 @@ import java.util.*;
 @RequestMapping("/api/enterprise")
 public class EnterpriseLogisticsController {
     private final JdbcTemplate jdbc;
+    private final com.logiplatform.service.OperationsEventStreamService events;
 
-    public EnterpriseLogisticsController(@Qualifier("tenantJdbcTemplate") JdbcTemplate jdbc) {
-        this.jdbc = jdbc;
+    public EnterpriseLogisticsController(@Qualifier("tenantJdbcTemplate") JdbcTemplate jdbc, com.logiplatform.service.OperationsEventStreamService events) {
+        this.jdbc = jdbc; this.events = events;
     }
 
     private UUID tenant() {
@@ -95,6 +96,7 @@ public class EnterpriseLogisticsController {
                 "insert into shipment_milestones(id,tenant_id,shipment_id,milestone_code,milestone_name,sequence_no,planned_at,estimated_at,status,source,notes) values(?,?,?,?,?,?,?,?,?,?,?) on conflict(tenant_id,shipment_id,milestone_code) do update set milestone_name=excluded.milestone_name,planned_at=excluded.planned_at,estimated_at=excluded.estimated_at,status=excluded.status,notes=excluded.notes,updated_at=now()",
                 id, tenant(), shipmentId, r.code(), r.name(), r.sequenceNo(), r.plannedAt(), r.estimatedAt(),
                 r.status(), r.source(), r.notes());
+        events.publish(tenant(), "milestone", Map.of("shipmentId", shipmentId, "code", r.code(), "name", r.name(), "status", r.status()));
         return Map.of("shipmentId", shipmentId, "milestoneCode", r.code());
     }
 

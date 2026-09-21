@@ -11,7 +11,8 @@ RUN mvn -q -DskipTests dependency:go-offline
 
 COPY src ./src
 
-RUN mvn -q clean package -DskipTests
+ARG RUN_TESTS=false
+RUN if [ "$RUN_TESTS" = "true" ]; then mvn -q clean verify; else mvn -q clean package -DskipTests; fi
 
 
 FROM eclipse-temurin:21-jre

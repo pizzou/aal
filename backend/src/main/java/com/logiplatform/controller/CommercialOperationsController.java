@@ -14,16 +14,36 @@ import java.util.*;
 public class CommercialOperationsController {
     private final CommercialOperationsService s;
     private final PublicQuoteShareService quoteSharing;
+    private final com.logiplatform.service.QuoteLifecycleService quoteLifecycle;
 
-    public CommercialOperationsController(CommercialOperationsService s, PublicQuoteShareService quoteSharing) {
+    public CommercialOperationsController(CommercialOperationsService s, PublicQuoteShareService quoteSharing, com.logiplatform.service.QuoteLifecycleService quoteLifecycle) {
         this.s = s;
         this.quoteSharing = quoteSharing;
+        this.quoteLifecycle = quoteLifecycle;
     }
 
     @PostMapping("/quotes")
     public QuoteResponse quote(@Valid @RequestBody QuoteRequest r) {
         return s.createQuote(r);
     }
+
+    @GetMapping("/quotes/{id}/versions")
+    public List<Map<String,Object>> quoteVersions(@PathVariable UUID id) { return quoteLifecycle.versions(id); }
+
+    @PostMapping("/quotes/{id}/versions")
+    public Map<String,Object> createQuoteVersion(@PathVariable UUID id) { return quoteLifecycle.createVersion(id); }
+
+    @PostMapping("/quotes/{id}/versions/revise")
+    public Map<String,Object> reviseQuote(@PathVariable UUID id, @RequestBody Map<String,Object> changes) { return quoteLifecycle.revise(id, changes); }
+
+    @PostMapping("/quotes/{id}/versions/{versionId}/lock")
+    public Map<String,Object> lockQuote(@PathVariable UUID id, @PathVariable UUID versionId) { return quoteLifecycle.lock(id, versionId); }
+
+    @PostMapping("/quotes/{id}/versions/{versionId}/approve")
+    public Map<String,Object> approveQuote(@PathVariable UUID id, @PathVariable UUID versionId) { return quoteLifecycle.approve(id, versionId); }
+
+    @PostMapping("/quotes/{id}/versions/{versionId}/accept")
+    public Map<String,Object> acceptQuote(@PathVariable UUID id, @PathVariable UUID versionId) { return quoteLifecycle.accept(id, versionId); }
 
     @PostMapping("/quotes/{id}/share")
     public PublicQuoteShareService.QuoteShareResult shareQuote(@PathVariable UUID id, @RequestParam(required = false) String recipientEmail) {

@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -23,6 +24,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -34,6 +36,7 @@ public class PublicQuoteShareService {
     private final MailService mail;
     private final CommercialOperationsService commercialOperations;
     private final ShipmentRepository shipments;
+    private final ObjectMapper mapper;
     private final SecureRandom random = new SecureRandom();
 
     @Value("${app.frontend.url:https://portal.africalogisticaviation.com}")
@@ -45,13 +48,14 @@ public class PublicQuoteShareService {
             @Qualifier("publicJdbcTemplate") JdbcTemplate db,
             MailService mail,
             CommercialOperationsService commercialOperations,
-            ShipmentRepository shipments) {
+            ShipmentRepository shipments, ObjectMapper mapper) {
         this.quotes = quotes;
         this.clients = clients;
         this.db = db;
         this.mail = mail;
         this.commercialOperations = commercialOperations;
         this.shipments = shipments;
+        this.mapper = mapper;
     }
 
     /**
@@ -101,6 +105,26 @@ public class PublicQuoteShareService {
         String name = client != null && client.getContactPerson() != null && !client.getContactPerson().isBlank()
                 ? client.getContactPerson()
                 : (quote.getCustomerContactName() == null ? quote.getClient() : quote.getCustomerContactName());
+        // Every customer-visible link is bound to an immutable quotation version.
+        UUID versionId = db.query("SELECT id FROM commercial_quote_versions WHERE tenant_id=? AND quote_id=? ORDER BY version_no DESC LIMIT 1",
+                (rs,n) -> rs.getObject(1, UUID.class), tenant, quoteId).stream().findFirst().orElse(null);
+        if (versionId == null) {
+            versionId = UUID.randomUUID();
+            try {
+                Map<String,Object> snapshot = new java.util.LinkedHashMap<>();
+                snapshot.put("quoteId", quote.getQuoteId()); snapshot.put("quoteDate", quote.getQuoteDate()); snapshot.put("client", quote.getClient());
+                snapshot.put("route", quote.getRoute()); snapshot.put("serviceType", quote.getServiceType()); snapshot.put("commodity", quote.getCommodity());
+                snapshot.put("chargeableWeightKg", quote.getChargeableWeightKg()); snapshot.put("supplierCost", quote.getSupplierCost()); snapshot.put("otherCost", quote.getOtherCost());
+                snapshot.put("markupPercent", quote.getMarkupPercent()); snapshot.put("quotedAmount", quote.getQuotedAmount()); snapshot.put("currency", quote.getCurrency());
+                snapshot.put("incoterm", quote.getIncoterm()); snapshot.put("taxRate", quote.getTaxRate()); snapshot.put("taxAmount", quote.getTaxAmount());
+                snapshot.put("customsCost", quote.getCustomsCost()); snapshot.put("insuranceCost", quote.getInsuranceCost());
+                db.update("INSERT INTO commercial_quote_versions(id,tenant_id,quote_id,version_no,snapshot_json,currency,amount,status,locked,locked_at) VALUES(?,?,?,?,?,?,?,?,true,now())",
+                        versionId, tenant, quoteId, 1, mapper.writeValueAsString(snapshot), quote.getCurrency(), quote.getQuotedAmount()==null?java.math.BigDecimal.ZERO:quote.getQuotedAmount(), "LOCKED");
+            } catch (Exception e) { throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to create quotation snapshot", e); }
+        }
+        db.update("UPDATE commercial_quote_versions SET locked=true,locked_at=COALESCE(locked_at,now()),status=CASE WHEN status='DRAFT' THEN 'LOCKED' ELSE status END WHERE id=? AND tenant_id=?", versionId, tenant);
+        db.update("UPDATE commercial_quotes SET locked_amount=COALESCE(locked_amount,quoted_amount),locked_currency=COALESCE(locked_currency,currency),price_locked_at=COALESCE(price_locked_at,now()) WHERE id=? AND tenant_id=?", quoteId, tenant);
+
         String rawToken = generateToken();
         String tokenHash = hash(rawToken);
         Instant expiresAt = quote.getValidUntil() == null
@@ -110,9 +134,9 @@ public class PublicQuoteShareService {
 
         db.update(
                 "INSERT INTO commercial_quote_shares "
-                        + "(id,tenant_id,quote_id,token_hash,recipient_email,expires_at) "
-                        + "VALUES(?,?,?,?,?,?)",
-                shareId, tenant, quoteId, tokenHash, email, expiresAt);
+                        + "(id,tenant_id,quote_id,quote_version_id,token_hash,recipient_email,expires_at) "
+                        + "VALUES(?,?,?,?,?,?,?)",
+                shareId, tenant, quoteId, versionId, tokenHash, email, expiresAt);
 
         String url = frontendUrl.replaceAll("/$", "") + "/quote/view/" + rawToken;
 
@@ -123,9 +147,9 @@ public class PublicQuoteShareService {
                 url,
                 quote.getRoute(),
                 quote.getServiceType(),
-                quote.getQuotedAmount() == null
+                (quote.getLockedAmount() != null ? quote.getLockedAmount() : quote.getQuotedAmount()) == null
                         ? "—"
-                        : quote.getQuotedAmount().stripTrailingZeros().toPlainString(),
+                        : (quote.getLockedAmount() != null ? quote.getLockedAmount() : quote.getQuotedAmount()).stripTrailingZeros().toPlainString(),
                 quote.getValidUntil() == null ? "30 days" : quote.getValidUntil().toString());
 
         return new QuoteShareResult(shareId, quote.getQuoteId(), email, url, expiresAt);
@@ -196,10 +220,8 @@ public class PublicQuoteShareService {
         String newStatus = "ACCEPTED".equals(normalized) ? "WON" : "LOST";
 
         int updated = db.update(
-                "UPDATE commercial_quotes SET status=? WHERE id=? AND tenant_id=?",
-                newStatus,
-                row.quoteId(),
-                row.tenantId());
+                "UPDATE commercial_quotes SET status=?,accepted_version_id=CASE WHEN ?='WON' THEN quote_version_id ELSE accepted_version_id END,accepted_at=CASE WHEN ?='WON' THEN now() ELSE accepted_at END WHERE id=? AND tenant_id=?",
+                newStatus, newStatus, newStatus, row.quoteId(), row.tenantId());
 
         if (updated != 1) {
             throw new ResponseStatusException(
@@ -295,19 +317,21 @@ public class PublicQuoteShareService {
 
         var rows = db.query(
                 "SELECT "
-                        + "s.id, s.tenant_id, s.quote_id, s.response, s.booked_shipment_id, "
+                        + "s.id, s.tenant_id, s.quote_id, s.quote_version_id, s.response, s.booked_shipment_id, "
                         + "q.quote_id AS quote_reference, q.quote_date, q.client, q.route, "
-                        + "q.service_type, q.commodity, q.chargeable_weight_kg, q.quoted_amount, "
-                        + "q.valid_until, q.status "
+                        + "q.service_type, q.commodity, v.amount AS quoted_amount, v.currency, "
+                        + "q.chargeable_weight_kg, q.valid_until, q.status "
                         + "FROM commercial_quote_shares s "
                         + "JOIN commercial_quotes q "
                         + "ON q.id=s.quote_id AND q.tenant_id=s.tenant_id "
+                        + "JOIN commercial_quote_versions v ON v.id=s.quote_version_id AND v.tenant_id=s.tenant_id "
                         + "WHERE s.token_hash=? AND s.expires_at>now()"
                         + (forUpdate ? " FOR UPDATE" : ""),
                 (rs, n) -> new ShareRow(
                         rs.getObject("id", UUID.class),
                         rs.getObject("tenant_id", UUID.class),
                         rs.getObject("quote_id", UUID.class),
+                        rs.getObject("quote_version_id", UUID.class),
                         rs.getString("response"),
                         rs.getObject("booked_shipment_id", UUID.class),
                         rs.getString("quote_reference"),
@@ -318,6 +342,7 @@ public class PublicQuoteShareService {
                         rs.getString("commodity"),
                         rs.getBigDecimal("chargeable_weight_kg"),
                         rs.getBigDecimal("quoted_amount"),
+                        rs.getString("currency"),
                         rs.getObject("valid_until", LocalDate.class),
                         rs.getString("status")
                 ),
@@ -346,6 +371,8 @@ public class PublicQuoteShareService {
                 row.commodity(),
                 row.chargeableWeightKg(),
                 row.quotedAmount(),
+                row.currency(),
+                row.quoteVersionId(),
                 row.validUntil(),
                 row.status(),
                 actionable,
@@ -389,6 +416,7 @@ public class PublicQuoteShareService {
             UUID id,
             UUID tenantId,
             UUID quoteId,
+            UUID quoteVersionId,
             String response,
             UUID bookedShipmentId,
             String quoteReference,
@@ -399,6 +427,7 @@ public class PublicQuoteShareService {
             String commodity,
             java.math.BigDecimal chargeableWeightKg,
             java.math.BigDecimal quotedAmount,
+            String currency,
             LocalDate validUntil,
             String status) {
     }

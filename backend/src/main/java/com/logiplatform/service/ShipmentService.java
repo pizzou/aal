@@ -31,15 +31,21 @@ public class ShipmentService {
     private final ShipmentTrackingEventRepository trackingEventRepository;
     private final NotificationService notificationService;
     private final FinancePostingService financePostingService;
+    private final MilestoneOrchestrationService milestoneOrchestrationService;
+    private final OperationsEventStreamService operationsEventStreamService;
 
     public ShipmentService(ShipmentRepository shipmentRepository,
             ShipmentTrackingEventRepository trackingEventRepository,
             NotificationService notificationService,
-            FinancePostingService financePostingService) {
+            FinancePostingService financePostingService,
+            MilestoneOrchestrationService milestoneOrchestrationService,
+            OperationsEventStreamService operationsEventStreamService) {
         this.shipmentRepository = shipmentRepository;
         this.trackingEventRepository = trackingEventRepository;
         this.notificationService = notificationService;
         this.financePostingService = financePostingService;
+        this.milestoneOrchestrationService = milestoneOrchestrationService;
+        this.operationsEventStreamService = operationsEventStreamService;
     }
 
     @Transactional
@@ -63,6 +69,7 @@ public class ShipmentService {
         trackingEventRepository.save(new ShipmentTrackingEvent(
                 tenantId, saved.getId(), TrackingEventType.BOOKED, request.originAddress(),
                 "Shipment booked (" + mode + ")", Instant.now()));
+        milestoneOrchestrationService.initialize(saved.getId(), mode.name(), request.originAddress(), request.destinationAddress());
 
         return ShipmentResponse.from(saved);
     }
@@ -130,6 +137,8 @@ public class ShipmentService {
 
         shipment.updateStatus(newStatus);
         Shipment saved = shipmentRepository.save(shipment);
+        milestoneOrchestrationService.applyShipmentStatus(shipmentId, newStatus.name());
+        operationsEventStreamService.publish(TenantContext.getTenantId(), "shipment-status", java.util.Map.of("shipmentId", shipmentId, "reference", shipment.getReferenceCode(), "status", newStatus.name(), "at", Instant.now().toString()));
 
         if (newStatus == ShipmentStatus.DELIVERED) {
             notificationService.notify(shipmentId, shipment.getNotificationEmail(),

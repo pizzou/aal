@@ -42,14 +42,16 @@ public class GpsTrackingService {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final FleetEventPublisher fleetEventPublisher;
+    private final OperationsEventStreamService operationsEventStream;
 
     public GpsTrackingService(VehicleGpsPositionRepository positionRepository, VehicleService vehicleService,
-                               StringRedisTemplate redisTemplate, ObjectMapper objectMapper, FleetEventPublisher fleetEventPublisher) {
+                               StringRedisTemplate redisTemplate, ObjectMapper objectMapper, FleetEventPublisher fleetEventPublisher, OperationsEventStreamService operationsEventStream) {
         this.positionRepository = positionRepository;
         this.vehicleService = vehicleService;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.fleetEventPublisher = fleetEventPublisher;
+        this.operationsEventStream = operationsEventStream;
     }
 
     /** Matches the exact JSON shape verified directly against Redis before this was written. */
@@ -73,6 +75,7 @@ public class GpsTrackingService {
         try { fleetEventPublisher.publish(tenantId, vehicleId, position.getLatitude(), position.getLongitude(), position.getRecordedAt()); } catch (Exception ignored) { /* Kafka is an acceleration path; Postgres remains authoritative. */ }
 
         updateCache(vehicleId, position);
+        operationsEventStream.publish(tenantId, "gps", java.util.Map.of("vehicleId", vehicleId, "latitude", position.getLatitude(), "longitude", position.getLongitude(), "recordedAt", position.getRecordedAt().toString()));
         return PositionResponse.from(position);
     }
 

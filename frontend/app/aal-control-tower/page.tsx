@@ -8,6 +8,9 @@ import {
   Shipment,
   commandCenterApi,
   shipmentsApi,
+  platformHealthApi,
+  operationsApi,
+  openOperationsEventStream,
 } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
@@ -57,21 +60,33 @@ export default function AalControlTower() {
   const router = useRouter();
   const [data, setData] = useState<AdvancedDashboard | null>(null);
   const [shipments, setShipments] = useState<Shipment[]>([]);
+  const [fleetLive, setFleetLive] = useState<
+    import("@/lib/api-client").FleetLive[]
+  >([]);
   const [asOf, setAsOf] = useState(today());
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [systemHealth, setSystemHealth] = useState<{
+    healthy: boolean;
+    status: string;
+  } | null>(null);
+  const [liveEventAt, setLiveEventAt] = useState<string | null>(null);
 
   async function load() {
     if (!accessToken) return;
     setRefreshing(true);
     setError("");
     try {
-      const [dashboard, recent] = await Promise.all([
+      const [dashboard, recent, health] = await Promise.all([
         commandCenterApi.advanced(asOf),
         shipmentsApi.list({ page: 0, size: 5 }),
+        platformHealthApi.current(),
       ]);
+      const fleet = await operationsApi.fleetLive().catch(() => []);
       setData(dashboard);
       setShipments(recent.content);
+      setSystemHealth({ healthy: health.healthy, status: health.status });
+      setFleetLive(fleet);
     } catch (e) {
       setError(
         e instanceof ApiError
@@ -88,7 +103,21 @@ export default function AalControlTower() {
   }, [isLoading, accessToken, router]);
 
   useEffect(() => {
-    if (accessToken) void load();
+    if (!accessToken) return;
+    void load();
+    const close = openOperationsEventStream({
+      onEvent: () => {
+        setLiveEventAt(new Date().toISOString());
+        void load();
+      },
+      onError: () =>
+        setSystemHealth((current) =>
+          current
+            ? { ...current, healthy: false, status: "STREAM_DEGRADED" }
+            : current,
+        ),
+    });
+    return close;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, asOf]);
 
@@ -129,8 +158,21 @@ export default function AalControlTower() {
               onChange={(e) => setAsOf(e.target.value)}
             />
           </div>
-          <span className="dashboard-online">
-            <span /> System Online
+          <span
+            className={`dashboard-online ${systemHealth?.healthy === false ? "dashboard-online-danger" : ""}`}
+          >
+            <span />{" "}
+            {systemHealth?.healthy === false
+              ? "System Degraded"
+              : systemHealth?.healthy === true
+                ? "System Operational"
+                : "Checking system"}
+            {liveEventAt ? (
+              <small>
+                {" "}
+                · live {new Date(liveEventAt).toLocaleTimeString()}
+              </small>
+            ) : null}
           </span>
           <button
             className="btn"
@@ -295,25 +337,31 @@ export default function AalControlTower() {
                 aria-label="Global shipment tracking visualization"
               >
                 <div className="map-grid" />
-                <svg viewBox="0 0 520 280" preserveAspectRatio="none">
-                  <path
-                    d="M52 177 C150 70, 232 90, 290 119 S410 196, 468 72"
-                    className="route route-red"
-                  />
-                  <path
-                    d="M70 213 C176 190, 238 152, 328 162 S408 216, 474 199"
-                    className="route route-yellow"
-                  />
-                  <path
-                    d="M118 70 C208 117, 280 86, 356 94 S432 110, 468 152"
-                    className="route route-blue"
-                  />
-                </svg>
-                <MapPoint x="12%" y="62%" label="Nairobi" tone="red" />
-                <MapPoint x="54%" y="43%" label="Dubai" tone="yellow" />
-                <MapPoint x="88%" y="25%" label="London" tone="blue" />
-                <MapPoint x="66%" y="73%" label="Johannesburg" tone="green" />
-                <MapPoint x="37%" y="24%" label="New York" tone="red" />
+                {fleetLive
+                  .filter((x) => x.latitude != null && x.longitude != null)
+                  .slice(0, 40)
+                  .map((x) => (
+                    <MapPoint
+                      key={x.vehicleId}
+                      x={`${Math.max(3, Math.min(97, ((Number(x.longitude) + 180) / 360) * 100))}%`}
+                      y={`${Math.max(5, Math.min(95, ((90 - Number(x.latitude)) / 180) * 100))}%`}
+                      label={x.registrationNumber}
+                      tone={
+                        x.vehicleStatus === "ON_TRIP"
+                          ? "red"
+                          : x.vehicleStatus === "MAINTENANCE"
+                            ? "yellow"
+                            : "green"
+                      }
+                    />
+                  ))}
+                {!fleetLive.some(
+                  (x) => x.latitude != null && x.longitude != null,
+                ) && (
+                  <div className="map-empty-state">
+                    No live GPS positions available
+                  </div>
+                )}
               </div>
               <div className="tracking-legend">
                 <span>

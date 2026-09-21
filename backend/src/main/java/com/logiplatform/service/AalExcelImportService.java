@@ -61,6 +61,8 @@ public class AalExcelImportService {
         private final TaskRecordRepository tasks;
         private final ExpenseRecordRepository expenses;
         private final FinancePostingService financePostingService;
+        private final QuoteLifecycleService quoteLifecycleService;
+        private final MilestoneOrchestrationService milestoneOrchestrationService;
 
         public AalExcelImportService(
                         ShipmentRepository shipments,
@@ -70,7 +72,9 @@ public class AalExcelImportService {
                         PartnerRecordRepository partners,
                         TaskRecordRepository tasks,
                         ExpenseRecordRepository expenses,
-                        FinancePostingService financePostingService) {
+                        FinancePostingService financePostingService,
+                        QuoteLifecycleService quoteLifecycleService,
+                        MilestoneOrchestrationService milestoneOrchestrationService) {
 
                 this.shipments = shipments;
                 this.quotes = quotes;
@@ -80,6 +84,8 @@ public class AalExcelImportService {
                 this.tasks = tasks;
                 this.expenses = expenses;
                 this.financePostingService = financePostingService;
+        this.quoteLifecycleService = quoteLifecycleService;
+                this.milestoneOrchestrationService = milestoneOrchestrationService;
         }
 
         /**
@@ -578,6 +584,7 @@ public class AalExcelImportService {
                         }
 
                         Shipment saved = shipments.save(shipment);
+                        milestoneOrchestrationService.initialize(saved.getId(), saved.getTransportMode().name(), saved.getOriginAddress(), saved.getDestinationAddress());
 
                         if (supplierPaid.compareTo(previousSupplierPaid) > 0) {
 
@@ -674,7 +681,7 @@ public class AalExcelImportService {
                                                 .subtract(other);
                         }
 
-                        quotes.save(
+                        CommercialQuote importedQuote = quotes.save(
                                         new CommercialQuote(
                                                         tenant,
                                                         quoteId,
@@ -728,6 +735,7 @@ public class AalExcelImportService {
                                                                         headerMap,
                                                                         "Notes"),
                                                         "IMPORTED"));
+                quoteLifecycleService.ensureInitialVersion(importedQuote.getId());
 
                         count++;
                 }

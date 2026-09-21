@@ -101,7 +101,14 @@ public class PublicQuoteRequestService {
                 "PUBLIC_REQUEST",
                 request.email(),
                 request.contactName(),
-                request.phone()));
+                request.phone(),
+                "USD",
+                null,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                null));
 
         UUID requestId = UUID.randomUUID();
         String rawToken = generateToken();
@@ -236,7 +243,9 @@ public class PublicQuoteRequestService {
                         ? List.of("AIR", "SEA", "ROAD", "RAIL")
                         : List.of(normalizeMode(requestedMode));
 
-        UUID previous = TenantContext.getTenantId();
+        UUID previous = TenantContext.isSet()
+                ? TenantContext.getTenantId()
+                : null;
         TenantContext.setTenantId(tenant);
 
         try {

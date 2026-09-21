@@ -577,6 +577,8 @@ export type PublicQuoteView = {
   commodity?: string | null;
   chargeableWeightKg?: number | null;
   quotedAmount?: number | null;
+  currency?: string | null;
+  quoteVersionId?: string | null;
   validUntil?: string | null;
   status: string;
   actionable: boolean;
@@ -1246,6 +1248,17 @@ export type QuoteRecord = {
   notes?: string | null;
   pricingMode?: string | null;
   createdAt: string;
+  currency?: string | null;
+  incoterm?: string | null;
+  taxRate?: number | null;
+  taxAmount?: number | null;
+  customsCost?: number | null;
+  insuranceCost?: number | null;
+  customerCreditTerms?: string | null;
+  lockedAmount?: number | null;
+  lockedCurrency?: string | null;
+  priceLockedAt?: string | null;
+  acceptedVersionId?: string | null;
 };
 export type InvoiceRecord = {
   id: string;
@@ -1431,6 +1444,23 @@ export const commercialApi = {
       `/api/commercial/quotes/${id}/status?status=${encodeURIComponent(status)}`,
       { method: "PATCH" },
     ),
+  versions: (id: string) =>
+    apiFetch<any[]>(`/api/commercial/quotes/${id}/versions`),
+  createVersion: (id: string) =>
+    apiFetch<any>(`/api/commercial/quotes/${id}/versions`, { method: "POST" }),
+  lockVersion: (id: string, versionId: string) =>
+    apiFetch<any>(`/api/commercial/quotes/${id}/versions/${versionId}/lock`, {
+      method: "POST",
+    }),
+  approveVersion: (id: string, versionId: string) =>
+    apiFetch<any>(
+      `/api/commercial/quotes/${id}/versions/${versionId}/approve`,
+      { method: "POST" },
+    ),
+  acceptVersion: (id: string, versionId: string) =>
+    apiFetch<any>(`/api/commercial/quotes/${id}/versions/${versionId}/accept`, {
+      method: "POST",
+    }),
   shareQuote: (id: string, recipientEmail?: string) =>
     apiFetch<{
       shareId: string;
@@ -1491,6 +1521,70 @@ export const commercialApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+};
+
+export const platformHealthApi = {
+  current: () =>
+    apiFetch<{
+      status: string;
+      healthy: boolean;
+      checkedAt: string;
+      components: Record<string, unknown>;
+    }>("/api/platform/health"),
+};
+
+export function openOperationsEventStream(handlers: {
+  onEvent?: (event: { type: string; data: unknown }) => void;
+  onError?: () => void;
+}) {
+  const source = new EventSource(`${API_BASE}/api/operations/events`, {
+    withCredentials: true,
+  });
+
+  const bind = (type: string) =>
+    source.addEventListener(type, (event) => {
+      try {
+        handlers.onEvent?.({
+          type,
+          data: JSON.parse((event as MessageEvent).data),
+        });
+      } catch {
+        handlers.onEvent?.({
+          type,
+          data: (event as MessageEvent).data,
+        });
+      }
+    });
+
+  ["connected", "gps", "milestone", "milestones-initialized"].forEach(bind);
+  source.onerror = () => handlers.onError?.();
+
+  return () => source.close();
+}
+
+export const enterprisePlatformApi = {
+  carriers: () => apiFetch<any[]>("/api/platform/enterprise/carriers"),
+  lanes: () => apiFetch<any[]>("/api/platform/enterprise/lanes"),
+  locations: () => apiFetch<any[]>("/api/platform/enterprise/locations"),
+  pricingRules: () => apiFetch<any[]>("/api/platform/enterprise/pricing-rules"),
+  price: (data: Record<string, unknown>) =>
+    apiFetch<any>("/api/platform/enterprise/pricing/quote", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  convertLead: (clientId: string) =>
+    apiFetch<any>(`/api/platform/enterprise/clients/${clientId}/convert-lead`, {
+      method: "POST",
+    }),
+  clientActivities: (clientId: string) =>
+    apiFetch<any[]>(`/api/platform/enterprise/clients/${clientId}/activities`),
+  createActivity: (clientId: string, data: Record<string, unknown>) =>
+    apiFetch<any>(`/api/platform/enterprise/clients/${clientId}/activities`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  customsWorkflows: () =>
+    apiFetch<any[]>("/api/platform/enterprise/customs/workflows"),
 };
 
 export const auditApi = {

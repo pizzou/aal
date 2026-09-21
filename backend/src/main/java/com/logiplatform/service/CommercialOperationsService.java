@@ -30,6 +30,8 @@ public class CommercialOperationsService {
 
     private final BillingService billing;
     private final FinancePostingService finance;
+    private final QuoteLifecycleService quoteLifecycle;
+    private final MilestoneOrchestrationService milestoneOrchestrationService;
 
     public CommercialOperationsService(
             CommercialQuoteRepository quotes,
@@ -41,7 +43,9 @@ public class CommercialOperationsService {
             ShipmentRepository shipments,
             ShipmentTrackingEventRepository trackingEvents,
             BillingService billing,
-            FinancePostingService finance) {
+            FinancePostingService finance,
+            QuoteLifecycleService quoteLifecycle,
+            MilestoneOrchestrationService milestoneOrchestrationService) {
 
         this.quotes = quotes;
         this.invoices = invoices;
@@ -53,6 +57,8 @@ public class CommercialOperationsService {
         this.trackingEvents = trackingEvents;
         this.billing = billing;
         this.finance = finance;
+        this.quoteLifecycle = quoteLifecycle;
+        this.milestoneOrchestrationService = milestoneOrchestrationService;
     }
 
     @Transactional
@@ -97,7 +103,10 @@ public class CommercialOperationsService {
                 r.notes(),
                 r.pricingMode() == null ? "RULES_BASED" : r.pricingMode());
         quote.setCustomerContact(r.customerEmail(), r.customerContactName(), r.customerPhone());
-        return QuoteResponse.from(quotes.save(quote));
+        quote.applyCommercialTerms(r.currency(), r.incoterm(), r.taxRate(), r.taxAmount(), r.customsCost(), r.insuranceCost(), r.customerCreditTerms());
+        CommercialQuote saved = quotes.save(quote);
+        quoteLifecycle.ensureInitialVersion(saved.getId());
+        return QuoteResponse.from(saved);
     }
 
     @Transactional
@@ -115,8 +124,11 @@ public class CommercialOperationsService {
         TransportMode mode;
         try { mode = TransportMode.valueOf((quote.getServiceType() == null ? "ROAD" : quote.getServiceType()).toUpperCase(Locale.ROOT).replace(" FREIGHT","_FREIGHT").replace("SEA_FREIGHT","SEA").replace("AIR_FREIGHT","AIR").replace("ROAD_FREIGHT","ROAD")); }
         catch (Exception e) { mode = TransportMode.ROAD; }
+        BigDecimal governedAmount = quote.getLockedAmount() != null ? quote.getLockedAmount() : quote.getQuotedAmount();
+        String governedCurrency = quote.getLockedCurrency() != null ? quote.getLockedCurrency() : (quote.getCurrency() == null ? "USD" : quote.getCurrency());
+        if (governedAmount == null) throw conflict("Quote has no governed price");
         Shipment shipment = new Shipment(tenantId,ref,o,d,mode,null,null);
-        shipment.updateCommandCenterFields(quote.getClient(),null,quote.getCommodity(),null,o,null,d,quote.getChargeableWeightKg(),null,null,null,quote.getServiceType(),null,quote.getSupplierCost(),quote.getOtherCost(),quote.getQuotedAmount(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,"UNPAID",quote.getOwner(),null,null,null,null,null,quote.getNotes(),"USD");
+        shipment.updateCommandCenterFields(quote.getClient(),null,quote.getCommodity(),null,o,null,d,quote.getChargeableWeightKg(),null,null,null,quote.getServiceType(),null,quote.getSupplierCost(),quote.getOtherCost(),governedAmount,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,"UNPAID",quote.getOwner(),null,null,null,null,null,quote.getNotes(),governedCurrency);
         Shipment saved=shipments.save(shipment);
         trackingEvents.save(new ShipmentTrackingEvent(
                 tenantId,
@@ -125,6 +137,7 @@ public class CommercialOperationsService {
                 o,
                 "Shipment booked from quotation " + quote.getQuoteId(),
                 java.time.Instant.now()));
+        milestoneOrchestrationService.initialize(saved.getId(), mode.name(), o, d);
         quote.changeStatus("CONVERTED");
         quotes.save(quote);
         return new QuoteToShipmentResponse(quote.getId(),quote.getQuoteId(),saved.getId(),saved.getReferenceCode(),"CONVERTED","Quote converted to shipment");
@@ -154,6 +167,9 @@ public class CommercialOperationsService {
                 .orElseThrow(() -> notFound(
                         "Quote not found"));
 
+        if ("WON".equalsIgnoreCase(status) && quote.getPriceLockedAt() == null) {
+            throw conflict("Quote price must be locked before acceptance");
+        }
         quote.changeStatus(status);
 
         return QuoteResponse.from(
@@ -229,7 +245,7 @@ public class CommercialOperationsService {
         CommercialQuote q=quotes.findById(quoteId).filter(x->tenantId.equals(x.getTenantId())).orElseThrow(()->notFound("Quote not found"));
         if(!"WON".equalsIgnoreCase(q.getStatus()) && !"CONVERTED".equalsIgnoreCase(q.getStatus())) throw new ResponseStatusException(HttpStatus.CONFLICT,"Quote must be accepted before invoicing");
         String no=(invoiceNo==null||invoiceNo.isBlank())?"AAL-INV-"+q.getQuoteId():invoiceNo.trim();
-        return createInvoice(new InvoiceRequest(no,LocalDate.now(),q.getClient(),null,"USD",q.getQuotedAmount(),dueDate,q.getOwner(),"Generated from quote "+q.getQuoteId()));
+        return createInvoice(new InvoiceRequest(no,LocalDate.now(),q.getClient(),null,q.getLockedCurrency()==null?"USD":q.getLockedCurrency(),q.getLockedAmount()==null?q.getQuotedAmount():q.getLockedAmount(),dueDate,q.getOwner(),"Generated from accepted quote version "+(q.getAcceptedVersionId()==null?q.getQuoteId():q.getAcceptedVersionId())));
     }
 
     @Transactional(readOnly = true)
@@ -269,12 +285,9 @@ public class CommercialOperationsService {
 
         UUID tenantId = TenantContext.getTenantId();
 
-        if (clients.findByTenantIdAndClientId(
-                tenantId,
-                r.clientId()).isPresent()) {
-
-            throw conflict("Client exists");
-        }
+        if (clients.findByTenantIdAndClientId(tenantId, r.clientId()).isPresent()) throw conflict("Client exists");
+        if (r.clientCompany() != null && !r.clientCompany().isBlank() && clients.findFirstByTenantIdAndClientCompanyIgnoreCase(tenantId, r.clientCompany()).isPresent()) throw conflict("Client company already exists");
+        if (r.email() != null && !r.email().isBlank() && clients.findFirstByTenantIdAndEmailIgnoreCase(tenantId, r.email()).isPresent()) throw conflict("Client email already exists");
 
         return ClientResponse.from(
                 clients.save(

@@ -39,10 +39,10 @@ public class AdvancedDashboardService {
         return new Response(
                 date,
                 operations(tenantId, date),
-                financial(tenantId),
+                financial(tenantId, date),
                 fleet(tenantId),
-                modeMix(tenantId),
-                statusMix(tenantId),
+                modeMix(tenantId, date),
+                statusMix(tenantId, date),
                 trend(tenantId, date),
                 topLanes(tenantId, date),
                 exceptions(tenantId, date),
@@ -104,6 +104,7 @@ public class AdvancedDashboardService {
                             ) AS completion_rate
                         FROM shipments s
                         WHERE tenant_id = ?
+                          AND COALESCE(date_opened, created_at::date) <= ?
                         """,
                 (rs, rowNum) -> new OperationsKpi(
                         rs.getInt("total_shipments"),
@@ -115,10 +116,10 @@ public class AdvancedDashboardService {
                         rs.getInt("due_today"),
                         rs.getBigDecimal("on_time_rate"),
                         rs.getBigDecimal("completion_rate")),
-                asOf, asOf, asOf, tenantId);
+                asOf, asOf, asOf, tenantId, asOf);
     }
 
-    private FinancialKpi financial(UUID tenantId) {
+    private FinancialKpi financial(UUID tenantId, LocalDate asOf) {
         String displayCurrency = jdbc.queryForObject(
                 "SELECT COALESCE((SELECT default_currency FROM tenant_profiles WHERE tenant_id = ?), 'USD')",
                 String.class,
@@ -132,10 +133,10 @@ public class AdvancedDashboardService {
                 """
                         SELECT COUNT(DISTINCT COALESCE(NULLIF(UPPER(currency),''), ?))
                         FROM shipments
-                        WHERE tenant_id = ?
+                        WHERE tenant_id = ? AND date_opened IS NOT NULL AND date_opened <= ?
                         """,
                 Integer.class,
-                displayCurrency, tenantId);
+                displayCurrency, tenantId, asOf);
 
         BigDecimal[] totals = jdbc.queryForObject(
                 """
@@ -147,6 +148,8 @@ public class AdvancedDashboardService {
                             COALESCE(SUM(COALESCE(supplier_cost,0) + COALESCE(other_cost,0) + COALESCE(other_expenses,0)),0) AS operating_cost
                         FROM shipments
                         WHERE tenant_id = ?
+                          AND date_opened IS NOT NULL
+                          AND date_opened <= ?
                           AND COALESCE(NULLIF(UPPER(currency),''), ?) = ?
                         """,
                 (rs, rowNum) -> new BigDecimal[] {
@@ -156,13 +159,17 @@ public class AdvancedDashboardService {
                         rs.getBigDecimal("gross_cost"),
                         rs.getBigDecimal("operating_cost")
                 },
-                tenantId, displayCurrency, displayCurrency);
+                tenantId, asOf, displayCurrency, displayCurrency);
 
         BigDecimal billed = nz(totals[0]);
         BigDecimal collected = nz(totals[1]);
         BigDecimal receivables = nz(totals[2]);
         BigDecimal grossCost = nz(totals[3]);
-        BigDecimal operatingCost = nz(totals[4]);
+        BigDecimal shipmentOperatingCost = nz(totals[4]);
+        BigDecimal standaloneExpenses = nz(jdbc.queryForObject(
+                "SELECT COALESCE(SUM(COALESCE(usd_equivalent,0)),0) FROM expense_records WHERE tenant_id=? AND expense_date <= ? AND shipment_id IS NULL AND UPPER(COALESCE(status,'APPROVED')) NOT IN ('VOID','CANCELLED')",
+                BigDecimal.class, tenantId, asOf));
+        BigDecimal operatingCost = shipmentOperatingCost.add(standaloneExpenses);
         // Gross margin follows the AAL workbook rule: revenue minus supplier/other cost.
         // Other expenses remain in operating cost and the separate net-income view.
         BigDecimal grossMargin = billed.subtract(grossCost);
@@ -214,12 +221,12 @@ public class AdvancedDashboardService {
                 tenantId, tenantId, tenantId);
     }
 
-    private List<ModeMetric> modeMix(UUID tenantId) {
+    private List<ModeMetric> modeMix(UUID tenantId, LocalDate asOf) {
         List<ModeMetric> rows = jdbc.query(
                 """
                         SELECT transport_mode, COUNT(*) AS shipments
                         FROM shipments
-                        WHERE tenant_id = ?
+                        WHERE tenant_id = ? AND COALESCE(date_opened, created_at::date) <= ?
                         GROUP BY transport_mode
                         ORDER BY shipments DESC, transport_mode
                         """,
@@ -227,7 +234,7 @@ public class AdvancedDashboardService {
                         rs.getString("transport_mode"),
                         rs.getInt("shipments"),
                         BigDecimal.ZERO),
-                tenantId);
+                tenantId, asOf);
         int total = rows.stream().mapToInt(ModeMetric::shipments).sum();
         return rows.stream()
                 .map(x -> new ModeMetric(x.mode(), x.shipments(),
@@ -235,12 +242,12 @@ public class AdvancedDashboardService {
                 .toList();
     }
 
-    private List<StatusMetric> statusMix(UUID tenantId) {
+    private List<StatusMetric> statusMix(UUID tenantId, LocalDate asOf) {
         List<StatusMetric> rows = jdbc.query(
                 """
                         SELECT status, COUNT(*) AS shipments
                         FROM shipments
-                        WHERE tenant_id = ?
+                        WHERE tenant_id = ? AND COALESCE(date_opened, created_at::date) <= ?
                         GROUP BY status
                         ORDER BY shipments DESC, status
                         """,
@@ -248,7 +255,7 @@ public class AdvancedDashboardService {
                         rs.getString("status"),
                         rs.getInt("shipments"),
                         BigDecimal.ZERO),
-                tenantId);
+                tenantId, asOf);
         int total = rows.stream().mapToInt(StatusMetric::shipments).sum();
         return rows.stream()
                 .map(x -> new StatusMetric(x.status(), x.shipments(),
@@ -294,7 +301,7 @@ public class AdvancedDashboardService {
                                   AND status NOT IN ('DELIVERED','COMPLETED','CANCELLED')
                             ) AS delayed_shipments
                         FROM shipments
-                        WHERE tenant_id = ?
+                        WHERE tenant_id = ? AND COALESCE(date_opened, created_at::date) <= ?
                         GROUP BY lane
                         ORDER BY shipments DESC, lane
                         LIMIT 10
@@ -303,7 +310,7 @@ public class AdvancedDashboardService {
                         rs.getString("lane"),
                         rs.getInt("shipments"),
                         rs.getInt("delayed_shipments")),
-                asOf, tenantId);
+                asOf, tenantId, asOf);
     }
 
     private List<DashboardException> exceptions(UUID tenantId, LocalDate asOf) {

@@ -20,6 +20,8 @@ public final class PublicQuoteDtos {
             String commodity,
             BigDecimal chargeableWeightKg,
             BigDecimal quotedAmount,
+            String currency,
+            UUID quoteVersionId,
             LocalDate validUntil,
             String status,
             boolean actionable,

@@ -45,8 +45,17 @@ public class ExternalGatewayService {
     }
     private Map<String,Object> post(String base,String path,Map<String,Object> body,String msg,String idempotencyKey){
         if(base==null||base.isBlank())throw new IllegalStateException(msg);
-        HttpHeaders h=headers(); h.set("Idempotency-Key",idempotencyKey); ResponseEntity<Map> r=rest.exchange(base+path,HttpMethod.POST,new HttpEntity<>(body,h),Map.class);
-        return r.getBody()==null?Map.of():r.getBody();
+        RuntimeException last=null;
+        for(int attempt=1;attempt<=3;attempt++){
+            try {
+                HttpHeaders h=headers(); h.set("Idempotency-Key",idempotencyKey);
+                ResponseEntity<Map> r=rest.exchange(base+path,HttpMethod.POST,new HttpEntity<>(body,h),Map.class);
+                if(r.getStatusCode().is2xxSuccessful()) return r.getBody()==null?Map.of():r.getBody();
+                last=new IllegalStateException("External integration returned HTTP "+r.getStatusCode().value());
+            } catch (RuntimeException ex) { last=ex; }
+            try { Thread.sleep(250L * attempt); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw new IllegalStateException("External integration retry interrupted", ie); }
+        }
+        throw new IllegalStateException("External integration failed after 3 attempts", last);
     }
     private HttpHeaders headers(){HttpHeaders h=new HttpHeaders();h.setContentType(MediaType.APPLICATION_JSON);if(apiKey!=null&&!apiKey.isBlank())h.setBearerAuth(apiKey);return h;}
     private static String strip(String s){if(s==null)return "";return s.trim().replaceAll("/+$","");}

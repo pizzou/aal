@@ -30,7 +30,7 @@ public class DynamicPricingService {
     public PricingRecommendation recommend(String transportMode,BigDecimal weightKg,BigDecimal supplierCost,
                                            BigDecimal capacityUtilizationPercent,Integer daysToDeparture){
         if(weightKg==null||weightKg.signum()<=0)throw new IllegalArgumentException("weightKg must be positive");
-        var card=rates.findByTenantIdAndTransportMode(TenantContext.getTenantId(),transportMode.toUpperCase())
+        var card=rates.findFirstEffective(TenantContext.getTenantId(),transportMode.toUpperCase(),java.time.LocalDate.now())
                 .orElseThrow(()->new IllegalArgumentException("No rate card configured for "+transportMode));
         BigDecimal base=(supplierCost==null?card.getMinCharge():supplierCost).max(card.getMinCharge());
         BigDecimal factor=BigDecimal.ONE;

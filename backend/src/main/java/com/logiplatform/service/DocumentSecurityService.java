@@ -77,7 +77,7 @@ public class DocumentSecurityService {
             socket.setSoTimeout(timeoutMs);
             OutputStream out = socket.getOutputStream();
             InputStream in = socket.getInputStream();
-            out.write("zINSTREAM\\n".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            out.write(new byte[]{'z','I','N','S','T','R','E','A','M',0});
             byte[] buffer = new byte[8192];
             int read;
             while ((read = input.read(buffer)) >= 0) {
@@ -99,7 +99,7 @@ public class DocumentSecurityService {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         int b;
         while ((b = input.read()) != -1) {
-            if (b == '\\n') break;
+            if (b == 0) break;
             out.write(b);
             if (out.size() > 4096) break;
         }

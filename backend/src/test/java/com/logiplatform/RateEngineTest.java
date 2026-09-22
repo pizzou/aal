@@ -17,15 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
-
-
 import static org.junit.jupiter.api.Assertions.*;
-
-/**
- * The 100kg and 5kg scenarios here reproduce EXACTLY the numbers verified against
- * real Postgres NUMERIC arithmetic before this Java was written (see
- * RLS_VERIFICATION.md: 517.50 total for 100kg, min-charge floor for 5kg).
- */
 import static com.logiplatform.dto.ShipmentDtos.*;
 import static com.logiplatform.dto.ReportingDtos.*;
 import static com.logiplatform.dto.TmsDtos.*;
@@ -60,7 +52,7 @@ class RateEngineTest extends TenantTestSupport {
         assertEquals(new BigDecimal("450.00"), quote.baseCharge());
         assertEquals(new BigDecimal("67.50"), quote.fuelSurcharge());
         assertEquals(new BigDecimal("517.50"), quote.totalCharge());
-        assertEquals("RULES_BASED", quote.rateType(), "Must never claim to be AI/market-driven pricing");
+        assertEquals("RATE_CARD", quote.pricingSource(), "Must identify deterministic rate-card pricing, not AI/market-driven pricing");
     }
 
     @Test

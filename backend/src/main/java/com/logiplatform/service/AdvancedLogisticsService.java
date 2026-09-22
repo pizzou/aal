@@ -21,9 +21,13 @@ import java.util.*;
 public class AdvancedLogisticsService {
     private final JdbcTemplate db;
     private final ObjectMapper json = new ObjectMapper();
+    private final RateEngineService rateEngine;
 
-    public AdvancedLogisticsService(@Qualifier("tenantJdbcTemplate") JdbcTemplate db) {
+    public AdvancedLogisticsService(
+            @Qualifier("tenantJdbcTemplate") JdbcTemplate db,
+            RateEngineService rateEngine) {
         this.db = db;
+        this.rateEngine = rateEngine;
     }
 
     public Map<String,Object> capabilities() {
@@ -64,83 +68,9 @@ public class AdvancedLogisticsService {
         return result;
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public Map<String,Object> advancedRate(RatePreviewRequest r) {
-        String mode = norm(r.mode());
-        BigDecimal weight = nz(r.weightKg());
-        String currency = normCurrency(r.currency());
-        Map<String,Object> customerCard = findCustomerRateCard(r.clientId(), r.laneCode(), mode);
-        Map<String,Object> rule = customerCard == null
-                ? findPricingRule(r.clientId(), r.carrierId(), r.laneCode(), mode)
-                : null;
-        BigDecimal baseRate;
-        BigDecimal minCharge;
-        BigDecimal fuel;
-        BigDecimal security = BigDecimal.ZERO;
-        BigDecimal tax;
-        if (customerCard != null) {
-            baseRate = dec(customerCard.get("base_rate_per_kg"));
-            minCharge = dec(customerCard.get("min_charge"));
-            fuel = dec(customerCard.get("fuel_percent"));
-            tax = BigDecimal.ZERO;
-            currency = Objects.toString(customerCard.get("currency"), currency);
-        } else if (rule != null) {
-            baseRate = dec(rule.get("rate_per_kg"));
-            minCharge = dec(rule.get("min_charge"));
-            fuel = dec(rule.get("fuel_percent"));
-            tax = dec(rule.get("tax_percent"));
-            currency = Objects.toString(rule.get("currency"), currency);
-        } else {
-            Map<String,Object> card = findRateCard(r.clientId(), r.carrierId(), r.laneCode(), mode);
-            if (card == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No active rate configured for " + mode);
-            baseRate = dec(card.get("base_rate_per_kg"));
-            minCharge = dec(card.get("min_charge"));
-            fuel = dec(card.get("fuel_surcharge_percent"));
-            tax = BigDecimal.ZERO;
-            currency = Objects.toString(card.get("currency"), currency);
-        }
-
-        BigDecimal raw = baseRate.multiply(weight).setScale(4, RoundingMode.HALF_UP);
-        BigDecimal base = raw.max(minCharge);
-        BigDecimal fuelAmount = pct(base, fuel);
-        BigDecimal securityAmount = pct(base, security);
-        BigDecimal accessorial = BigDecimal.ZERO;
-        BigDecimal buy = BigDecimal.ZERO;
-        List<Map<String,Object>> charges = new ArrayList<>();
-
-        if (r.charges() != null) {
-            for (ChargeInput c : r.charges()) {
-                BigDecimal sell = nz(c.amount());
-                BigDecimal buyAmount = c.buyAmount() == null ? sell : c.buyAmount();
-                accessorial = accessorial.add(sell);
-                buy = buy.add(buyAmount);
-                Map<String,Object> charge = new LinkedHashMap<>();
-                charge.put("code", c.code());
-                charge.put("category", c.category() == null ? "ACCESSORIAL" : c.category());
-                charge.put("description", c.description() == null ? c.code() : c.description());
-                charge.put("sellAmount", sell);
-                charge.put("buyAmount", buyAmount);
-                charge.put("currency", normCurrency(c.currency()));
-                charges.add(charge);
-            }
-        }
-
-        BigDecimal subtotal = base.add(fuelAmount).add(securityAmount).add(accessorial);
-        BigDecimal taxAmount = pct(subtotal, tax);
-        BigDecimal total = subtotal.add(taxAmount).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal buyTotal = buy.setScale(2, RoundingMode.HALF_UP);
-        BigDecimal profit = total.subtract(buyTotal);
-        Map<String,Object> result = new LinkedHashMap<>();
-        result.put("mode", mode); result.put("currency", currency); result.put("weightKg", weight);
-        result.put("rawWeightCharge", raw); result.put("baseCharge", base);
-        result.put("fuelSurcharge", fuelAmount); result.put("securitySurcharge", securityAmount);
-        result.put("accessorialTotal", accessorial); result.put("taxAmount", taxAmount);
-        result.put("totalCharge", total); result.put("buyTotal", buyTotal);
-        result.put("expectedProfit", profit);
-        result.put("marginPercent", total.signum() == 0 ? BigDecimal.ZERO : profit.multiply(BigDecimal.valueOf(100)).divide(total, 2, RoundingMode.HALF_UP));
-        result.put("pricingSource", customerCard != null ? "CUSTOMER_RATE_CARD" : (rule != null ? "PRICING_RULE" : "RATE_CARD"));
-        result.put("charges", charges);
-        return result;
+        return rateEngine.advancedQuote(r);
     }
 
     @Transactional
@@ -437,30 +367,6 @@ public class AdvancedLogisticsService {
         return one("SELECT COALESCE(amount_billed_to_client,0) revenue,COALESCE(supplier_cost,0)+COALESCE(other_cost,0)+COALESCE(other_expenses,0) total_cost,COALESCE(amount_billed_to_client,0)-COALESCE(supplier_cost,0)-COALESCE(other_cost,0)-COALESCE(other_expenses,0) gross_profit,CASE WHEN COALESCE(amount_billed_to_client,0)=0 THEN 0 ELSE ROUND((COALESCE(amount_billed_to_client,0)-COALESCE(supplier_cost,0)-COALESCE(other_cost,0)-COALESCE(other_expenses,0))*100/NULLIF(amount_billed_to_client,0),2) END margin_percent FROM shipments WHERE id=?",shipmentId);
     }
 
-    private Map<String,Object> findCustomerRateCard(UUID clientId,String lane,String mode) {
-        if (clientId == null) return null;
-        try {
-            return db.queryForMap(
-                "SELECT * FROM customer_rate_cards WHERE client_id=? AND mode=? AND active=true " +
-                "AND (lane_code IS NULL OR lane_code=?) AND valid_from<=CURRENT_DATE " +
-                "AND (valid_until IS NULL OR valid_until>=CURRENT_DATE) " +
-                "ORDER BY (lane_code IS NOT NULL) DESC,valid_from DESC LIMIT 1",
-                clientId,mode,blankToNull(lane));
-        } catch (EmptyResultDataAccessException e) { return null; }
-    }
-
-    private Map<String,Object> findPricingRule(UUID clientId,UUID carrierId,String lane,String mode) {
-        try {
-            return db.queryForMap("SELECT * FROM pricing_rules WHERE mode=? AND active=true AND (client_id IS NULL OR client_id=?) AND (carrier_id IS NULL OR carrier_id=?) AND (lane_code IS NULL OR lane_code=?) AND valid_from<=CURRENT_DATE AND (valid_until IS NULL OR valid_until>=CURRENT_DATE) ORDER BY (client_id IS NOT NULL) DESC,(carrier_id IS NOT NULL) DESC,(lane_code IS NOT NULL) DESC,priority ASC LIMIT 1",mode,clientId,carrierId,blankToNull(lane));
-        } catch (EmptyResultDataAccessException e) { return null; }
-    }
-
-    private Map<String,Object> findRateCard(UUID clientId,UUID carrierId,String lane,String mode) {
-        try {
-            return db.queryForMap("SELECT * FROM rate_cards WHERE transport_mode=? AND active=true AND (client_id IS NULL OR client_id=?) AND (carrier_id IS NULL OR carrier_id=?) AND (lane_code IS NULL OR lane_code=?) AND valid_from<=CURRENT_DATE AND (valid_until IS NULL OR valid_until>=CURRENT_DATE) ORDER BY (client_id IS NOT NULL) DESC,(carrier_id IS NOT NULL) DESC,(lane_code IS NOT NULL) DESC,valid_from DESC LIMIT 1",mode,clientId,carrierId,blankToNull(lane));
-        } catch (EmptyResultDataAccessException e) { return null; }
-    }
-
     private Map<String,Object> exception(UUID shipmentId,String type,String severity,String description) {
         Long exists=db.queryForObject("SELECT count(*) FROM operational_exceptions WHERE shipment_id=? AND type=? AND status='OPEN'",Long.class,shipmentId,type);
         if (exists!=null && exists>0) return Map.of("type",type,"status","EXISTING");
@@ -477,12 +383,10 @@ public class AdvancedLogisticsService {
     private Map<String,Object> one(String sql,Object... args){ try { return db.queryForMap(sql,args); } catch(EmptyResultDataAccessException e){ throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Record not found"); } }
     private List<Map<String,Object>> rows(String sql,Object... args){ return db.queryForList(sql,args); }
     private long count(String sql,Object... args){ Long n=db.queryForObject(sql,Long.class,args); return n==null?0:n; }
-    private static BigDecimal pct(BigDecimal value,BigDecimal percent){return value.multiply(percent).divide(BigDecimal.valueOf(100),4,RoundingMode.HALF_UP);}
     private static BigDecimal dec(Object o){return o instanceof BigDecimal b?b:(o==null?BigDecimal.ZERO:new BigDecimal(o.toString()));}
     private static BigDecimal nz(BigDecimal v){return v==null?BigDecimal.ZERO:v;}
     private static int nzInt(Integer v){return v==null?0:v;}
     private static String norm(String s){return s==null?null:s.trim().toUpperCase(Locale.ROOT);}
     private static String normCurrency(String s){String v=(s==null||s.isBlank())?"USD":s.trim().toUpperCase(Locale.ROOT);return v.length()>3?v.substring(0,3):v;}
-    private static String blankToNull(String s){return s==null||s.isBlank()?null:s.trim();}
     private String toJson(Object o){try{return json.writeValueAsString(o);}catch(JsonProcessingException e){throw new IllegalStateException("Unable to serialize workflow result",e);}}
 }

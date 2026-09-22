@@ -15,7 +15,7 @@ class EnterpriseCompletionServiceTest {
     @Test
     void checklistContainsAllMasterPhasesAndNoDuplicatePhaseIds() {
         EnterpriseCompletionService service =
-                new EnterpriseCompletionService(mock(JdbcTemplate.class), "test-jwt-secret");
+                new EnterpriseCompletionService(mock(JdbcTemplate.class), "test-jwt-secret-that-is-at-least-32-bytes", "");
 
         List<Map<String, Object>> phases = service.checklist();
 

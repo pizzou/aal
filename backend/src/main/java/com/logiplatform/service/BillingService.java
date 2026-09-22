@@ -25,17 +25,20 @@ public class BillingService {
     private final CommercialInvoiceRepository invoices;
     private final CommercialPaymentRepository payments;
     private final FinancePostingService finance;
+    private final FinanceDocumentSequenceService documentSequences;
 
     public BillingService(
             ShipmentRepository shipments,
             CommercialInvoiceRepository invoices,
             CommercialPaymentRepository payments,
-            FinancePostingService finance) {
+            FinancePostingService finance,
+            FinanceDocumentSequenceService documentSequences) {
 
         this.shipments = shipments;
         this.invoices = invoices;
         this.payments = payments;
         this.finance = finance;
+        this.documentSequences = documentSequences;
     }
 
     @Transactional
@@ -82,14 +85,7 @@ public class BillingService {
                         ? "USD"
                         : shipment.getCurrency());
 
-        String invoiceNo = "AAL-INV-"
-                + LocalDate.now().getYear()
-                + "-"
-                + UUID.randomUUID()
-                        .toString()
-                        .replace("-", "")
-                        .substring(0, 10)
-                        .toUpperCase(Locale.ROOT);
+        String invoiceNo = documentSequences.nextInvoiceNumber();
 
         CommercialInvoice invoice = invoices.saveAndFlush(
                 new CommercialInvoice(

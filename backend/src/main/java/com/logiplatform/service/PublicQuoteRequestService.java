@@ -3,7 +3,6 @@ package com.logiplatform.service;
 import com.logiplatform.dto.CommercialDtos.QuoteRequest;
 import com.logiplatform.dto.PublicCommercialDtos.PublicQuoteOption;
 import com.logiplatform.dto.PublicCommercialDtos.PublicQuoteRequestResponse;
-import com.logiplatform.dto.RatingDtos.QuoteResponse;
 import com.logiplatform.repository.*;
 import com.logiplatform.tenancy.TenantContext;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -27,6 +26,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -251,23 +251,33 @@ public class PublicQuoteRequestService {
         try {
             for (String mode : modes) {
                 try {
-                    QuoteResponse quote = rates.quote(
-                            new com.logiplatform.dto.RatingDtos.QuoteRequest(
+                    Map<String,Object> quote = rates.advancedPublicQuote(
+                            tenant,
+                            new com.logiplatform.dto.AdvancedLogisticsDtos.RatePreviewRequest(
                                     mode,
+                                    request.origin(),
+                                    request.destination(),
+                                    laneCode(request.origin(), request.destination()),
+                                    null,
+                                    null,
                                     effectiveChargeableWeight(request).max(BigDecimal.ONE),
+                                    request.volumeCbm(),
+                                    request.commodity(),
+                                    "USD",
                                     List.of()));
 
                     options.add(new PublicQuoteOption(
                             mode,
                             label(mode),
-                            quote.baseCharge(),
-                            quote.fuelSurcharge(),
-                            quote.totalCharge(),
-                            quote.currency(),
-                            quote.rateType(),
-                            true,
+                            decimal(quote.get("baseCharge")),
+                            decimal(quote.get("fuelSurcharge")),
+                            decimal(quote.get("totalCharge")),
+                            String.valueOf(quote.getOrDefault("currency", "USD")),
+                            String.valueOf(quote.getOrDefault("pricingSource", "RULES_BASED")),
+                            !Boolean.TRUE.equals(quote.get("marginWarning")),
                             validUntil));
-                } catch (ResponseStatusException ignored) {
+                } catch (ResponseStatusException ex) {
+                    if (ex.getStatusCode() != HttpStatus.NOT_FOUND) throw ex;
                     // No public rate card configured for this mode.
                     // The customer can still request a formal quotation.
                 }
@@ -581,6 +591,18 @@ public class PublicQuoteRequestService {
             case "ALL", "ALL MODES" -> "AIR";
             default -> "ROAD";
         };
+    }
+
+    private static BigDecimal decimal(Object value) {
+        if (value == null) return BigDecimal.ZERO;
+        return value instanceof BigDecimal b ? b : new BigDecimal(value.toString());
+    }
+
+    private static String laneCode(String origin, String destination) {
+        String o = origin == null ? "" : origin.trim().toUpperCase(Locale.ROOT);
+        String d = destination == null ? "" : destination.trim().toUpperCase(Locale.ROOT);
+        if (o.isBlank() || d.isBlank()) return null;
+        return o + "-" + d;
     }
 
     private static String label(String mode) {

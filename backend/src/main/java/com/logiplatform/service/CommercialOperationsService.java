@@ -5,6 +5,7 @@ import com.logiplatform.dto.CommercialDtos.*;
 import com.logiplatform.model.*;
 import com.logiplatform.repository.*;
 import com.logiplatform.tenancy.TenantContext;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +33,8 @@ public class CommercialOperationsService {
     private final FinancePostingService finance;
     private final QuoteLifecycleService quoteLifecycle;
     private final MilestoneOrchestrationService milestoneOrchestrationService;
+    private final FinanceDocumentSequenceService documentSequences;
+    private final org.springframework.jdbc.core.JdbcTemplate tenantDb;
 
     public CommercialOperationsService(
             CommercialQuoteRepository quotes,
@@ -45,7 +48,9 @@ public class CommercialOperationsService {
             BillingService billing,
             FinancePostingService finance,
             QuoteLifecycleService quoteLifecycle,
-            MilestoneOrchestrationService milestoneOrchestrationService) {
+            MilestoneOrchestrationService milestoneOrchestrationService,
+            FinanceDocumentSequenceService documentSequences,
+            @Qualifier("tenantJdbcTemplate") org.springframework.jdbc.core.JdbcTemplate tenantDb) {
 
         this.quotes = quotes;
         this.invoices = invoices;
@@ -59,6 +64,8 @@ public class CommercialOperationsService {
         this.finance = finance;
         this.quoteLifecycle = quoteLifecycle;
         this.milestoneOrchestrationService = milestoneOrchestrationService;
+        this.documentSequences = documentSequences;
+        this.tenantDb = tenantDb;
     }
 
     @Transactional
@@ -244,8 +251,14 @@ public class CommercialOperationsService {
         UUID tenantId=TenantContext.getTenantId();
         CommercialQuote q=quotes.findById(quoteId).filter(x->tenantId.equals(x.getTenantId())).orElseThrow(()->notFound("Quote not found"));
         if(!"WON".equalsIgnoreCase(q.getStatus()) && !"CONVERTED".equalsIgnoreCase(q.getStatus())) throw new ResponseStatusException(HttpStatus.CONFLICT,"Quote must be accepted before invoicing");
-        String no=(invoiceNo==null||invoiceNo.isBlank())?"AAL-INV-"+q.getQuoteId():invoiceNo.trim();
-        return createInvoice(new InvoiceRequest(no,LocalDate.now(),q.getClient(),null,q.getLockedCurrency()==null?"USD":q.getLockedCurrency(),q.getLockedAmount()==null?q.getQuotedAmount():q.getLockedAmount(),dueDate,q.getOwner(),"Generated from accepted quote version "+(q.getAcceptedVersionId()==null?q.getQuoteId():q.getAcceptedVersionId())));
+        if (q.getPriceLockedAt() == null || q.getLockedAmount() == null || q.getAcceptedVersionId() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"Quote must have an accepted locked version before invoicing");
+        }
+        String no=(invoiceNo==null||invoiceNo.isBlank())?documentSequences.nextInvoiceNumber():invoiceNo.trim();
+        InvoiceResponse invoice = createInvoice(new InvoiceRequest(no,LocalDate.now(),q.getClient(),null,q.getLockedCurrency()==null?"USD":q.getLockedCurrency(),q.getLockedAmount(),dueDate,q.getOwner(),"Generated from accepted quote version "+q.getAcceptedVersionId()));
+        tenantDb.update("UPDATE commercial_invoices SET quote_id=?,quote_version_id=?,governed_amount=?,governed_currency=? WHERE id=? AND tenant_id=?", q.getId(), q.getAcceptedVersionId(), q.getLockedAmount(), q.getLockedCurrency(), invoice.id(), TenantContext.getTenantId());
+        tenantDb.update("INSERT INTO commercial_invoice_lines(id,tenant_id,invoice_id,line_no,charge_code,description,quantity,unit_price,amount,currency,source_type,source_reference) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id,invoice_id,line_no) DO NOTHING", UUID.randomUUID(), TenantContext.getTenantId(), invoice.id(), 1, "FREIGHT", "Governed quotation " + q.getQuoteId(), BigDecimal.ONE, q.getLockedAmount(), q.getLockedAmount(), q.getLockedCurrency(), "QUOTE", q.getQuoteId());
+        return invoice;
     }
 
     @Transactional(readOnly = true)

@@ -120,7 +120,7 @@ public class EnterpriseCompletionExtrasController {
         return service.pushSubscription(request);
     }
 
-    @PostMapping("/mobile/sync")
+    @PostMapping("/mobile/apply-sync")
     public Map<String, Object> sync(@Valid @RequestBody MobileSyncApplyRequest request) {
         return service.applyMobileSync(request);
     }

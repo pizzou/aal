@@ -36,6 +36,7 @@ spring:
 
 jwt:
   secret: ${JWT_SECRET}
+  previous-secret: ${JWT_PREVIOUS_SECRET:}
   expiration-minutes: ${JWT_EXPIRATION_MINUTES:60}
 security:
   cors:
@@ -78,3 +79,31 @@ management:
 aal:
   events:
     gps-topic: ${AAL_GPS_KAFKA_TOPIC:aal.gps.position}
+    gps-consumer-group: ${AAL_GPS_KAFKA_CONSUMER_GROUP:aal-gps-consumer-v1}
+    gps-consumer-enabled: ${AAL_GPS_KAFKA_CONSUMER_ENABLED:true}
+
+sms:
+  twilio:
+    enabled: ${SMS_TWILIO_ENABLED:false}
+    account-sid: ${TWILIO_ACCOUNT_SID:}
+    auth-token: ${TWILIO_AUTH_TOKEN:}
+    from-number: ${TWILIO_FROM_NUMBER:}
+    base-url: ${TWILIO_BASE_URL:https://api.twilio.com}
+
+document-security:
+  clamav:
+    enabled: ${CLAMAV_ENABLED:true}
+    required: ${CLAMAV_REQUIRED:true}
+    host: ${CLAMAV_HOST:clamav}
+    port: ${CLAMAV_PORT:3310}
+    timeout-ms: ${CLAMAV_TIMEOUT_MS:15000}
+    scanner-version: ${CLAMAV_SCANNER_VERSION:clamav}
+
+document-signature:
+  provider: ${DOCUMENT_SIGNATURE_PROVIDER:INTERNAL_AUDIT}
+  webhook-secret: ${DOCUMENT_SIGNATURE_WEBHOOK_SECRET:}
+
+paypal:
+  base-url: ${PAYPAL_BASE_URL:https://api-m.paypal.com}
+  client-id: ${PAYPAL_CLIENT_ID:}
+  client-secret: ${PAYPAL_CLIENT_SECRET:}

@@ -138,13 +138,9 @@ public class ProductionConfigurationValidator {
                         "Production email requires a valid Brevo sender email address");
             }
 
-            // AAL authentication mail must always use the sender that is verified
-            // in the Brevo account. This deliberately prevents a stale legacy
-            // AAL_MAIL_FROM deployment variable from changing the sender.
-            if (!"pmpumuropizzou@gmail.com".equalsIgnoreCase(mailFrom.trim())) {
-                throw new IllegalStateException(
-                        "Production Brevo sender must be pmpumuropizzou@gmail.com");
-            }
+            // The sender must be explicitly configured and syntactically valid.
+            // Brevo/domain verification belongs in deployment configuration rather
+            // than being hard-coded into application source.
         }
     }
 }

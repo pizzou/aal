@@ -42,6 +42,19 @@ public class GpsTrackingService {
         operationsEventStream.publish(tenantId,"gps",java.util.Map.of("vehicleId",vehicleId,"latitude",position.getLatitude(),"longitude",position.getLongitude(),"recordedAt",position.getRecordedAt().toString(),"source",position.getSource()));
         return PositionResponse.from(position);
     }
+    @Transactional
+    public PositionResponse recordIngestedPosition(UUID vehicleId, double latitude, double longitude, Double speedKmh, Double headingDegrees, Instant recordedAt, String source, String deviceId, Double accuracyMeters, Double batteryPercent) {
+        UUID tenantId = TenantContext.getTenantId();
+        vehicleService.getOwned(vehicleId);
+        VehicleGpsPosition position = new VehicleGpsPosition(tenantId, vehicleId, latitude, longitude, speedKmh, headingDegrees, recordedAt, source, deviceId, accuracyMeters, batteryPercent);
+        positionRepository.save(position);
+        updateCache(vehicleId, position);
+        try {
+            operationsEventStream.publish(tenantId, "gps", java.util.Map.of("vehicleId", vehicleId, "latitude", latitude, "longitude", longitude, "recordedAt", recordedAt.toString(), "source", position.getSource()));
+        } catch (Exception ignored) { }
+        return PositionResponse.from(position);
+    }
+
     @Transactional(readOnly=true) public PositionResponse latest(UUID vehicleId){
         vehicleService.getOwned(vehicleId); UUID tenantId=TenantContext.getTenantId();
         try{String cached=redisTemplate.opsForValue().get(REDIS_KEY_PREFIX+vehicleId); if(cached!=null){CachedPosition p=objectMapper.readValue(cached,CachedPosition.class);return new PositionResponse(vehicleId,p.lat(),p.lng(),p.speedKmh(),p.headingDegrees(),p.recordedAt(),p.source(),p.deviceId(),p.accuracyMeters(),p.batteryPercent());}}catch(Exception ignored){}

@@ -32,13 +32,16 @@ public class EnterpriseCompletionService {
     private final JdbcTemplate db;
     private final ObjectMapper json = new ObjectMapper();
     private final String jwtSecret;
+    private final String jwtPreviousSecret;
     private final SecureRandom random = new SecureRandom();
 
     public EnterpriseCompletionService(
             @Qualifier("tenantJdbcTemplate") JdbcTemplate db,
-            @org.springframework.beans.factory.annotation.Value("${jwt.secret}") String jwtSecret) {
+            @org.springframework.beans.factory.annotation.Value("${jwt.secret}") String jwtSecret,
+            @org.springframework.beans.factory.annotation.Value("${jwt.previous-secret:}") String jwtPreviousSecret) {
         this.db = db;
         this.jwtSecret = jwtSecret;
+        this.jwtPreviousSecret = jwtPreviousSecret == null ? "" : jwtPreviousSecret;
     }
 
     @Transactional
@@ -532,8 +535,21 @@ public class EnterpriseCompletionService {
     private byte[] base32decode(String s){String x=s.toUpperCase(Locale.ROOT).replace("=","");ByteArrayOutputStreamEx out=new ByteArrayOutputStreamEx();int buffer=0,bits=0;for(char c:x.toCharArray()){int v="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(c);if(v<0)throw new IllegalArgumentException("Invalid base32 secret");buffer=(buffer<<5)|v;bits+=5;if(bits>=8){out.write((buffer>>(bits-8))&255);bits-=8;}}return out.toByteArray();}
     private String totp(String secret,Instant now){try{long counter=now.getEpochSecond()/30;byte[] msg=ByteBuffer.allocate(8).putLong(counter).array();javax.crypto.Mac mac=javax.crypto.Mac.getInstance("HmacSHA1");mac.init(new javax.crypto.spec.SecretKeySpec(base32decode(secret),"HmacSHA1"));byte[] h=mac.doFinal(msg);int o=h[h.length-1]&15;int bin=((h[o]&127)<<24)|((h[o+1]&255)<<16)|((h[o+2]&255)<<8)|(h[o+3]&255);return String.format(Locale.ROOT,"%06d",bin%1000000);}catch(Exception e){throw new IllegalStateException("Unable to calculate TOTP",e);}}
     private String encrypt(String plain){try{byte[] iv=randomBytes(12);Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.ENCRYPT_MODE,new SecretKeySpec(keyBytes(),"AES"),new GCMParameterSpec(128,iv));byte[] ct=c.doFinal(plain.getBytes(StandardCharsets.UTF_8));return Base64.getUrlEncoder().withoutPadding().encodeToString(ByteBuffer.allocate(12+ct.length).put(iv).put(ct).array());}catch(Exception e){throw new IllegalStateException(e);}}
-    private String decrypt(String enc){try{byte[] all=Base64.getUrlDecoder().decode(enc);byte[] iv=Arrays.copyOfRange(all,0,12),ct=Arrays.copyOfRange(all,12,all.length);Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,new SecretKeySpec(keyBytes(),"AES"),new GCMParameterSpec(128,iv));return new String(c.doFinal(ct),StandardCharsets.UTF_8);}catch(Exception e){throw new IllegalStateException("Unable to decrypt MFA secret",e);}}
-    private byte[] keyBytes(){try{return Arrays.copyOf(MessageDigest.getInstance("SHA-256").digest(jwtSecret.getBytes(StandardCharsets.UTF_8)),16);}catch(Exception e){throw new IllegalStateException(e);}}
+    private String decrypt(String enc){
+        byte[] all;
+        try { all=Base64.getUrlDecoder().decode(enc); } catch(Exception e) { throw new IllegalStateException("Unable to decrypt MFA secret",e); }
+        if(all.length<13) throw new IllegalStateException("Unable to decrypt MFA secret");
+        byte[] iv=Arrays.copyOfRange(all,0,12),ct=Arrays.copyOfRange(all,12,all.length);
+        List<String> secrets=new ArrayList<>(); secrets.add(jwtSecret); if(!jwtPreviousSecret.isBlank()&&!jwtPreviousSecret.equals(jwtSecret)) secrets.add(jwtPreviousSecret);
+        Exception last=null;
+        for(String secret:secrets){
+            try{Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,new SecretKeySpec(keyBytes(secret),"AES"),new GCMParameterSpec(128,iv));return new String(c.doFinal(ct),StandardCharsets.UTF_8);}
+            catch(Exception e){last=e;}
+        }
+        throw new IllegalStateException("Unable to decrypt MFA secret",last);
+    }
+    private byte[] keyBytes(){return keyBytes(jwtSecret);}
+    private byte[] keyBytes(String secret){try{return Arrays.copyOf(MessageDigest.getInstance("SHA-256").digest(secret.getBytes(StandardCharsets.UTF_8)),16);}catch(Exception e){throw new IllegalStateException(e);}}
     private double distance(double a,double b,double c,double d){double r=6371000.0;double p1=Math.toRadians(a),p2=Math.toRadians(c),dp=Math.toRadians(c-a),dl=Math.toRadians(d-b);double q=Math.sin(dp/2)*Math.sin(dp/2)+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)*Math.sin(dl/2);return 2*r*Math.atan2(Math.sqrt(q),Math.sqrt(1-q));}
     private static final class ByteArrayOutputStreamEx{private byte[] b=new byte[64];private int n;void write(int x){if(n==b.length)b=Arrays.copyOf(b,n*2);b[n++]=(byte)x;}byte[]toByteArray(){return Arrays.copyOf(b,n);}}
     private Map<String,Object> phase(String id,String name,List<Map<String,Object>> items){

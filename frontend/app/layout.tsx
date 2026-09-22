@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import AppShell from "@/components/AppShell";
+import ServiceWorkerRegistration from "@/components/ServiceWorkerRegistration";
 
 export const metadata: Metadata = {
   title: "Aviation Africa Logistics Ltd | Global Logistics Control Tower",
@@ -37,6 +38,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <AuthProvider>
+          <ServiceWorkerRegistration />
           <AppShell>{children}</AppShell>
         </AuthProvider>
       </body>

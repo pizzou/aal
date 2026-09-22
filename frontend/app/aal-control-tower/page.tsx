@@ -216,7 +216,7 @@ export default function AalControlTower() {
               value={inTransit.toLocaleString()}
               meta={`${pct(data.operations.onTimeRatePercent)} on time`}
               trend="Live movement"
-              href="/tracking"
+              href="/track"
             />
             <DashboardKpi
               icon="check"
@@ -330,7 +330,7 @@ export default function AalControlTower() {
               <DashboardCardHeader
                 eyebrow="LIVE VISIBILITY"
                 title="Global Tracking"
-                href="/tracking"
+                href="/track"
               />
               <div
                 className="tracking-map"
@@ -394,7 +394,7 @@ export default function AalControlTower() {
                 tone="red"
               />
               <QuickAction
-                href="/tracking"
+                href="/track"
                 icon="search"
                 label="Track Shipment"
                 tone="yellow"

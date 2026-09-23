@@ -30,7 +30,7 @@ public class MailService {
     @Value("${app.mail.enabled:false}")
     private boolean mailEnabled;
 
-    @Value("${app.mail.from:pmpumuropizzou@gmail.com}")
+    @Value("${app.mail.from:}")
     private String from;
 
     @Value("${app.mail.brevo-api-key:}")
@@ -426,19 +426,24 @@ public class MailService {
         }
 
         if (brevoApiKey == null || brevoApiKey.isBlank()) {
-            log.warn("Brevo API key is not configured; email delivery skipped");
-            return;
+            MailDeliveryException ex =
+                    new MailDeliveryException("Transactional email provider is not configured");
+            log.error("Email delivery unavailable reason={}", ex.getMessage());
+            throw ex;
         }
 
         if (from == null || from.isBlank()) {
-            log.warn("Mail sender address is not configured; email delivery skipped");
-            return;
+            MailDeliveryException ex =
+                    new MailDeliveryException("Transactional email sender is not configured");
+            log.error("Email delivery unavailable reason={}", ex.getMessage());
+            throw ex;
         }
 
         try {
             sendOrThrow(to, subject, html);
         } catch (MailDeliveryException ex) {
             log.error("Email delivery failed reason={}", ex.getMessage());
+            throw ex;
         }
     }
 

@@ -1,14 +1,25 @@
 package com.logiplatform.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 
 import java.net.URI;
 
+/**
+ * Validates only invariants that make the application fundamentally unsafe or
+ * impossible to start in production. Optional external integrations are
+ * intentionally reported as readiness failures instead of crashing the
+ * entire application context.
+ */
 @Configuration
 @Profile("prod")
 public class ProductionConfigurationValidator {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(ProductionConfigurationValidator.class);
 
     public ProductionConfigurationValidator(
             @Value("${jwt.secret}") String jwtSecret,
@@ -24,26 +35,69 @@ public class ProductionConfigurationValidator {
             @Value("${app.mail.from:}") String mailFrom,
             @Value("${app.auth.otp.required:true}") boolean otpRequired) {
 
+        validateJwt(jwtSecret);
+        validateDatabase(dbUrl, dbUser, dbPassword);
+        validateCors(origins);
+        validateEnvironment(environment);
+        validateFrontend(frontendUrl);
+
+        // Email/provider configuration is operational readiness, not application
+        // construction. The authentication flow itself fails closed with a
+        // SERVICE_UNAVAILABLE response when OTP delivery is unavailable.
+        if (otpRequired && !mailEnabled) {
+            log.error(
+                    "Production OTP is required but transactional email is disabled. "
+                    + "Application will start, but login verification will remain unavailable "
+                    + "until AAL_MAIL_ENABLED=true and a valid provider is configured.");
+        }
+
+        if (otpRequired || mailEnabled) {
+            if (brevoApiKey == null || brevoApiKey.isBlank()) {
+                log.error(
+                        "Transactional email provider API key is not configured. "
+                        + "Configure BREVO_API_KEY before enabling production OTP.");
+            }
+
+            if (brevoUrl == null || brevoUrl.isBlank() || !brevoUrl.startsWith("https://")) {
+                log.error(
+                        "Transactional email provider URL is invalid. "
+                        + "Configure app.mail.brevo-url/BREVO_API_URL with an HTTPS URL.");
+            }
+
+            if (!validEmail(mailFrom)) {
+                log.error(
+                        "Transactional email sender is not configured. "
+                        + "Configure AAL_BREVO_SENDER_EMAIL with a verified sender address.");
+            }
+        }
+    }
+
+    private void validateJwt(String jwtSecret) {
         if (jwtSecret == null
                 || jwtSecret.isBlank()
                 || jwtSecret.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 32
-                || jwtSecret.contains("dev-only")
-                || jwtSecret.contains("change-me")) {
+                || containsPlaceholder(jwtSecret)) {
 
             throw new IllegalStateException(
                     "Production requires a strong JWT_SECRET of at least 32 bytes");
         }
+    }
 
-        if (dbUrl == null
-                || dbUrl.isBlank()
-                || dbUrl.contains("${")) {
+    private void validateDatabase(
+            String dbUrl,
+            String dbUser,
+            String dbPassword) {
 
+        if (dbUrl == null || dbUrl.isBlank() || dbUrl.contains("${")) {
             throw new IllegalStateException(
                     "Production requires SPRING_DATASOURCE_URL (or DATABASE_URL) to be configured");
         }
 
         boolean postgresJdbc = dbUrl.startsWith("jdbc:postgresql:");
-        boolean postgresUri = dbUrl.startsWith("postgresql://") || dbUrl.startsWith("postgres://");
+        boolean postgresUri =
+                dbUrl.startsWith("postgresql://")
+                        || dbUrl.startsWith("postgres://");
+
         if (!postgresJdbc && !postgresUri) {
             throw new IllegalStateException(
                     "Production requires a PostgreSQL datasource URL");
@@ -51,18 +105,28 @@ public class ProductionConfigurationValidator {
 
         String effectiveDbUser = dbUser;
         String effectiveDbPassword = dbPassword;
+
         if (postgresUri) {
             try {
                 String userInfo = URI.create(dbUrl).getUserInfo();
-                if ((effectiveDbUser == null || effectiveDbUser.isBlank()) && userInfo != null) {
+
+                if ((effectiveDbUser == null || effectiveDbUser.isBlank())
+                        && userInfo != null) {
+
                     String[] credentials = userInfo.split(":", 2);
                     effectiveDbUser = credentials[0];
-                    if ((effectiveDbPassword == null || effectiveDbPassword.isBlank()) && credentials.length == 2) {
+
+                    if ((effectiveDbPassword == null
+                            || effectiveDbPassword.isBlank())
+                            && credentials.length == 2) {
+
                         effectiveDbPassword = credentials[1];
                     }
                 }
             } catch (IllegalArgumentException ex) {
-                throw new IllegalStateException("Production DATABASE_URL is not a valid PostgreSQL URI", ex);
+                throw new IllegalStateException(
+                        "Production DATABASE_URL is not a valid PostgreSQL URI",
+                        ex);
             }
         }
 
@@ -85,62 +149,51 @@ public class ProductionConfigurationValidator {
             throw new IllegalStateException(
                     "Production database password is not configured with a production secret");
         }
+    }
 
+    private void validateCors(String origins) {
         if (origins == null
                 || origins.isBlank()
                 || origins.contains("localhost")
-                || origins.contains("*")) {
+                || origins.contains("*")
+                || origins.contains("http://")) {
 
             throw new IllegalStateException(
-                    "Production CORS must contain only explicit trusted origins");
+                    "Production CORS must contain only explicit HTTPS trusted origins");
         }
+    }
 
+    private void validateEnvironment(String environment) {
         if (environment == null
                 || !"production".equalsIgnoreCase(environment.trim())) {
 
             throw new IllegalStateException(
                     "Production profile requires app.environment=production");
         }
+    }
 
+    private void validateFrontend(String frontendUrl) {
         if (frontendUrl == null
                 || frontendUrl.isBlank()
                 || !frontendUrl.startsWith("https://")
                 || frontendUrl.contains("localhost")
                 || frontendUrl.contains("127.0.0.1")) {
+
             throw new IllegalStateException(
                     "Production requires a public APP_FRONTEND_URL without localhost");
         }
+    }
 
-        if (origins.trim().equalsIgnoreCase("*") || origins.contains("http://")) {
-            throw new IllegalStateException(
-                    "Production CORS origins must use HTTPS and explicit hostnames");
-        }
+    private static boolean validEmail(String value) {
+        return value != null
+                && !value.isBlank()
+                && value.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
+                && !value.contains("localhost");
+    }
 
-        if (otpRequired && !mailEnabled) {
-            throw new IllegalStateException(
-                    "Production email must be enabled when login OTP is required");
-        }
-
-        if (mailEnabled || otpRequired) {
-            if (brevoApiKey == null || brevoApiKey.isBlank()) {
-                throw new IllegalStateException(
-                        "Production authentication/email requires BREVO_API_KEY");
-            }
-            if (brevoUrl == null || brevoUrl.isBlank() || !brevoUrl.startsWith("https://")) {
-                throw new IllegalStateException(
-                        "Production email requires a valid HTTPS BREVO_API_URL");
-            }
-            if (mailFrom == null
-                    || mailFrom.isBlank()
-                    || !mailFrom.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
-                    || mailFrom.contains("localhost")) {
-                throw new IllegalStateException(
-                        "Production email requires a valid Brevo sender email address");
-            }
-
-            // The sender must be explicitly configured and syntactically valid.
-            // Brevo/domain verification belongs in deployment configuration rather
-            // than being hard-coded into application source.
-        }
+    private static boolean containsPlaceholder(String value) {
+        return value.contains("dev-only")
+                || value.contains("change-me")
+                || value.contains("change-before-production");
     }
 }

@@ -1,0 +1,9 @@
+{
+  "name": "Aviation Africa Logistics Ltd",
+  "short_name": "AAL Logistics",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#071A52",
+  "theme_color": "#071A52",
+  "icons": [{"src":"/branding/aal-logo.jpg","sizes":"192x192","type":"image/jpeg"},{"src":"/branding/aal-logo.jpg","sizes":"512x512","type":"image/jpeg"}]
+}

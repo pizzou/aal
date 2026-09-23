@@ -47,7 +47,7 @@ app:
     url: ${APP_FRONTEND_URL:https://portal.africalogisticaviation.com}
   mail:
     enabled: ${AAL_MAIL_ENABLED:true}
-    from: ${AAL_BREVO_SENDER_EMAIL:pmpumuropizzou@gmail.com}
+    from: ${AAL_BREVO_SENDER_EMAIL:}
     brevo-api-key: ${BREVO_API_KEY:}
   auth:
     otp:
@@ -59,7 +59,7 @@ app:
 notifications:
   smtp:
     enabled: ${NOTIFICATIONS_SMTP_ENABLED:false}
-  from-address: ${NOTIFICATIONS_FROM_ADDRESS:${AAL_BREVO_SENDER_EMAIL:pmpumuropizzou@gmail.com}}
+  from-address: ${NOTIFICATIONS_FROM_ADDRESS:${AAL_BREVO_SENDER_EMAIL:}}
 flightstatus:
   aviationstack:
     enabled: ${FLIGHTSTATUS_ENABLED:false}
@@ -107,3 +107,20 @@ paypal:
   base-url: ${PAYPAL_BASE_URL:https://api-m.paypal.com}
   client-id: ${PAYPAL_CLIENT_ID:}
   client-secret: ${PAYPAL_CLIENT_SECRET:}
+
+integration:
+  dcsa:
+    base-url: ${DCSA_BASE_URL:}
+  port:
+    base-url: ${PORT_EVENTS_BASE_URL:}
+  accounting:
+    base-url: ${ACCOUNTING_API_BASE_URL:}
+  whatsapp:
+    base-url: ${WHATSAPP_CLOUD_BASE_URL:https://graph.facebook.com}
+    token: ${WHATSAPP_CLOUD_TOKEN:}
+  edi:
+    enabled: ${EDI_INTEGRATION_ENABLED:true}
+    base-url: ${EDI_BASE_URL:}
+  webhook:
+    secret: ${INTEGRATION_WEBHOOK_SECRET:}
+    allowed-hosts: ${INTEGRATION_WEBHOOK_ALLOWED_HOSTS:}

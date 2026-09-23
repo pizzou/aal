@@ -11,6 +11,7 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -26,6 +27,7 @@ import java.util.Objects;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 public class SecurityConfig {
 
         @Value("${security.cors.allowed-origins:http://localhost:3000}")
@@ -129,6 +131,15 @@ public class SecurityConfig {
 
                                                 .requestMatchers("/api/enterprise-completion/**")
                                                 .hasAnyRole("ADMIN", "MANAGER", "FINANCE", "OPERATIONS")
+
+                                                .requestMatchers("/api/integrations/enterprise/**")
+                                                .hasAnyRole("ADMIN", "MANAGER", "OPERATIONS", "FINANCE")
+
+                                                .requestMatchers("/api/operations/excel-reconciliation")
+                                                .hasAnyRole("ADMIN", "MANAGER", "FINANCE", "OPERATIONS")
+
+                                                .requestMatchers("/api/production/**")
+                                                .hasRole("ADMIN")
 
                                                 .requestMatchers("/api/enterprise-advanced/**")
                                                 .hasAnyRole("ADMIN", "MANAGER", "FINANCE", "OPERATIONS", "DISPATCH", "WAREHOUSE", "AIR_CARGO")

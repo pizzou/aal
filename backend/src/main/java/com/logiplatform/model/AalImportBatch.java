@@ -40,7 +40,13 @@ public class AalImportBatch {
         this.clients = c.clients(); this.partners = c.partners(); this.tasks = c.tasks(); this.expenses = c.expenses();
     }
     public void fail() { this.status = "FAILED"; this.completedAt = Instant.now(); }
+    public UUID getId() { return id; }
+    public UUID getTenantId() { return tenantId; }
+    public String getSourceFilename() { return sourceFilename; }
+    public String getSourceSha256() { return sourceSha256; }
     public String getStatus() { return status; }
+    public Instant getStartedAt() { return startedAt; }
+    public Instant getCompletedAt() { return completedAt; }
     public AalImportCounts counts() { return new AalImportCounts(shipments, quotations, invoices, clients, partners, tasks, expenses); }
 
     public record AalImportCounts(int shipments, int quotations, int invoices, int clients, int partners, int tasks, int expenses) {}

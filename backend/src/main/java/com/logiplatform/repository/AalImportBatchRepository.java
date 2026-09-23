@@ -7,4 +7,5 @@ import java.util.UUID;
 
 public interface AalImportBatchRepository extends JpaRepository<AalImportBatch, UUID> {
     Optional<AalImportBatch> findByTenantIdAndSourceSha256(UUID tenantId, String sourceSha256);
+    Optional<AalImportBatch> findTopByTenantIdOrderByStartedAtDesc(UUID tenantId);
 }

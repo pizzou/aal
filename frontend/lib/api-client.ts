@@ -2114,3 +2114,36 @@ export const advancedLogisticsApi = {
   integrations: () =>
     apiFetch<Record<string, unknown>[]>("/api/advanced-logistics/integrations"),
 };
+
+export const productionApi = {
+  readiness: (strict = true) =>
+    apiFetch<Record<string, unknown>>(
+      `/api/production/readiness?strict=${strict}`,
+    ),
+};
+
+export const excelReconciliationApi = {
+  latest: () =>
+    apiFetch<Record<string, unknown>>("/api/operations/excel-reconciliation"),
+};
+
+export const enterpriseIntegrationApi = {
+  health: () =>
+    apiFetch<Record<string, unknown>>("/api/integrations/enterprise/health"),
+  ediBuild: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/integrations/enterprise/edi/build",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  ediParse: (data: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(
+      "/api/integrations/enterprise/edi/parse",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+};

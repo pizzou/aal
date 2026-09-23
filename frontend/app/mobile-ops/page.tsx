@@ -40,7 +40,17 @@ export default function MobileOperationsPage() {
   const [status, setStatus] = useState("");
   const [online, setOnline] = useState(true);
   const [pending, setPending] = useState(0);
+  const [barcode, setBarcode] = useState("");
+  const [barcodeType, setBarcodeType] = useState("CODE128");
+  const [location, setLocation] = useState<{
+    latitude: number;
+    longitude: number;
+    accuracy?: number;
+  } | null>(null);
+  const [scanStatus, setScanStatus] = useState("");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStream = useRef<MediaStream | null>(null);
   const drawing = useRef(false);
 
   const refreshPending = useCallback(
@@ -85,6 +95,73 @@ export default function MobileOperationsPage() {
 
   if (isLoading || !accessToken) return null;
 
+  function stopBarcodeScanner() {
+    cameraStream.current?.getTracks().forEach((track) => track.stop());
+    cameraStream.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }
+
+  async function startBarcodeScanner() {
+    setScanStatus("");
+    const BarcodeDetectorCtor = (
+      window as typeof window & {
+        BarcodeDetector?: new (options?: { formats?: string[] }) => {
+          detect(
+            video: HTMLVideoElement,
+          ): Promise<Array<{ rawValue?: string }>>;
+        };
+      }
+    ).BarcodeDetector;
+
+    if (!BarcodeDetectorCtor) {
+      setScanStatus(
+        "This device/browser does not expose native barcode scanning. Enter the barcode manually.",
+      );
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
+      });
+      cameraStream.current = stream;
+      const video = videoRef.current;
+      if (!video) {
+        stopBarcodeScanner();
+        return;
+      }
+      video.srcObject = stream;
+      await video.play();
+      const detector = new BarcodeDetectorCtor({
+        formats: ["qr_code", "code_128", "ean_13", "ean_8", "upc_a", "upc_e"],
+      });
+      setScanStatus("Camera scanner active. Point it at the barcode.");
+      const scan = async () => {
+        if (!cameraStream.current || !videoRef.current) return;
+        try {
+          const hits = await detector.detect(videoRef.current);
+          const raw = hits[0]?.rawValue?.trim();
+          if (raw) {
+            setBarcode(raw);
+            setScanStatus(`Barcode captured: ${raw}`);
+            stopBarcodeScanner();
+            return;
+          }
+        } catch {
+          // Continue scanning until the camera is stopped.
+        }
+        window.setTimeout(() => void scan(), 300);
+      };
+      void scan();
+    } catch (e) {
+      setScanStatus(
+        e instanceof Error ? e.message : "Unable to access the camera scanner.",
+      );
+      stopBarcodeScanner();
+    }
+  }
+
   function clearSignature() {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -120,6 +197,52 @@ export default function MobileOperationsPage() {
     drawing.current = false;
   }
 
+  async function captureLocation() {
+    setScanStatus("");
+    if (!navigator.geolocation) {
+      setScanStatus("Location is not supported by this device.");
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setLocation({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+          });
+          setScanStatus("Current GPS location captured.");
+          resolve();
+        },
+        (error) => {
+          setScanStatus(error.message || "Unable to capture GPS location.");
+          resolve();
+        },
+        { enableHighAccuracy: true, maximumAge: 15000, timeout: 10000 },
+      );
+    });
+  }
+
+  async function registerBarcode() {
+    const value = barcode.trim();
+    if (!value) {
+      setScanStatus("Enter or scan a barcode first.");
+      return;
+    }
+    try {
+      await advancedLogisticsApi.warehouseBarcode({
+        shipmentId: shipmentId.trim() || undefined,
+        barcode: value,
+        barcodeType,
+      });
+      setScanStatus("Barcode registered in the warehouse traceability ledger.");
+    } catch (e) {
+      setScanStatus(
+        e instanceof Error ? e.message : "Unable to register barcode.",
+      );
+    }
+  }
+
   async function syncPOD() {
     setStatus("");
     try {
@@ -138,6 +261,9 @@ export default function MobileOperationsPage() {
           signatureDataUrl: signatureUri,
           capturedAt: new Date().toISOString(),
           deviceId,
+          barcode: barcode.trim() || undefined,
+          barcodeType: barcodeType || undefined,
+          location: location || undefined,
           offlineCaptured: !navigator.onLine,
         }),
       };
@@ -183,6 +309,61 @@ export default function MobileOperationsPage() {
       </div>
 
       <section className="card" style={{ maxWidth: 760 }}>
+        <div className="eyebrow" style={{ marginTop: 24 }}>
+          FIELD TRACEABILITY
+        </div>
+        <h2 className="card-title">Barcode & GPS evidence</h2>
+        <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+          <input
+            value={barcode}
+            onChange={(e) => setBarcode(e.target.value)}
+            inputMode="numeric"
+            placeholder="Scan or enter barcode / QR value"
+          />
+          <select
+            value={barcodeType}
+            onChange={(e) => setBarcodeType(e.target.value)}
+          >
+            <option value="CODE128">CODE128</option>
+            <option value="QR">QR</option>
+            <option value="EAN13">EAN13</option>
+            <option value="GS1-128">GS1-128</option>
+          </select>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn" onClick={registerBarcode}>
+              Register barcode
+            </button>
+            <button className="btn" onClick={startBarcodeScanner}>
+              Scan with camera
+            </button>
+            <button className="btn" onClick={captureLocation}>
+              Capture GPS
+            </button>
+            <button className="btn" onClick={stopBarcodeScanner}>
+              Stop scanner
+            </button>
+          </div>
+          <video
+            ref={videoRef}
+            muted
+            playsInline
+            style={{
+              width: "100%",
+              maxWidth: 420,
+              borderRadius: 10,
+              background: "#111",
+            }}
+          />
+          {location && (
+            <div className="card-muted">
+              GPS: {location.latitude.toFixed(6)},{" "}
+              {location.longitude.toFixed(6)}
+              {location.accuracy ? ` · ±${Math.round(location.accuracy)}m` : ""}
+            </div>
+          )}
+          {scanStatus && <div className="alert">{scanStatus}</div>}
+        </div>
+
         <div className="eyebrow">PROOF OF DELIVERY</div>
         <h2 className="card-title">Capture delivery evidence</h2>
         <div style={{ display: "grid", gap: 12, marginTop: 16 }}>

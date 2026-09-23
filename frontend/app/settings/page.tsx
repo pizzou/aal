@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { ApiError, settingsApi, AalSystemSetting } from "@/lib/api-client";
+import {
+  ApiError,
+  settingsApi,
+  productionApi,
+  excelReconciliationApi,
+  AalSystemSetting,
+} from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
 
@@ -77,6 +83,13 @@ export default function SettingsPage() {
   const [stored, setStored] = useState<AalSystemSetting[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [readiness, setReadiness] = useState<Record<string, unknown> | null>(
+    null,
+  );
+  const [reconciliation, setReconciliation] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
 
   useEffect(() => {
     if (
@@ -100,6 +113,18 @@ export default function SettingsPage() {
       })
       .catch((e) => setMessage(errorMessage(e)));
   }, [accessToken]);
+
+  useEffect(() => {
+    if (!accessToken || role !== "ADMIN") return;
+    void productionApi
+      .readiness(true)
+      .then(setReadiness)
+      .catch((e) => setMessage(errorMessage(e)));
+    void excelReconciliationApi
+      .latest()
+      .then(setReconciliation)
+      .catch(() => undefined);
+  }, [accessToken, role]);
 
   const fields = useMemo(() => defaults[active] || [], [active]);
   const display = (group: string, key: string, fallback: string) =>
@@ -217,6 +242,46 @@ export default function SettingsPage() {
           </div>
         </section>
       </div>
+      {role === "ADMIN" && (
+        <section className="card" style={{ marginTop: 16 }}>
+          <div className="page-head">
+            <div>
+              <div className="eyebrow">RELEASE ASSURANCE</div>
+              <h2 className="card-title">Production readiness</h2>
+              <p className="card-muted">
+                Database, Flyway, notification, security, email and
+                document-scan readiness from the live backend.
+              </p>
+            </div>
+            <span
+              className={`status ${readiness?.ready ? "status-success" : "status-danger"}`}
+            >
+              {readiness?.ready ? "READY" : "REVIEW"}
+            </span>
+          </div>
+          {Array.isArray(readiness?.checks) && (
+            <div className="grid grid-4">
+              {(readiness.checks as Array<Record<string, unknown>>).map(
+                (check) => (
+                  <div className="card" key={String(check.name)}>
+                    <strong>{String(check.name)}</strong>
+                    <div className="card-muted">
+                      {check.pass ? "PASS" : "BLOCKED"}
+                    </div>
+                  </div>
+                ),
+              )}
+            </div>
+          )}
+          {reconciliation && (
+            <div className="card-muted" style={{ marginTop: 12 }}>
+              Excel migration reconciliation:{" "}
+              <strong>{String(reconciliation.status ?? "UNKNOWN")}</strong> ·
+              reconciled={String(reconciliation.reconciled ?? false)}
+            </div>
+          )}
+        </section>
+      )}
       <section className="card" style={{ marginTop: 16 }}>
         <h2 className="card-title">Operational control centres</h2>
         <div className="grid grid-4">

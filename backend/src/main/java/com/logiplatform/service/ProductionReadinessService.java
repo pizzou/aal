@@ -50,7 +50,7 @@ public class ProductionReadinessService {
             @Value("${app.auth.otp.required:false}") boolean otpRequired,
             @Value("${app.mail.enabled:false}") boolean mailEnabled,
             @Value("${app.mail.brevo-api-key:}") String brevoApiKey,
-            @Value("${app.mail.brevo-url:}") String brevoUrl,
+            @Value("${app.mail.brevo-url:https://api.brevo.com/v3/smtp/email}") String brevoUrl,
             @Value("${document-security.clamav.host:}") String clamavHost,
             @Value("${document-security.clamav.required:false}") boolean clamavRequired) {
 
@@ -62,7 +62,7 @@ public class ProductionReadinessService {
         this.appEnvironment = appEnvironment;
         this.frontendUrl = frontendUrl;
         this.jwtSecret = jwtSecret;
-        this.otpRequired = otpRequired;
+        this.otpRequired = otpRequired || "production".equalsIgnoreCase(appEnvironment);
         this.mailEnabled = mailEnabled;
         this.brevoApiKey = brevoApiKey;
         this.brevoUrl = brevoUrl;

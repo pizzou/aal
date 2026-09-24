@@ -41,17 +41,19 @@ public class ProductionConfigurationValidator {
         validateEnvironment(environment);
         validateFrontend(frontendUrl);
 
+        boolean effectiveOtpRequired = otpRequired || "production".equalsIgnoreCase(environment);
+
         // Email/provider configuration is operational readiness, not application
         // construction. The authentication flow itself fails closed with a
         // SERVICE_UNAVAILABLE response when OTP delivery is unavailable.
-        if (otpRequired && !mailEnabled) {
+        if (effectiveOtpRequired && !mailEnabled) {
             log.warn(
                     "Production OTP is required but transactional email is disabled. "
                     + "Application will start, but login verification will remain unavailable "
-                    + "until AAL_MAIL_ENABLED=true and a valid provider is configured.");
+                    + "until MAIL_ENABLED/AAL_MAIL_ENABLED is true and a valid provider is configured.");
         }
 
-        if (otpRequired || mailEnabled) {
+        if (effectiveOtpRequired || mailEnabled) {
             if (brevoApiKey == null || brevoApiKey.isBlank()) {
                 log.warn(
                         "Transactional email provider API key is not configured. "

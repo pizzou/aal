@@ -25,6 +25,7 @@ public class ProductionReadinessService {
 
     private final DataSource dataSource;
     private final ObjectProvider<NotificationSenderPort> notificationSender;
+    private final BrevoSenderResolver brevoSenderResolver;
     private final Environment environment;
     private final Flyway flyway;
     private final String appEnvironment;
@@ -34,13 +35,13 @@ public class ProductionReadinessService {
     private final boolean mailEnabled;
     private final String brevoApiKey;
     private final String brevoUrl;
-    private final String mailFrom;
     private final String clamavHost;
     private final boolean clamavRequired;
 
     public ProductionReadinessService(
             DataSource dataSource,
             ObjectProvider<NotificationSenderPort> notificationSender,
+            BrevoSenderResolver brevoSenderResolver,
             Environment environment,
             Flyway flyway,
             @Value("${app.environment:development}") String appEnvironment,
@@ -50,12 +51,12 @@ public class ProductionReadinessService {
             @Value("${app.mail.enabled:false}") boolean mailEnabled,
             @Value("${app.mail.brevo-api-key:}") String brevoApiKey,
             @Value("${app.mail.brevo-url:}") String brevoUrl,
-            @Value("${app.mail.from:}") String mailFrom,
             @Value("${document-security.clamav.host:}") String clamavHost,
             @Value("${document-security.clamav.required:false}") boolean clamavRequired) {
 
         this.dataSource = dataSource;
         this.notificationSender = notificationSender;
+        this.brevoSenderResolver = brevoSenderResolver;
         this.environment = environment;
         this.flyway = flyway;
         this.appEnvironment = appEnvironment;
@@ -65,7 +66,6 @@ public class ProductionReadinessService {
         this.mailEnabled = mailEnabled;
         this.brevoApiKey = brevoApiKey;
         this.brevoUrl = brevoUrl;
-        this.mailFrom = mailFrom;
         this.clamavHost = clamavHost;
         this.clamavRequired = clamavRequired;
     }
@@ -121,14 +121,14 @@ public class ProductionReadinessService {
                         || (mailEnabled
                         && !isBlank(brevoApiKey)
                         && httpsUrl(brevoUrl)
-                        && validEmail(mailFrom));
+                        && brevoSenderResolver.isReady());
 
         check(
                 checks,
                 "otpEmail",
                 otpMailReady,
                 strictProduction && otpRequired,
-                "OTP requires enabled transactional email with a valid provider key, HTTPS URL and verified sender");
+                "OTP requires enabled transactional email, a valid Brevo API key, HTTPS provider URL, and an active Brevo sender");
 
         boolean clamavReady =
                 !clamavRequired
@@ -181,13 +181,6 @@ public class ProductionReadinessService {
     private static boolean httpsUrl(String value) {
         return value != null
                 && value.startsWith("https://")
-                && !value.contains("localhost");
-    }
-
-    private static boolean validEmail(String value) {
-        return value != null
-                && !value.isBlank()
-                && value.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
                 && !value.contains("localhost");
     }
 

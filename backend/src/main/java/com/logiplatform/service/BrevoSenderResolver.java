@@ -11,14 +11,27 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.core.ParameterizedTypeReference;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.regex.Pattern;
 
+/**
+ * Resolves the sender that AAL should use for Brevo transactional email.
+ *
+ * Resolution order:
+ * 1. Explicit AAL_BREVO_SENDER_EMAIL / NOTIFICATIONS_FROM_ADDRESS.
+ * 2. A verified active sender from Brevo whose name matches the configured
+ *    AAL sender name.
+ * 3. The only active Brevo sender when the account has exactly one.
+ *
+ * The discovery result is cached for a short period so OTP requests do not
+ * call Brevo's sender registry for every login.
+ */
 @Service
 public class BrevoSenderResolver {
 
@@ -33,70 +46,65 @@ public class BrevoSenderResolver {
 
     private final RestTemplate restTemplate;
     private final String explicitSender;
-    private final String notificationsSender;
+    private final String notificationSender;
     private final String apiKey;
     private final String sendersUrl;
-    private final String preferredSenderName;
+    private final String senderName;
 
     private volatile String cachedSender;
     private volatile Instant cachedAt;
 
     public BrevoSenderResolver(
             @Value("${app.mail.from:}") String explicitSender,
-            @Value("${notifications.from-address:}") String notificationsSender,
+            @Value("${notifications.from-address:}") String notificationSender,
             @Value("${app.mail.brevo-api-key:}") String apiKey,
             @Value("${app.mail.brevo-senders-url:https://api.brevo.com/v3/senders}") String sendersUrl,
-            @Value("${app.mail.sender-name:Aviation Africa Logistics Ltd}") String preferredSenderName) {
+            @Value("${app.mail.sender-name:Aviation Africa Logistics Ltd}") String senderName) {
 
-        this.restTemplate = new RestTemplate();
+        SimpleClientHttpRequestFactory factory =
+                new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5000);
+        factory.setReadTimeout(10000);
 
+        this.restTemplate = new RestTemplate(factory);
         this.explicitSender = normalize(explicitSender);
-        this.notificationsSender = normalize(notificationsSender);
+        this.notificationSender = normalize(notificationSender);
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.sendersUrl = sendersUrl == null ? "" : sendersUrl.trim();
-        this.preferredSenderName =
-                preferredSenderName == null
-                        ? ""
-                        : preferredSenderName.trim();
+        this.senderName = senderName == null ? "" : senderName.trim();
     }
 
     public String resolveOrBlank() {
-        String explicit = valid(explicitSender)
-                ? explicitSender
-                : null;
-
-        if (explicit != null) {
-            cache(explicit);
-            return explicit;
+        if (valid(explicitSender)) {
+            cache(explicitSender);
+            return explicitSender;
         }
 
-        String notification = valid(notificationsSender)
-                ? notificationsSender
-                : null;
-
-        if (notification != null) {
-            cache(notification);
-            return notification;
+        if (valid(notificationSender)) {
+            cache(notificationSender);
+            return notificationSender;
         }
 
         String cached = cachedSender;
-        Instant timestamp = cachedAt;
-
-        if (cached != null
-                && timestamp != null
-                && Instant.now().isBefore(timestamp.plus(CACHE_TTL))) {
+        Instant cachedTimestamp = cachedAt;
+        if (valid(cached)
+                && cachedTimestamp != null
+                && Instant.now().isBefore(cachedTimestamp.plus(CACHE_TTL))) {
             return cached;
         }
 
-        return discover();
+        return discoverFromBrevo();
     }
 
     public boolean isReady() {
         return !resolveOrBlank().isBlank();
     }
 
-    private String discover() {
+    public boolean hasExplicitConfiguration() {
+        return valid(explicitSender) || valid(notificationSender);
+    }
 
+    private String discoverFromBrevo() {
         if (apiKey.isBlank() || sendersUrl.isBlank()) {
             return "";
         }
@@ -106,105 +114,63 @@ public class BrevoSenderResolver {
             headers.set("api-key", apiKey);
             headers.setAccept(List.of(MediaType.APPLICATION_JSON));
 
-            ResponseEntity<Map> response =
-                    restTemplate.exchange(
-                            sendersUrl,
-                            HttpMethod.GET,
-                            new HttpEntity<>(headers),
-                            Map.class);
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                    sendersUrl,
+                    HttpMethod.GET,
+                    new HttpEntity<>(headers),
+                    new ParameterizedTypeReference<>() {});
 
             if (!response.getStatusCode().is2xxSuccessful()
                     || response.getBody() == null) {
                 log.warn(
-                        "Unable to resolve Brevo sender: httpStatus={}",
+                        "Brevo sender discovery failed httpStatus={}",
                         response.getStatusCode().value());
                 return "";
             }
 
-            Object raw =
-                    response.getBody().get("senders");
-
-            if (!(raw instanceof List<?> senders)) {
-                log.warn("Brevo sender response did not contain a senders list");
+            Object rawSenders = response.getBody().get("senders");
+            if (!(rawSenders instanceof List<?> senders)) {
+                log.warn("Brevo sender discovery returned no sender list");
                 return "";
             }
 
-            String preferred = findPreferred(senders);
-
+            String preferred = findActiveByName(senders);
             if (!preferred.isBlank()) {
                 cache(preferred);
+                log.info(
+                        "Resolved AAL transactional sender from Brevo sender registry sender={}",
+                        mask(preferred));
                 return preferred;
             }
 
-            String singleActive = findSingleActive(senders);
-
-            if (!singleActive.isBlank()) {
-                cache(singleActive);
-
+            String onlyActive = findOnlyActiveSender(senders);
+            if (!onlyActive.isBlank()) {
+                cache(onlyActive);
                 log.info(
-                        "Resolved AAL transactional sender from Brevo sender registry sender={}",
-                        mask(singleActive));
-
-                return singleActive;
+                        "Resolved AAL transactional sender from sole active Brevo sender sender={}",
+                        mask(onlyActive));
+                return onlyActive;
             }
 
             log.error(
-                    "Brevo API returned no unambiguous active sender. "
-                            + "Configure AAL_BREVO_SENDER_EMAIL explicitly.");
-
+                    "Brevo account has no unambiguous active transactional sender. "
+                            + "Configure AAL_BREVO_SENDER_EMAIL or verify one Brevo sender.");
             return "";
 
         } catch (RestClientException ex) {
             log.error(
-                    "Unable to query Brevo sender registry type={}",
+                    "Brevo sender discovery request failed type={}",
                     ex.getClass().getSimpleName());
-
             return "";
         }
     }
 
-    private String findPreferred(List<?> senders) {
-
-        for (Object item : senders) {
-
-            if (!(item instanceof Map<?, ?> sender)) {
-                continue;
-            }
-
-            Object active = sender.get("active");
-            Object email = sender.get("email");
-            Object name = sender.get("name");
-
-            if (!Boolean.TRUE.equals(active)) {
-                continue;
-            }
-
-            String senderEmail =
-                    email == null ? "" : email.toString().trim();
-
-            String senderName =
-                    name == null ? "" : name.toString().trim();
-
-            if (!valid(senderEmail)) {
-                continue;
-            }
-
-            if (!preferredSenderName.isBlank()
-                    && preferredSenderName.equalsIgnoreCase(senderName)) {
-
-                return senderEmail;
-            }
+    private String findActiveByName(List<?> senders) {
+        if (senderName.isBlank()) {
+            return "";
         }
 
-        return "";
-    }
-
-    private String findSingleActive(List<?> senders) {
-
-        String found = "";
-
         for (Object item : senders) {
-
             if (!(item instanceof Map<?, ?> sender)) {
                 continue;
             }
@@ -213,29 +179,51 @@ public class BrevoSenderResolver {
                 continue;
             }
 
-            Object email = sender.get("email");
+            String name = stringValue(sender.get("name"));
+            String email = stringValue(sender.get("email"));
 
-            String senderEmail =
-                    email == null ? "" : email.toString().trim();
+            if (senderName.equalsIgnoreCase(name) && valid(email)) {
+                return email;
+            }
+        }
 
-            if (!valid(senderEmail)) {
+        return "";
+    }
+
+    private String findOnlyActiveSender(List<?> senders) {
+        String active = "";
+
+        for (Object item : senders) {
+            if (!(item instanceof Map<?, ?> sender)) {
                 continue;
             }
 
-            if (!found.isBlank()) {
-                // More than one active sender and no deterministic match.
+            if (!Boolean.TRUE.equals(sender.get("active"))) {
+                continue;
+            }
+
+            String email = stringValue(sender.get("email"));
+            if (!valid(email)) {
+                continue;
+            }
+
+            if (!active.isBlank()) {
                 return "";
             }
 
-            found = senderEmail;
+            active = email;
         }
 
-        return found;
+        return active;
     }
 
     private void cache(String email) {
         cachedSender = email;
         cachedAt = Instant.now();
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? "" : value.toString().trim();
     }
 
     private static String normalize(String value) {
@@ -250,15 +238,10 @@ public class BrevoSenderResolver {
     }
 
     private static String mask(String email) {
-
         int at = email.indexOf('@');
-
         if (at <= 1) {
             return "***";
         }
-
-        return email.charAt(0)
-                + "***"
-                + email.substring(at);
+        return email.charAt(0) + "***" + email.substring(at);
     }
 }

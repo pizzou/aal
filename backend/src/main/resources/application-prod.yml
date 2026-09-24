@@ -49,6 +49,7 @@ app:
     enabled: ${AAL_MAIL_ENABLED:true}
     from: ${AAL_BREVO_SENDER_EMAIL:${NOTIFICATIONS_FROM_ADDRESS:}}
     brevo-api-key: ${BREVO_API_KEY:}
+    brevo-senders-url: ${BREVO_SENDERS_API_URL:https://api.brevo.com/v3/senders}
   auth:
     otp:
       # Production login always requires email OTP verification.

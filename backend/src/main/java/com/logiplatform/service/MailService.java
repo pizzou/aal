@@ -26,12 +26,10 @@ public class MailService {
 
 
     private final RestTemplate restTemplate;
+    private final BrevoSenderResolver senderResolver;
 
     @Value("${app.mail.enabled:false}")
     private boolean mailEnabled;
-
-    @Value("${app.mail.from:}")
-    private String from;
 
     @Value("${app.mail.brevo-api-key:}")
     private String brevoApiKey;
@@ -45,7 +43,7 @@ public class MailService {
     @Value("${app.frontend.url:https://portal.africalogisticaviation.com}")
     private String frontendUrl;
 
-    public MailService() {
+    public MailService(BrevoSenderResolver senderResolver) {
 
         SimpleClientHttpRequestFactory factory =
                 new SimpleClientHttpRequestFactory();
@@ -55,6 +53,7 @@ public class MailService {
 
         this.restTemplate =
                 new RestTemplate(factory);
+        this.senderResolver = senderResolver;
     }
 
     @Async
@@ -255,8 +254,11 @@ public class MailService {
             throw new MailDeliveryException("Transactional email provider is not configured");
         }
 
-        if (from == null || from.isBlank()) {
-            throw new MailDeliveryException("Transactional email sender is not configured");
+        String resolvedSender = senderResolver.resolveOrBlank();
+        if (resolvedSender.isBlank()) {
+            throw new MailDeliveryException(
+                    "No active Brevo transactional sender is available. "
+                            + "Verify a sender in Brevo or configure AAL_BREVO_SENDER_EMAIL.");
         }
 
         sendOrThrow(
@@ -432,9 +434,12 @@ public class MailService {
             throw ex;
         }
 
-        if (from == null || from.isBlank()) {
+        String resolvedSender = senderResolver.resolveOrBlank();
+        if (resolvedSender.isBlank()) {
             MailDeliveryException ex =
-                    new MailDeliveryException("Transactional email sender is not configured");
+                    new MailDeliveryException(
+                            "No active Brevo transactional sender is available. "
+                                    + "Verify a sender in Brevo or configure AAL_BREVO_SENDER_EMAIL.");
             log.error("Email delivery unavailable reason={}", ex.getMessage());
             throw ex;
         }
@@ -461,9 +466,15 @@ public class MailService {
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
         headers.set("api-key", brevoApiKey);
 
+        String resolvedSender = senderResolver.resolveOrBlank();
+        if (resolvedSender.isBlank()) {
+            throw new MailDeliveryException(
+                    "No active Brevo transactional sender is available");
+        }
+
         Map<String, Object> payload = Map.of(
                 "sender", Map.of(
-                        "email", from,
+                        "email", resolvedSender,
                         "name", senderName == null || senderName.isBlank()
                                 ? "Aviation Africa Logistics Ltd"
                                 : senderName.trim()),
@@ -483,7 +494,7 @@ public class MailService {
                 log.error(
                         "Brevo rejected email httpStatus={} sender={} recipient={} detail={}",
                         response.getStatusCode().value(),
-                        maskEmail(from),
+                        maskEmail(resolvedSender),
                         maskEmail(to),
                         providerDetail);
                 throw new MailDeliveryException(
@@ -494,14 +505,14 @@ public class MailService {
             log.info(
                     "Transactional email accepted by Brevo recipient={} sender={} providerResponse={}",
                     maskEmail(to),
-                    maskEmail(from),
+                    maskEmail(resolvedSender),
                     summarizeProviderResponse(response.getBody()));
         } catch (HttpStatusCodeException ex) {
             String providerDetail = summarizeProviderResponse(ex.getResponseBodyAsString());
             log.error(
                     "Brevo rejected email httpStatus={} sender={} recipient={} detail={}",
                     ex.getStatusCode().value(),
-                    maskEmail(from),
+                    maskEmail(resolvedSender),
                     maskEmail(to),
                     providerDetail);
             throw new MailDeliveryException(

@@ -32,7 +32,7 @@ public class ProductionConfigurationValidator {
             @Value("${app.mail.enabled:false}") boolean mailEnabled,
             @Value("${app.mail.brevo-api-key:}") String brevoApiKey,
             @Value("${app.mail.brevo-url:https://api.brevo.com/v3/smtp/email}") String brevoUrl,
-            @Value("${app.mail.from:}") String mailFrom,
+            @Value("${app.mail.brevo-senders-url:https://api.brevo.com/v3/senders}") String brevoSendersUrl,
             @Value("${app.auth.otp.required:true}") boolean otpRequired) {
 
         validateJwt(jwtSecret);
@@ -64,10 +64,16 @@ public class ProductionConfigurationValidator {
                         + "Configure app.mail.brevo-url/BREVO_API_URL with an HTTPS URL.");
             }
 
-            if (!validEmail(mailFrom)) {
+            if (brevoSendersUrl == null
+                    || brevoSendersUrl.isBlank()
+                    || !brevoSendersUrl.startsWith("https://")) {
                 log.warn(
-                        "Transactional email sender is not configured. "
-                        + "Configure AAL_BREVO_SENDER_EMAIL with a verified sender address.");
+                        "Brevo sender registry URL is invalid. "
+                        + "Configure BREVO_SENDERS_API_URL with an HTTPS URL.");
+            } else {
+                log.info(
+                        "Transactional email sender will be resolved from the explicit sender configuration "
+                        + "or the active Brevo sender registry at runtime.");
             }
         }
     }
@@ -182,13 +188,6 @@ public class ProductionConfigurationValidator {
             throw new IllegalStateException(
                     "Production requires a public APP_FRONTEND_URL without localhost");
         }
-    }
-
-    private static boolean validEmail(String value) {
-        return value != null
-                && !value.isBlank()
-                && value.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
-                && !value.contains("localhost");
     }
 
     private static boolean containsPlaceholder(String value) {

@@ -14,9 +14,14 @@ spring:
       leak-detection-threshold: ${DB_LEAK_DETECTION_MS:0}
       pool-name: ${DB_POOL_NAME:LogiPlatformProductionPool}
   jpa:
-    hibernate: { ddl-auto: validate }
+    hibernate:
+      ddl-auto: validate
     open-in-view: false
-    properties: { hibernate: { format_sql: false, jdbc: { time_zone: UTC } } }
+    properties:
+      hibernate:
+        format_sql: false
+        jdbc:
+          time_zone: UTC
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -32,51 +37,61 @@ spring:
       timeout: ${SPRING_DATA_REDIS_TIMEOUT:2000ms}
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:}
-    producer: { acks: all, enable-idempotence: true }
+    producer:
+      acks: all
+      enable-idempotence: true
 
 jwt:
   secret: ${JWT_SECRET}
   previous-secret: ${JWT_PREVIOUS_SECRET:}
   expiration-minutes: ${JWT_EXPIRATION_MINUTES:60}
+
 security:
   cors:
     allowed-origins: ${SECURITY_CORS_ALLOWED_ORIGINS:${APP_FRONTEND_URL:https://aal-a.vercel.app},https://portal.africalogisticaviation.com}
+
 app:
   environment: production
   frontend:
     url: ${APP_FRONTEND_URL:https://aal-a.vercel.app}
   mail:
     enabled: ${AAL_MAIL_ENABLED:true}
-    from: ${AAL_BREVO_SENDER_EMAIL:${NOTIFICATIONS_FROM_ADDRESS:}}
-    brevo-api-key: ${BREVO_API_KEY:}
+    from: ${AAL_BREVO_SENDER_EMAIL:${NOTIFICATIONS_FROM_ADDRESS:pmpumuropizzou@gmail.com}}
+    sender-name: ${AAL_MAIL_SENDER_NAME:Aviation Africa Logistics Ltd}
+    brevo-url: ${BREVO_API_URL:https://api.brevo.com/v3/smtp/email}
     brevo-senders-url: ${BREVO_SENDERS_API_URL:https://api.brevo.com/v3/senders}
+    brevo-api-key: ${BREVO_API_KEY:}
   auth:
     otp:
-      # Production login always requires email OTP verification.
-      # This is intentionally not environment-overridable.
       required: true
     cookie:
       same-site: ${APP_AUTH_COOKIE_SAME_SITE:None}
+
 notifications:
   smtp:
     enabled: ${NOTIFICATIONS_SMTP_ENABLED:false}
-  from-address: ${NOTIFICATIONS_FROM_ADDRESS:${AAL_BREVO_SENDER_EMAIL:}}
+  from-address: ${NOTIFICATIONS_FROM_ADDRESS:${AAL_BREVO_SENDER_EMAIL:pmpumuropizzou@gmail.com}}
+
 flightstatus:
   aviationstack:
     enabled: ${FLIGHTSTATUS_ENABLED:false}
     api-key: ${AVIATIONSTACK_API_KEY:}
     base-url: ${AVIATIONSTACK_BASE_URL:https://api.aviationstack.com/v1}
+
 management:
   endpoint:
     health:
-      probes: { enabled: true }
+      probes:
+        enabled: true
   endpoints:
     web:
-      exposure: { include: health, prometheus, info }
+      exposure:
+        include: health,prometheus,info
   tracing:
     enabled: ${MANAGEMENT_TRACING_ENABLED:false}
     sampling:
-      probability: "${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:0.1}"
+      probability: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:0.1}
+
 aal:
   events:
     gps-topic: ${AAL_GPS_KAFKA_TOPIC:aal.gps.position}

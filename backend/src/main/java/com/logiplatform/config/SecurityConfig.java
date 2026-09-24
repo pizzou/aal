@@ -361,6 +361,7 @@ public class SecurityConfig {
                                                 "Authorization",
                                                 "Content-Type",
                                                 "Accept",
+                                                "Cache-Control",
                                                 "Origin",
                                                 "X-CSRF-Token",
                                                 "X-Request-Id"));

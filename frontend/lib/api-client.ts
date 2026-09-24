@@ -1570,7 +1570,6 @@ export function openOperationsEventStream(handlers: {
     controller = new AbortController();
     const headers = new Headers({
       Accept: "text/event-stream",
-      "Cache-Control": "no-cache",
     });
     applyAuthenticationHeader(headers, "/api/operations/events");
 

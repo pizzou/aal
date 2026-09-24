@@ -38,16 +38,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         "/actuator/info");
 
         private final JwtService jwtService;
-        private final JdbcTemplate authJdbcTemplate;
+        private final JdbcTemplate tenantJdbcTemplate;
         private final UUID singleTenantId;
 
         public JwtAuthenticationFilter(
                         JwtService jwtService,
-                        @Qualifier("authJdbcTemplate") JdbcTemplate authJdbcTemplate,
+                        @Qualifier("tenantJdbcTemplate") JdbcTemplate tenantJdbcTemplate,
                         @Value("${app.single-tenant.id}") UUID singleTenantId) {
 
                 this.jwtService = jwtService;
-                this.authJdbcTemplate = authJdbcTemplate;
+                this.tenantJdbcTemplate = tenantJdbcTemplate;
                 this.singleTenantId = singleTenantId;
         }
 
@@ -136,32 +136,41 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                                 "Token belongs to an unauthorized tenant");
                         }
 
-                        Long currentTokenVersion = authJdbcTemplate.query(
+                        /*
+                         * The JWT has already been cryptographically verified and the
+                         * tenant claim has been checked against AAL's single tenant.
+                         * Establish that tenant before the database lookup so the same
+                         * tenant-aware datasource used by the rest of the application
+                         * can enforce PostgreSQL RLS during token validation.
+                         */
+                        TenantContext.setTenantId(tenantId);
+
+                        UserSecurityState securityState = tenantJdbcTemplate.query(
                                         """
-                                                        SELECT token_version
+                                                        SELECT token_version, must_change_password
                                                         FROM users
                                                         WHERE id = ?
                                                           AND tenant_id = ?
                                                           AND active = true
                                                         """,
                                         rs -> rs.next()
-                                                        ? rs.getLong(1)
+                                                        ? new UserSecurityState(
+                                                                        rs.getLong("token_version"),
+                                                                        rs.getBoolean("must_change_password"))
                                                         : null,
                                         userId,
                                         tenantId);
 
-                        if (currentTokenVersion == null) {
+                        if (securityState == null) {
                                 throw new JwtException(
                                                 "User is inactive, missing, or no longer belongs to tenant");
                         }
 
-                        if (currentTokenVersion.longValue() != tokenVersionClaim.longValue()) {
+                        if (securityState.tokenVersion() != tokenVersionClaim.longValue()) {
                                 throw new JwtException("Token revoked");
                         }
 
-                        Boolean mustChangePassword = authJdbcTemplate.query(
-                                        "SELECT must_change_password FROM users WHERE id=? AND tenant_id=? AND active=true",
-                                        rs -> rs.next() ? rs.getBoolean(1) : false, userId, tenantId);
+                        boolean mustChangePassword = securityState.mustChangePassword();
                         String path = request.getRequestURI();
                         boolean passwordSetupPath = path.equals("/api/auth/session") || path.equals("/api/auth/logout")
                                         || path.equals("/api/auth/change-password") || path.equals("/api/auth/csrf");
@@ -233,6 +242,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                 || path.equals("/api/auth/csrf")
                                 || path.startsWith("/api/public/");
         }
+
+        private record UserSecurityState(long tokenVersion, boolean mustChangePassword) {}
 
         private String normalizeRole(String value) {
                 String normalized = value == null

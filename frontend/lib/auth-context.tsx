@@ -49,6 +49,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (cancelled) return;
 
+        if (!session.authenticated) {
+          clearAccessToken();
+          currentTenant = null;
+          setTenantId(null);
+          setRole(null);
+          setAccessTokenState(null);
+          return;
+        }
+
         if (session.role === "CUSTOMER") {
           try {
             await authApi.logout();

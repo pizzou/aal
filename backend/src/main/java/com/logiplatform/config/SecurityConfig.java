@@ -95,6 +95,11 @@ public class SecurityConfig {
                                                  * Public authentication/bootstrap endpoints.
                                                  */
                                                 .requestMatchers(
+                                                                org.springframework.http.HttpMethod.OPTIONS,
+                                                                "/**")
+                                                .permitAll()
+
+                                                .requestMatchers(
                                                                 "/api/auth/login",
                                                                 "/api/auth/send-login-otp",
                                                                 "/api/auth/password/forgot",

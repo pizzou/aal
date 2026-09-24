@@ -98,8 +98,8 @@ public class AuthController {
         String token = existing != null
                 && existing.length() == 64
                 && isHex(existing)
-                ? existing
-                : newCsrf();
+                        ? existing
+                        : newCsrf();
 
         ResponseCookie cookie = ResponseCookie.from(CSRF_COOKIE, token)
                 .httpOnly(false)
@@ -121,7 +121,9 @@ public class AuthController {
         if (authentication == null
                 || !authentication.isAuthenticated()
                 || !(authentication.getPrincipal() instanceof TenantPrincipal principal)) {
-            return ResponseEntity.status(401).build();
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CACHE_CONTROL, "no-store, no-cache, must-revalidate")
+                    .body(SessionResponse.anonymous());
         }
 
         boolean mustChange = authService.mustChangePassword(principal.userId());
@@ -129,6 +131,7 @@ public class AuthController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, "no-store, no-cache, must-revalidate")
                 .body(new SessionResponse(
+                        true,
                         principal.tenantId().toString(),
                         principal.userId().toString(),
                         principal.role(),
@@ -183,8 +186,10 @@ public class AuthController {
 
     private String normalizedSameSite() {
         String value = cookieSameSite == null ? "None" : cookieSameSite.trim();
-        if ("strict".equalsIgnoreCase(value)) return "Strict";
-        if ("lax".equalsIgnoreCase(value)) return "Lax";
+        if ("strict".equalsIgnoreCase(value))
+            return "Strict";
+        if ("lax".equalsIgnoreCase(value))
+            return "Lax";
         return "None";
     }
 
@@ -208,10 +213,15 @@ public class AuthController {
     }
 
     public record SessionResponse(
+            boolean authenticated,
             String tenantId,
             String userId,
             String role,
             boolean mustChangePassword) {
+
+        public static SessionResponse anonymous() {
+            return new SessionResponse(false, null, null, null, false);
+        }
     }
 
     public record CsrfResponse(String token) {

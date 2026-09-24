@@ -45,7 +45,7 @@ public class ProductionConfigurationValidator {
         // construction. The authentication flow itself fails closed with a
         // SERVICE_UNAVAILABLE response when OTP delivery is unavailable.
         if (otpRequired && !mailEnabled) {
-            log.error(
+            log.warn(
                     "Production OTP is required but transactional email is disabled. "
                     + "Application will start, but login verification will remain unavailable "
                     + "until AAL_MAIL_ENABLED=true and a valid provider is configured.");
@@ -53,19 +53,19 @@ public class ProductionConfigurationValidator {
 
         if (otpRequired || mailEnabled) {
             if (brevoApiKey == null || brevoApiKey.isBlank()) {
-                log.error(
+                log.warn(
                         "Transactional email provider API key is not configured. "
                         + "Configure BREVO_API_KEY before enabling production OTP.");
             }
 
             if (brevoUrl == null || brevoUrl.isBlank() || !brevoUrl.startsWith("https://")) {
-                log.error(
+                log.warn(
                         "Transactional email provider URL is invalid. "
                         + "Configure app.mail.brevo-url/BREVO_API_URL with an HTTPS URL.");
             }
 
             if (!validEmail(mailFrom)) {
-                log.error(
+                log.warn(
                         "Transactional email sender is not configured. "
                         + "Configure AAL_BREVO_SENDER_EMAIL with a verified sender address.");
             }

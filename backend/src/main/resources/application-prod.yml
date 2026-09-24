@@ -40,14 +40,14 @@ jwt:
   expiration-minutes: ${JWT_EXPIRATION_MINUTES:60}
 security:
   cors:
-    allowed-origins: ${SECURITY_CORS_ALLOWED_ORIGINS:${APP_FRONTEND_URL:https://portal.africalogisticaviation.com}}
+    allowed-origins: ${SECURITY_CORS_ALLOWED_ORIGINS:${APP_FRONTEND_URL:https://aal-a.vercel.app},https://portal.africalogisticaviation.com}
 app:
   environment: production
   frontend:
-    url: ${APP_FRONTEND_URL:https://portal.africalogisticaviation.com}
+    url: ${APP_FRONTEND_URL:https://aal-a.vercel.app}
   mail:
     enabled: ${AAL_MAIL_ENABLED:true}
-    from: ${AAL_BREVO_SENDER_EMAIL:}
+    from: ${AAL_BREVO_SENDER_EMAIL:${NOTIFICATIONS_FROM_ADDRESS:}}
     brevo-api-key: ${BREVO_API_KEY:}
   auth:
     otp:

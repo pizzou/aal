@@ -240,9 +240,10 @@ export interface AuthLoginResponse {
 }
 
 export interface AuthSessionResponse {
-  tenantId: string;
-  userId: string;
-  role: string;
+  authenticated: boolean;
+  tenantId: string | null;
+  userId: string | null;
+  role: string | null;
   mustChangePassword: boolean;
 }
 

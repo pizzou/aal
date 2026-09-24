@@ -7,6 +7,7 @@ const API_BASE = (
 
 const ACCESS_TOKEN_STORAGE_KEY = "aal.access-token";
 const AUTH_EXPIRED_EVENT = "aal:auth-expired";
+export const COOKIE_SESSION_SENTINEL = "__aal_cookie_session__";
 
 let csrfToken: string | null = null;
 let csrfRequest: Promise<string> | null = null;
@@ -18,7 +19,21 @@ function readStoredAccessToken(): string | null {
 
   try {
     const stored = window.sessionStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
-    accessToken = stored && stored.trim() ? stored : null;
+    const normalized = stored?.trim() ?? "";
+
+    // Older builds used the literal string "cookie" as a UI-only marker.
+    // It is not a JWT and must never be sent as `Authorization: Bearer cookie`.
+    if (
+      !normalized ||
+      normalized === "cookie" ||
+      normalized === COOKIE_SESSION_SENTINEL
+    ) {
+      window.sessionStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+      accessToken = null;
+      return null;
+    }
+
+    accessToken = normalized;
     return accessToken;
   } catch {
     return null;
@@ -160,7 +175,7 @@ function applyAuthenticationHeader(headers: Headers, path: string): void {
   if (headers.has("Authorization") || !shouldAttachAuthentication(path)) return;
 
   const token = readStoredAccessToken();
-  if (token) {
+  if (token && token !== COOKIE_SESSION_SENTINEL) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 }
@@ -1578,7 +1593,8 @@ export function openOperationsEventStream(handlers: {
         method: "GET",
         headers,
         credentials: "include",
-        cache: "no-store",
+        // Avoid a browser-generated Cache-Control request header on the SSE
+        // connection. Authorization already triggers the required CORS preflight.
         signal: controller.signal,
       });
 

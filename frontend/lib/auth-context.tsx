@@ -14,6 +14,7 @@ import {
   clearAccessToken,
   getAccessToken,
   setAccessToken,
+  COOKIE_SESSION_SENTINEL,
 } from "@/lib/api-client";
 
 interface AuthState {
@@ -50,11 +51,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
 
         if (!session.authenticated) {
-          clearAccessToken();
-          currentTenant = null;
-          setTenantId(null);
-          setRole(null);
-          setAccessTokenState(null);
+          // A login can complete while this initial session probe is still in
+          // flight. Never let the older anonymous response erase the newly
+          // issued bearer token.
+          if (!getAccessToken()) {
+            clearAccessToken();
+            currentTenant = null;
+            setTenantId(null);
+            setRole(null);
+            setAccessTokenState(null);
+          }
           return;
         }
 
@@ -78,7 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // A bearer token is used when the frontend and API are deployed on
         // different sites. The HttpOnly cookie remains a server-side fallback.
-        setAccessTokenState(getAccessToken() ?? "cookie");
+        setAccessTokenState(getAccessToken() ?? COOKIE_SESSION_SENTINEL);
 
         if (
           session.mustChangePassword &&
@@ -91,11 +97,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         if (cancelled) return;
 
-        clearAccessToken();
-        currentTenant = null;
-        setTenantId(null);
-        setRole(null);
-        setAccessTokenState(null);
+        // Do not wipe a token that may have been issued by a concurrent
+        // successful login while the session probe was still running.
+        if (!getAccessToken()) {
+          clearAccessToken();
+          currentTenant = null;
+          setTenantId(null);
+          setRole(null);
+          setAccessTokenState(null);
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -130,7 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     currentTenant = tenant;
     setTenantId(tenant);
     setRole(userRole);
-    setAccessTokenState(token ?? getAccessToken() ?? "cookie");
+    setAccessTokenState(token ?? getAccessToken() ?? COOKIE_SESSION_SENTINEL);
   }
 
   async function logout() {

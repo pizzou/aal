@@ -362,9 +362,11 @@ public class SecurityConfig {
                                                 "Content-Type",
                                                 "Accept",
                                                 "Cache-Control",
+                                                "Pragma",
                                                 "Origin",
                                                 "X-CSRF-Token",
-                                                "X-Request-Id"));
+                                                "X-Request-Id",
+                                                "X-Requested-With"));
 
                 config.setExposedHeaders(
                                 List.of("X-Request-Id"));

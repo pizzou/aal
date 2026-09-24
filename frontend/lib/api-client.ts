@@ -1549,31 +1549,121 @@ export const platformHealthApi = {
 
 export function openOperationsEventStream(handlers: {
   onEvent?: (event: { type: string; data: unknown }) => void;
-  onError?: () => void;
+  onError?: (status?: number) => void;
 }) {
-  const source = new EventSource(`${API_BASE}/api/operations/events`, {
-    withCredentials: true,
-  });
+  let stopped = false;
+  let controller: AbortController | null = null;
+  let reconnectTimer: number | null = null;
+  let reconnectAttempt = 0;
 
-  const bind = (type: string) =>
-    source.addEventListener(type, (event) => {
-      try {
-        handlers.onEvent?.({
-          type,
-          data: JSON.parse((event as MessageEvent).data),
-        });
-      } catch {
-        handlers.onEvent?.({
-          type,
-          data: (event as MessageEvent).data,
-        });
-      }
+  const parseEvent = (type: string, data: string) => {
+    try {
+      handlers.onEvent?.({ type, data: JSON.parse(data) });
+    } catch {
+      handlers.onEvent?.({ type, data });
+    }
+  };
+
+  const connect = async () => {
+    if (stopped) return;
+
+    controller = new AbortController();
+    const headers = new Headers({
+      Accept: "text/event-stream",
+      "Cache-Control": "no-cache",
     });
+    applyAuthenticationHeader(headers, "/api/operations/events");
 
-  ["connected", "gps", "milestone", "milestones-initialized"].forEach(bind);
-  source.onerror = () => handlers.onError?.();
+    try {
+      const response = await fetch(`${API_BASE}/api/operations/events`, {
+        method: "GET",
+        headers,
+        credentials: "include",
+        cache: "no-store",
+        signal: controller.signal,
+      });
 
-  return () => source.close();
+      if (!response.ok || !response.body) {
+        handlers.onError?.(response.status);
+        if (response.status === 401) notifyAuthenticationExpired();
+        scheduleReconnect();
+        return;
+      }
+
+      reconnectAttempt = 0;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let eventType = "message";
+      let eventData: string[] = [];
+
+      const dispatch = () => {
+        if (eventData.length === 0) return;
+        parseEvent(eventType, eventData.join("\n"));
+        eventType = "message";
+        eventData = [];
+      };
+
+      while (!stopped) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let boundary = buffer.indexOf("\n");
+        while (boundary >= 0) {
+          let line = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 1);
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+
+          if (line === "") {
+            dispatch();
+          } else if (!line.startsWith(":")) {
+            const separator = line.indexOf(":");
+            const field = separator >= 0 ? line.slice(0, separator) : line;
+            let valueText = separator >= 0 ? line.slice(separator + 1) : "";
+            if (valueText.startsWith(" ")) valueText = valueText.slice(1);
+
+            if (field === "event") eventType = valueText || "message";
+            else if (field === "data") eventData.push(valueText);
+          }
+
+          boundary = buffer.indexOf("\n");
+        }
+      }
+
+      if (!stopped) {
+        handlers.onError?.();
+        scheduleReconnect();
+      }
+    } catch (error) {
+      if (
+        !stopped &&
+        !(error instanceof DOMException && error.name === "AbortError")
+      ) {
+        handlers.onError?.();
+        scheduleReconnect();
+      }
+    }
+  };
+
+  const scheduleReconnect = () => {
+    if (stopped || reconnectTimer !== null) return;
+    const delay = Math.min(30000, 1000 * 2 ** reconnectAttempt);
+    reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      void connect();
+    }, delay);
+  };
+
+  void connect();
+
+  return () => {
+    stopped = true;
+    if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    controller?.abort();
+  };
 }
 
 export const auditApi = {

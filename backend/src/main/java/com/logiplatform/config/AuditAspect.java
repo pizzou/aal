@@ -71,6 +71,7 @@ public class AuditAspect {
     @Around("""
             execution(* com.logiplatform.controller..*(..))
             && !within(com.logiplatform.controller.PublicTrackingController)
+            && !within(com.logiplatform.controller.OperationsEventStreamController)
             """)
     public Object audit(ProceedingJoinPoint pjp) throws Throwable {
         if (!TenantContext.isSet()) {

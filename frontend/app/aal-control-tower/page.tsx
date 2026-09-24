@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AdvancedDashboard,
   ApiError,
@@ -71,6 +71,8 @@ export default function AalControlTower() {
     status: string;
   } | null>(null);
   const [liveEventAt, setLiveEventAt] = useState<string | null>(null);
+  const refreshTimerRef = useRef<number | null>(null);
+  const lastLoadRef = useRef(0);
 
   async function load() {
     if (!accessToken) return;
@@ -105,19 +107,39 @@ export default function AalControlTower() {
   useEffect(() => {
     if (!accessToken) return;
     void load();
-    const close = openOperationsEventStream({
-      onEvent: () => {
-        setLiveEventAt(new Date().toISOString());
+
+    const scheduleEventRefresh = () => {
+      setLiveEventAt(new Date().toISOString());
+      if (refreshTimerRef.current !== null) return;
+
+      const elapsed = Date.now() - lastLoadRef.current;
+      const delay = Math.max(1000 - elapsed, 0);
+      refreshTimerRef.current = window.setTimeout(() => {
+        refreshTimerRef.current = null;
+        lastLoadRef.current = Date.now();
         void load();
-      },
-      onError: () =>
+      }, delay);
+    };
+
+    const close = openOperationsEventStream({
+      onEvent: scheduleEventRefresh,
+      onError: (status) => {
+        if (status === 401) return;
         setSystemHealth((current) =>
           current
             ? { ...current, healthy: false, status: "STREAM_DEGRADED" }
             : current,
-        ),
+        );
+      },
     });
-    return close;
+
+    return () => {
+      close();
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, asOf]);
 

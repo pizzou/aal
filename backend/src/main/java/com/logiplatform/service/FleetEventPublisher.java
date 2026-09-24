@@ -1,6 +1,8 @@
 package com.logiplatform.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -13,22 +15,34 @@ import java.util.UUID;
 
 @Service
 public class FleetEventPublisher {
-    private final KafkaTemplate<String,String> kafka;
+    private static final Logger log = LoggerFactory.getLogger(FleetEventPublisher.class);
+
+    private final KafkaTemplate<String, String> kafka;
     private final ObjectMapper mapper;
     private final String topic;
+    private final boolean kafkaEnabled;
+    private final String bootstrapServers;
 
     public FleetEventPublisher(
-            @Qualifier("gpsKafkaTemplate") KafkaTemplate<String,String> kafka,
+            @Qualifier("gpsKafkaTemplate") KafkaTemplate<String, String> kafka,
             ObjectMapper mapper,
-            @Value("${aal.events.gps-topic:aal.gps.position}") String topic) {
+            @Value("${aal.events.gps-topic:aal.gps.position}") String topic,
+            @Value("${aal.events.kafka-enabled:false}") boolean kafkaEnabled,
+            @Value("${spring.kafka.bootstrap-servers:}") String bootstrapServers) {
         this.kafka = kafka;
         this.mapper = mapper;
         this.topic = topic;
+        this.kafkaEnabled = kafkaEnabled;
+        this.bootstrapServers = bootstrapServers == null ? "" : bootstrapServers.trim();
     }
 
     public void publish(UUID tenantId, UUID vehicleId, double latitude, double longitude, Object recordedAt) {
+        if (!kafkaEnabled || bootstrapServers.isBlank()) {
+            log.debug("GPS Kafka publishing is disabled or not configured; skipping event for vehicle {}", vehicleId);
+            return;
+        }
         try {
-            Map<String,Object> event = new LinkedHashMap<>();
+            Map<String, Object> event = new LinkedHashMap<>();
             event.put("eventId", UUID.randomUUID().toString());
             event.put("tenantId", tenantId.toString());
             event.put("vehicleId", vehicleId.toString());

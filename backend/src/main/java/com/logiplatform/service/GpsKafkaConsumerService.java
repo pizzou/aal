@@ -33,7 +33,11 @@ public class GpsKafkaConsumerService {
     }
 
     @Transactional
-    @KafkaListener(topics = "${aal.events.gps-topic:aal.gps.position}", containerFactory = "gpsKafkaListenerContainerFactory", autoStartup = "${aal.events.gps-consumer-enabled:false}")
+    @KafkaListener(
+            id = "aalGpsConsumer",
+            topics = "${aal.events.gps-topic:aal.gps.position}",
+            containerFactory = "gpsKafkaListenerContainerFactory",
+            autoStartup = "false")
     public void consume(String payload) {
         Map<String,Object> event;
         try {

@@ -80,7 +80,8 @@ aal:
   events:
     gps-topic: ${AAL_GPS_KAFKA_TOPIC:aal.gps.position}
     gps-consumer-group: ${AAL_GPS_KAFKA_CONSUMER_GROUP:aal-gps-consumer-v1}
-    gps-consumer-enabled: ${AAL_GPS_KAFKA_CONSUMER_ENABLED:true}
+    kafka-enabled: ${AAL_KAFKA_ENABLED:false}
+    gps-consumer-enabled: ${AAL_GPS_KAFKA_CONSUMER_ENABLED:false}
 
 sms:
   twilio:

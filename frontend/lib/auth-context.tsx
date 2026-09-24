@@ -37,35 +37,52 @@ export function getTenantId(): string | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [tenantId, setTenantId] = useState<string | null>(null);
-
   const [role, setRole] = useState<string | null>(null);
-
   const [accessToken, setAccessTokenState] = useState<string | null>(null);
-
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
     async function restoreSession() {
+      /*
+       * IMPORTANT:
+       * Keep storedToken outside the try block because both the
+       * success and error paths need access to the same token.
+       */
+      const storedToken = getAccessToken();
+
       try {
-        const storedToken = getAccessToken();
+        /*
+         * There is no reason to call the authenticated session
+         * endpoint when no bearer token exists.
+         */
+        if (!storedToken) {
+          clearAccessToken();
+
+          currentTenant = null;
+          setTenantId(null);
+          setRole(null);
+          setAccessTokenState(null);
+
+          return;
+        }
 
         /*
-         * Do not call the authenticated session endpoint without
-         * preserving the already stored bearer token.
-         *
-         * apiFetch attaches it automatically.
+         * apiFetch is responsible for attaching the stored bearer token.
          */
         const session: AuthSessionResponse = await authApi.session();
 
         if (cancelled) return;
 
+        /*
+         * Customer accounts are not internal operations sessions.
+         */
         if (session.role === "CUSTOMER") {
           try {
             await authApi.logout();
           } catch {
-            // Customer accounts are not internal sessions.
+            // Local authentication state must still be cleared.
           }
 
           clearAccessToken();
@@ -78,20 +95,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        /*
+         * Restore the complete authenticated session.
+         */
         currentTenant = session.tenantId;
 
         setTenantId(session.tenantId);
         setRole(session.role);
-
-        /*
-         * Keep the actual bearer token in React state.
-         *
-         * Do not use the literal string "cookie" as an authentication
-         * token. It causes the UI to believe it is authenticated while
-         * the API may actually have no usable bearer credential.
-         */
         setAccessTokenState(storedToken);
 
+        /*
+         * Force password change when required by the backend.
+         */
         if (
           session.mustChangePassword &&
           typeof window !== "undefined" &&
@@ -100,13 +115,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           window.location.replace("/account/security");
           return;
         }
-      } catch {
+      } catch (error) {
         if (cancelled) return;
 
+        const isAuthenticationFailure =
+          error instanceof Error &&
+          /401|authentication required|invalid or expired token/i.test(
+            error.message,
+          );
+
+        /*
+         * If a token still exists and this was not an authentication
+         * failure, preserve the session. This prevents a temporary
+         * backend/network failure from logging the user out.
+         */
+        if (storedToken && !isAuthenticationFailure) {
+          setAccessTokenState(storedToken);
+          return;
+        }
+
+        /*
+         * A genuine authentication failure invalidates the local
+         * session.
+         */
         clearAccessToken();
 
         currentTenant = null;
-
         setTenantId(null);
         setRole(null);
         setAccessTokenState(null);
@@ -127,11 +161,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handleAuthenticationExpired = () => {
       /*
-       * Do not immediately destroy the UI state for a transient
-       * unauthorized request. The API layer owns token invalidation.
-       *
-       * Only clear the React authentication state when the token has
-       * actually been removed.
+       * Do not destroy the authenticated UI for a transient 401
+       * while the API layer still has a valid token.
        */
       const token = getAccessToken();
 
@@ -158,14 +189,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   function login(token: string | null, tenant: string, userRole: string) {
     /*
-     * The OTP verification response contains the real JWT.
-     *
-     * Store it immediately before navigating to the dashboard.
+     * OTP verification must return the actual JWT.
      */
     if (!token) {
       throw new Error("Authentication succeeded without an access token.");
     }
 
+    /*
+     * Persist the real JWT before navigating to the dashboard.
+     */
     setAccessToken(token);
 
     currentTenant = tenant;
@@ -179,7 +211,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await authApi.logout();
     } catch {
-      // Always clear local state even if backend logout fails.
+      /*
+       * Local credentials must always be removed even when
+       * the backend logout request fails.
+       */
     }
 
     clearAccessToken();

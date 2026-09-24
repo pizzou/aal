@@ -286,10 +286,7 @@ public class SecurityConfig {
                 /*
                  * SHIPMENTS - READ
                  */
-                .requestMatchers(
-                    HttpMethod.GET,
-                    "/api/shipments/**"
-                )
+                .requestMatchers(new AntPathRequestMatcher("/api/shipments/**", HttpMethod.GET.name()))
                 .hasAnyRole(
                     "ADMIN",
                     "MANAGER",
@@ -301,10 +298,7 @@ public class SecurityConfig {
                 /*
                  * SHIPMENTS - CREATE
                  */
-                .requestMatchers(
-                    HttpMethod.POST,
-                    "/api/shipments/**"
-                )
+                .requestMatchers(new AntPathRequestMatcher("/api/shipments/**", HttpMethod.POST.name()))
                 .hasAnyRole(
                     "ADMIN",
                     "MANAGER",
@@ -315,10 +309,7 @@ public class SecurityConfig {
                 /*
                  * SHIPMENTS - UPDATE
                  */
-                .requestMatchers(
-                    HttpMethod.PATCH,
-                    "/api/shipments/**"
-                )
+                .requestMatchers(new AntPathRequestMatcher("/api/shipments/**", HttpMethod.PATCH.name()))
                 .hasAnyRole(
                     "ADMIN",
                     "MANAGER",

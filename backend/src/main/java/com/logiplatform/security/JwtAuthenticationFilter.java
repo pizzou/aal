@@ -222,6 +222,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
                         response.setContentType("application/json");
                         response.setCharacterEncoding("UTF-8");
+                        response.setHeader("Cache-Control", "no-store");
+                        response.setHeader("Pragma", "no-cache");
 
                         response.getWriter().write(
                                         "{\"error\":\"Invalid or expired token\"}");

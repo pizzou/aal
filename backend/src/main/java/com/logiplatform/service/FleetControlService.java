@@ -5,6 +5,7 @@ import com.logiplatform.model.Driver;
 import com.logiplatform.model.Trip;
 import com.logiplatform.model.TripStatus;
 import com.logiplatform.model.Vehicle;
+import com.logiplatform.model.VehicleGpsPosition;
 import com.logiplatform.repository.DriverRepository;
 import com.logiplatform.repository.TripRepository;
 import com.logiplatform.repository.VehicleGpsPositionRepository;
@@ -16,8 +17,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -84,13 +87,29 @@ public class FleetControlService {
             }
         }
 
+        // Load the latest GPS history for the complete fleet in one query.
+        Set<UUID> vehicleIds = new HashSet<>();
+        for (Vehicle vehicle : vehicleList) {
+            if (vehicle != null && vehicle.getId() != null) {
+                vehicleIds.add(vehicle.getId());
+            }
+        }
+
+        Map<UUID, VehicleGpsPosition> latestPositionByVehicle = new HashMap<>();
+        if (!vehicleIds.isEmpty()) {
+            for (var position : gps
+                    .findAllByTenantIdAndVehicleIdInOrderByRecordedAtDesc(tenantId, vehicleIds)) {
+                if (position != null && position.getVehicleId() != null) {
+                    latestPositionByVehicle.putIfAbsent(position.getVehicleId(), position);
+                }
+            }
+        }
+
         List<FleetLiveResponse> out = new ArrayList<>(vehicleList.size());
 
         for (Vehicle vehicle : vehicleList) {
             UUID vehicleId = vehicle.getId();
-            var position = gps
-                    .findFirstByTenantIdAndVehicleIdOrderByRecordedAtDesc(tenantId, vehicleId)
-                    .orElse(null);
+            var position = latestPositionByVehicle.get(vehicleId);
 
             Trip trip = tripByVehicle.get(vehicleId);
             UUID driverId = trip == null ? null : trip.getDriverId();

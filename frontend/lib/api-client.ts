@@ -72,6 +72,23 @@ function notifyAuthenticationExpired(): void {
   }
 }
 
+async function confirmAuthenticationExpired(): Promise<boolean> {
+  const token = readStoredAccessToken();
+  if (!token) return true;
+
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/session`, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return response.status === 401 || response.status === 403;
+  } catch {
+    return false;
+  }
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -230,7 +247,9 @@ export async function apiFetch<T>(
     if (!response.ok) {
       if (response.status === 401) {
         csrfToken = null;
-        notifyAuthenticationExpired();
+        if (await confirmAuthenticationExpired()) {
+          notifyAuthenticationExpired();
+        }
       }
       throw new ApiError(response.status, message);
     }
@@ -1600,7 +1619,11 @@ export function openOperationsEventStream(handlers: {
 
       if (!response.ok || !response.body) {
         handlers.onError?.(response.status);
-        if (response.status === 401) notifyAuthenticationExpired();
+        if (response.status === 401) {
+          if (await confirmAuthenticationExpired()) {
+            notifyAuthenticationExpired();
+          }
+        }
         scheduleReconnect();
         return;
       }

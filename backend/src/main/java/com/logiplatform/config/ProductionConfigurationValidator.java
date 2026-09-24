@@ -4,7 +4,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Profile;
 
 import java.net.URI;
 
@@ -15,7 +14,6 @@ import java.net.URI;
  * entire application context.
  */
 @Configuration
-@Profile("prod")
 public class ProductionConfigurationValidator {
 
     private static final Logger log =
@@ -35,11 +33,13 @@ public class ProductionConfigurationValidator {
             @Value("${app.mail.brevo-senders-url:https://api.brevo.com/v3/senders}") String brevoSendersUrl,
             @Value("${app.auth.otp.required:true}") boolean otpRequired) {
 
-        validateJwt(jwtSecret);
-        validateDatabase(dbUrl, dbUser, dbPassword);
-        validateCors(origins);
-        validateEnvironment(environment);
-        validateFrontend(frontendUrl);
+        if ("production".equalsIgnoreCase(environment == null ? "" : environment.trim())) {
+            validateJwt(jwtSecret);
+            validateDatabase(dbUrl, dbUser, dbPassword);
+            validateCors(origins);
+            validateEnvironment(environment);
+            validateFrontend(frontendUrl);
+        }
 
         boolean effectiveOtpRequired = otpRequired || "production".equalsIgnoreCase(environment);
 

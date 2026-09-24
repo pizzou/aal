@@ -1,9 +1,11 @@
 package com.logiplatform.config;
 
+import com.logiplatform.tenancy.FixedTenantDataSource;
 import com.logiplatform.tenancy.TenantAwareDataSource;
 import com.zaxxer.hikari.HikariDataSource;
 import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -18,6 +20,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
+import java.util.UUID;
 
 @Configuration
 public class JpaTenantConfig {
@@ -123,6 +126,18 @@ public class JpaTenantConfig {
         dataSource.setPoolName(poolName);
 
         return dataSource;
+    }
+
+    /**
+     * Fixed-tenant datasource for authentication and public endpoints that run
+     * before a JWT can establish TenantContext. PostgreSQL RLS remains enabled.
+     */
+    @Bean(name = "singleTenantDataSource")
+    public DataSource singleTenantDataSource(
+            @Qualifier("rawDataSource") DataSource rawDataSource,
+            @Value("${app.single-tenant.id}") UUID tenantId) {
+
+        return new FixedTenantDataSource(rawDataSource, tenantId);
     }
 
     /**

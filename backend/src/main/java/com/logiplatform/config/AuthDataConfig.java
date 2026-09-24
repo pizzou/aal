@@ -11,7 +11,7 @@ import javax.sql.DataSource;
 
 /**
  * Authentication and registration operate before the request has a tenant
- * context. They therefore intentionally use the raw datasource.
+ * context. They therefore use the fixed single-tenant datasource.
  *
  * This datasource must remain narrowly scoped to authentication/provisioning
  * operations and must not be used for tenant-wide business queries.
@@ -21,13 +21,13 @@ public class AuthDataConfig {
 
     @Bean(name = "authJdbcTemplate")
     public JdbcTemplate authJdbcTemplate(
-            @Qualifier("rawDataSource") DataSource rawDataSource) {
+            @Qualifier("singleTenantDataSource") DataSource singleTenantDataSource) {
 
-        return new JdbcTemplate(rawDataSource);
+        return new JdbcTemplate(singleTenantDataSource);
     }
 
     /**
-     * Dedicated transaction manager for raw authentication JDBC operations.
+     * Dedicated transaction manager for pre-authentication JDBC operations.
      *
      * This is important for:
      * - SELECT ... FOR UPDATE during login
@@ -36,8 +36,8 @@ public class AuthDataConfig {
      */
     @Bean(name = "authTransactionManager")
     public PlatformTransactionManager authTransactionManager(
-            @Qualifier("rawDataSource") DataSource rawDataSource) {
+            @Qualifier("singleTenantDataSource") DataSource singleTenantDataSource) {
 
-        return new DataSourceTransactionManager(rawDataSource);
+        return new DataSourceTransactionManager(singleTenantDataSource);
     }
 }

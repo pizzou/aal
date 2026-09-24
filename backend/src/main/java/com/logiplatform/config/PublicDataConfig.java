@@ -10,7 +10,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import javax.sql.DataSource;
 
 /**
- * Narrow raw-database access for token-scoped public endpoints.
+ * Narrow single-tenant database access for token-scoped public endpoints.
  *
  * Public quote/tracking requests arrive without a tenant context, so they
  * cannot use the tenant-aware datasource for the initial token lookup. The
@@ -22,13 +22,13 @@ public class PublicDataConfig {
 
     @Bean(name = "publicJdbcTemplate")
     public JdbcTemplate publicJdbcTemplate(
-            @Qualifier("rawDataSource") DataSource rawDataSource) {
-        return new JdbcTemplate(rawDataSource);
+            @Qualifier("singleTenantDataSource") DataSource singleTenantDataSource) {
+        return new JdbcTemplate(singleTenantDataSource);
     }
 
     @Bean(name = "publicTransactionManager")
     public PlatformTransactionManager publicTransactionManager(
-            @Qualifier("rawDataSource") DataSource rawDataSource) {
-        return new DataSourceTransactionManager(rawDataSource);
+            @Qualifier("singleTenantDataSource") DataSource singleTenantDataSource) {
+        return new DataSourceTransactionManager(singleTenantDataSource);
     }
 }

@@ -128,7 +128,7 @@ public class AuditAspect {
         try {
             Object result = pjp.proceed();
 
-            audit.record(
+            safeAuditRecord(
                     tenantId,
                     userId,
                     action,
@@ -152,7 +152,7 @@ public class AuditAspect {
                 status = responseStatusException.getStatusCode().value();
             }
 
-            audit.record(
+            safeAuditRecord(
                     tenantId,
                     userId,
                     action,
@@ -169,6 +169,42 @@ public class AuditAspect {
                     correlation);
 
             throw ex;
+        }
+    }
+
+    /**
+     * Audit persistence must never turn a successful logistics operation into
+     * an HTTP 500, nor should an audit-database failure mask the original
+     * business exception. Audit is an important compliance capability, but it
+     * is deliberately non-blocking at the request boundary.
+     */
+    private void safeAuditRecord(
+            UUID tenantId,
+            UUID userId,
+            String action,
+            String resourceType,
+            UUID resourceId,
+            String method,
+            String path,
+            String ip,
+            String userAgent,
+            int status,
+            boolean success,
+            String before,
+            String after,
+            String correlation) {
+        try {
+            audit.record(
+                    tenantId, userId, action, resourceType, resourceId,
+                    method, path, ip, userAgent, status, success,
+                    before, after, correlation);
+        } catch (RuntimeException auditFailure) {
+            // The operational request remains authoritative. The failure is
+            // logged for monitoring/reconciliation instead of being returned
+            // to the browser as a misleading 500 response.
+            org.slf4j.LoggerFactory.getLogger(AuditAspect.class).error(
+                    "Audit persistence failed action={} resource={} path={} status={} correlation={}",
+                    action, resourceType, path, status, correlation, auditFailure);
         }
     }
 

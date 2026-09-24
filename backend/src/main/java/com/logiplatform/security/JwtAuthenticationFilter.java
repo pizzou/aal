@@ -38,16 +38,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         "/actuator/info");
 
         private final JwtService jwtService;
-        private final JdbcTemplate tenantJdbcTemplate;
+        private final JdbcTemplate authJdbcTemplate;
         private final UUID singleTenantId;
 
         public JwtAuthenticationFilter(
                         JwtService jwtService,
-                        @Qualifier("tenantJdbcTemplate") JdbcTemplate tenantJdbcTemplate,
+                        @Qualifier("authJdbcTemplate") JdbcTemplate authJdbcTemplate,
                         @Value("${app.single-tenant.id}") UUID singleTenantId) {
 
                 this.jwtService = jwtService;
-                this.tenantJdbcTemplate = tenantJdbcTemplate;
+                this.authJdbcTemplate = authJdbcTemplate;
                 this.singleTenantId = singleTenantId;
         }
 
@@ -139,13 +139,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         /*
                          * The JWT has already been cryptographically verified and the
                          * tenant claim has been checked against AAL's single tenant.
-                         * Establish that tenant before the database lookup so the same
-                         * tenant-aware datasource used by the rest of the application
-                         * can enforce PostgreSQL RLS during token validation.
+                         * Authentication must use the fixed single-tenant datasource here:
+                         * this filter runs before Spring Security establishes the request
+                         * authentication context and therefore must not depend on a
+                         * tenant-aware datasource whose connection lifecycle is tied to
+                         * TenantContext. The fixed datasource still applies the exact AAL
+                         * tenant to PostgreSQL RLS.
                          */
                         TenantContext.setTenantId(tenantId);
 
-                        UserSecurityState securityState = tenantJdbcTemplate.query(
+                        UserSecurityState securityState = authJdbcTemplate.query(
                                         """
                                                         SELECT token_version, must_change_password
                                                         FROM users

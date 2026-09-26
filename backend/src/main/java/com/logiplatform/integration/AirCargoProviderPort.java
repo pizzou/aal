@@ -31,6 +31,10 @@ public interface AirCargoProviderPort {
 
     AwbSubmissionResult submitAwb(Map<String, Object> payload, String idempotencyKey);
 
+    default AwbSubmissionResult getAwb(String providerReference) {
+        throw new UnsupportedOperationException("Provider does not expose AWB reconciliation");
+    }
+
     record ProviderCapabilities(
             boolean scheduleSearch,
             boolean liveCapacity,

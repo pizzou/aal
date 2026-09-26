@@ -7,6 +7,10 @@ import com.logiplatform.model.AirCargoFlight;
 import com.logiplatform.repository.AirCargoBookingRepository;
 import com.logiplatform.repository.AirCargoFlightRepository;
 import com.logiplatform.tenancy.TenantContext;
+import com.logiplatform.service.control.BookingStateMachineService;
+import com.logiplatform.service.control.ReconciliationTaskService;
+import com.logiplatform.integration.control.ExternalOperationException;
+import com.logiplatform.integration.control.IntegrationMetricsService;
 import org.springframework.http.HttpStatus;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -22,8 +26,8 @@ import static com.logiplatform.dto.AirCargoDtos.*;
 
 @Service
 public class AirCargoBookingService {
-    private final AirCargoBookingRepository bookings; private final AirCargoFlightRepository flights; private final ShipmentService shipments; private final AirCargoProviderRegistry providers; private final AirlineIntegrationAttemptService attempts; private final AirlineDeadLetterService deadLetters; private final AuditService audit;
-    public AirCargoBookingService(AirCargoBookingRepository b,AirCargoFlightRepository f,ShipmentService s,AirCargoProviderRegistry p,AirlineIntegrationAttemptService a,AirlineDeadLetterService d,AuditService audit){bookings=b;flights=f;shipments=s;providers=p;attempts=a;deadLetters=d;this.audit=audit;}
+    private final AirCargoBookingRepository bookings; private final AirCargoFlightRepository flights; private final ShipmentService shipments; private final AirCargoProviderRegistry providers; private final AirlineIntegrationAttemptService attempts; private final AirlineDeadLetterService deadLetters; private final AuditService audit; private final BookingStateMachineService stateMachine; private final ReconciliationTaskService reconciliation; private final IntegrationMetricsService metrics;
+    public AirCargoBookingService(AirCargoBookingRepository b,AirCargoFlightRepository f,ShipmentService s,AirCargoProviderRegistry p,AirlineIntegrationAttemptService a,AirlineDeadLetterService d,AuditService audit,BookingStateMachineService stateMachine,ReconciliationTaskService reconciliation,IntegrationMetricsService metrics){bookings=b;flights=f;shipments=s;providers=p;attempts=a;deadLetters=d;this.audit=audit;this.stateMachine=stateMachine;this.reconciliation=reconciliation;this.metrics=metrics;}
 
     @Transactional
     public BookingResponse book(BookRequest r){
@@ -32,30 +36,30 @@ public class AirCargoBookingService {
         AirCargoProviderPort provider=providers.active();
         AirCargoFlight reserved=findAndReserve(tenant,r);
         String source=provider.capabilities().booking()?provider.providerCode():"INTERNAL_CAPACITY";
-        AirCargoBooking b=new AirCargoBooking(tenant,r.shipmentId(),r.carrierCode().trim().toUpperCase(),r.carrierName(),r.flightNumber().trim().toUpperCase(),r.departureTime(),r.arrivalTime(),r.originCode().trim().toUpperCase(),r.destinationCode().trim().toUpperCase(),r.weightKg(),"PENDING",source,idem);
+        AirCargoBooking b=new AirCargoBooking(tenant,r.shipmentId(),r.carrierCode().trim().toUpperCase(),r.carrierName(),r.flightNumber().trim().toUpperCase(),r.departureTime(),r.arrivalTime(),r.originCode().trim().toUpperCase(),r.destinationCode().trim().toUpperCase(),r.weightKg(),"REQUESTED",source,idem);
         b.setServiceLevel(r.serviceLevel()); b.operation(idem,"BOOK");
-        try { bookings.saveAndFlush(b); } catch (DataIntegrityViolationException duplicate) {
+        try { bookings.saveAndFlush(b); stateMachine.transition(b,"PENDING_PROVIDER","BOOK_REQUESTED",correlationId()); } catch (DataIntegrityViolationException duplicate) {
             AirCargoBooking existing = bookings.findByTenantIdAndIdempotencyKey(tenant, idem).orElseThrow(() -> duplicate);
             TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
             return BookingResponse.from(existing);
         }
         if(!provider.capabilities().booking() && reserved==null) throw new ResponseStatusException(HttpStatus.CONFLICT,"No persisted capacity is available for this flight");
         if(!provider.capabilities().booking()){
-            String ref="CAP-"+UUID.randomUUID().toString().replace("-","").substring(0,16).toUpperCase(); b.confirm(r.weightKg(),ref,ref,"INTERNAL_CAPACITY_RESERVATION"); BookingResponse response=BookingResponse.from(bookings.save(b));
-            audit(response.id(),"AIR_BOOKING_CREATED","CREATE",response.status());
+            String ref="CAP-"+UUID.randomUUID().toString().replace("-","").substring(0,16).toUpperCase(); b.confirm(r.weightKg(),ref,ref,"INTERNAL_CAPACITY_RESERVATION"); stateMachine.transition(b,"CONFIRMED","INTERNAL_CAPACITY",correlationId()); BookingResponse response=BookingResponse.from(bookings.save(b));
+            metrics.booking(response.status()); audit(response.id(),"AIR_BOOKING_CREATED","CREATE",response.status());
             return response;
         }
-        String correlation=UUID.randomUUID().toString(); UUID attempt=attempts.start(provider.providerCode(),"BOOK",idem,correlation,r.toString());
+        String correlation=correlationId(); UUID attempt=attempts.start(provider.providerCode(),"BOOK",idem,correlation,r.toString());
         try{
             AirCargoProviderPort.BookingResult result=provider.book(new AirCargoProviderPort.BookingCommand(idem,r.shipmentId().toString(),r.carrierCode(),r.carrierName(),r.flightNumber(),r.departureTime(),r.arrivalTime(),r.originCode(),r.destinationCode(),r.weightKg(),r.serviceLevel()));
             attempts.success(attempt,200,result.rawResponse());
             String status=result.status()==null?"PENDING":result.status().toUpperCase();
-            if("CONFIRMED".equals(status))b.confirm(result.confirmedWeightKg()==null?r.weightKg():result.confirmedWeightKg(),result.providerReference(),result.confirmationNumber(),result.rawResponse());
-            else b.pending(result.providerReference(),result.rawResponse());
+            if("CONFIRMED".equals(status)){ b.confirm(result.confirmedWeightKg()==null?r.weightKg():result.confirmedWeightKg(),result.providerReference(),result.confirmationNumber(),result.rawResponse()); stateMachine.transition(b,"CONFIRMED","PROVIDER_CONFIRMED",correlation); }
+            else { b.pending(result.providerReference(),result.rawResponse()); }
             BookingResponse response=BookingResponse.from(bookings.save(b));
-            audit(response.id(),"AIR_BOOKING_CREATED","CREATE",response.status());
+            metrics.booking(response.status()); audit(response.id(),"AIR_BOOKING_CREATED","CREATE",response.status());
             return response;
-        }catch(Exception ex){attempts.failure(attempt,null,ex.getMessage());deadLetters.enqueue(provider.providerCode(),"BOOK",idem,correlation,r.toString(),ex.getMessage());throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"Airline booking failed; the request was placed in the integration dead-letter queue");}
+        }catch(Exception ex){attempts.failure(attempt,null,ex.getMessage()); boolean unknown=ex instanceof ExternalOperationException e && e.outcomeUnknown(); if(unknown){stateMachine.transition(b,"UNKNOWN","PROVIDER_OUTCOME_UNKNOWN",correlation); reconciliation.enqueue(provider.providerCode(),"BOOK","AIR_CARGO_BOOKING",b.getId(),idem,b.getProviderReference(),ex.getMessage()); bookings.save(b); metrics.booking("UNKNOWN"); throw new ResponseStatusException(HttpStatus.ACCEPTED,"Airline booking outcome is unknown and has been queued for reconciliation");} deadLetters.enqueue(provider.providerCode(),"BOOK",idem,correlation,r.toString(),ex.getMessage()); stateMachine.transition(b,"FAILED","PROVIDER_REJECTED",correlation); bookings.save(b); metrics.booking("FAILED"); throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"Airline booking failed; the request was placed in the integration dead-letter queue");}
     }
 
     @Transactional
@@ -65,27 +69,29 @@ public class AirCargoBookingService {
         if (key.equals(b.getLastOperationKey()) && "AMEND".equals(b.getLastProviderOperation())) return BookingResponse.from(b);
         b.operation(key,"AMEND"); AirCargoProviderPort p=providers.active();
         if(!p.capabilities().amendment()) throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,"The configured airline provider does not support booking amendments");
+        stateMachine.transition(b,"AMENDMENT_PENDING","AMEND_REQUESTED",correlationId());
         UUID attempt=attempts.start(p.providerCode(),"AMEND",key,UUID.randomUUID().toString(),r.toString());
-        try{AirCargoProviderPort.BookingResult result=p.amend(new AirCargoProviderPort.AmendmentCommand(key,b.getProviderReference(),r.flightNumber(),r.departureTime(),r.arrivalTime(),r.weightKg(),r.serviceLevel()));attempts.success(attempt,200,result.rawResponse());b.amend(r.weightKg(),r.flightNumber(),r.departureTime(),r.arrivalTime(),r.serviceLevel(),result.providerReference(),result.rawResponse());BookingResponse response=BookingResponse.from(bookings.save(b));audit(response.id(),"AIR_BOOKING_AMENDED","AMEND",response.status());return response;}
-        catch(Exception ex){attempts.failure(attempt,null,ex.getMessage());deadLetters.enqueue(p.providerCode(),"AMEND",key,attempt.toString(),r.toString(),ex.getMessage());throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"Airline amendment failed; request queued for integration review");}
+        try{AirCargoProviderPort.BookingResult result=p.amend(new AirCargoProviderPort.AmendmentCommand(key,b.getProviderReference(),r.flightNumber(),r.departureTime(),r.arrivalTime(),r.weightKg(),r.serviceLevel()));attempts.success(attempt,200,result.rawResponse());b.amend(r.weightKg(),r.flightNumber(),r.departureTime(),r.arrivalTime(),r.serviceLevel(),result.providerReference(),result.rawResponse());stateMachine.transition(b,"CONFIRMED","PROVIDER_AMENDMENT_CONFIRMED",attempt.toString());BookingResponse response=BookingResponse.from(bookings.save(b));metrics.booking(response.status()); audit(response.id(),"AIR_BOOKING_AMENDED","AMEND",response.status());return response;}
+        catch(Exception ex){attempts.failure(attempt,null,ex.getMessage()); boolean unknown=ex instanceof ExternalOperationException e && e.outcomeUnknown(); if(unknown){stateMachine.transition(b,"UNKNOWN","AMEND_OUTCOME_UNKNOWN",attempt.toString()); reconciliation.enqueue(p.providerCode(),"AMEND","AIR_CARGO_BOOKING",b.getId(),key,b.getProviderReference(),ex.getMessage()); bookings.save(b); throw new ResponseStatusException(HttpStatus.ACCEPTED,"Amendment outcome is unknown and has been queued for reconciliation");} deadLetters.enqueue(p.providerCode(),"AMEND",key,attempt.toString(),r.toString(),ex.getMessage()); stateMachine.transition(b,"FAILED","AMEND_PROVIDER_REJECTED",attempt.toString()); bookings.save(b); throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"Airline amendment failed; request queued for integration review");}
     }
 
     @Transactional
     public BookingResponse cancel(UUID id,CancelBookingRequest r){
         UUID tenant=TenantContext.getTenantId(); AirCargoBooking b=owned(id); if("CANCELLED".equals(b.getStatus()))return BookingResponse.from(b); String key=cleanKey(r.idempotencyKey()); AirCargoProviderPort p=providers.active();
         if (key.equals(b.getLastOperationKey()) && "CANCEL".equals(b.getLastProviderOperation())) return BookingResponse.from(b);
-        b.operation(key,"CANCEL");
+        stateMachine.transition(b,"CANCELLATION_PENDING","CANCEL_REQUESTED",correlationId()); b.operation(key,"CANCEL");
         if(p.capabilities().cancellation() && !"INTERNAL_CAPACITY".equals(b.getProvider())){
             UUID attempt=attempts.start(p.providerCode(),"CANCEL",key,UUID.randomUUID().toString(),r.toString());
-            try{AirCargoProviderPort.BookingResult result=p.cancel(new AirCargoProviderPort.CancellationCommand(key,b.getProviderReference(),r.reason()));attempts.success(attempt,200,result.rawResponse());b.cancel(r.reason(),result.rawResponse());}
-            catch(Exception ex){attempts.failure(attempt,null,ex.getMessage());deadLetters.enqueue(p.providerCode(),"CANCEL",key,attempt.toString(),r.toString(),ex.getMessage());throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"Airline cancellation failed; request queued for integration review");}
-        }else{b.cancel(r.reason(),"INTERNAL_BOOKING_CANCELLATION");}
-        releaseCapacityIfInternal(tenant,b); BookingResponse response=BookingResponse.from(bookings.save(b));audit(response.id(),"AIR_BOOKING_CANCELLED","CANCEL",response.status()); return response;
+            try{AirCargoProviderPort.BookingResult result=p.cancel(new AirCargoProviderPort.CancellationCommand(key,b.getProviderReference(),r.reason()));attempts.success(attempt,200,result.rawResponse());b.cancel(r.reason(),result.rawResponse()); stateMachine.transition(b,"CANCELLED","PROVIDER_CONFIRMED_CANCELLATION",attempt.toString());}
+            catch(Exception ex){attempts.failure(attempt,null,ex.getMessage()); boolean unknown=ex instanceof ExternalOperationException e && e.outcomeUnknown(); if(unknown){stateMachine.transition(b,"UNKNOWN","CANCEL_OUTCOME_UNKNOWN",attempt.toString()); reconciliation.enqueue(p.providerCode(),"CANCEL","AIR_CARGO_BOOKING",b.getId(),key,b.getProviderReference(),ex.getMessage()); bookings.save(b); throw new ResponseStatusException(HttpStatus.ACCEPTED,"Cancellation outcome is unknown and has been queued for reconciliation");} deadLetters.enqueue(p.providerCode(),"CANCEL",key,attempt.toString(),r.toString(),ex.getMessage()); stateMachine.transition(b,"FAILED","CANCEL_PROVIDER_REJECTED",attempt.toString()); bookings.save(b); throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"Airline cancellation failed; request queued for integration review");}
+        }else{b.cancel(r.reason(),"INTERNAL_BOOKING_CANCELLATION"); stateMachine.transition(b,"CANCELLED","INTERNAL_CANCELLATION",correlationId());}
+        releaseCapacityIfInternal(tenant,b); BookingResponse response=BookingResponse.from(bookings.save(b));metrics.booking(response.status()); audit(response.id(),"AIR_BOOKING_CANCELLED","CANCEL",response.status()); return response;
     }
 
     @Transactional(readOnly=true) public List<BookingResponse> list(){return bookings.findAllByTenantIdOrderByCreatedAtDesc(TenantContext.getTenantId()).stream().map(BookingResponse::from).toList();}
     @Transactional(readOnly=true) public BookingResponse get(UUID id){return BookingResponse.from(owned(id));}
     private AirCargoBooking owned(UUID id){return bookings.findByTenantIdAndId(TenantContext.getTenantId(),id).orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"Booking not found"));}
+    private String correlationId(){ return UUID.randomUUID().toString(); }
     private AirCargoFlight findAndReserve(UUID tenant,BookRequest r){List<AirCargoFlight> c=flights.findAllByTenantIdAndOriginCodeAndDestinationCodeAndDepartureTimeBetweenOrderByDepartureTimeAsc(tenant,r.originCode().trim().toUpperCase(),r.destinationCode().trim().toUpperCase(),r.departureTime().minus(2,ChronoUnit.MINUTES),r.departureTime().plus(2,ChronoUnit.MINUTES));if(c.isEmpty())return null;AirCargoFlight f=flights.findByTenantIdAndIdForUpdate(tenant,c.get(0).getId()).orElseThrow(()->new ResponseStatusException(HttpStatus.CONFLICT,"Flight disappeared during booking"));if(!f.reserve(r.weightKg()))throw new ResponseStatusException(HttpStatus.CONFLICT,"Insufficient live capacity");flights.save(f);return f;}
     private void releaseCapacityIfInternal(UUID tenant,AirCargoBooking b){if(!"INTERNAL_CAPACITY".equals(b.getProvider()))return;List<AirCargoFlight> c=flights.findAllByTenantIdAndOriginCodeAndDestinationCodeAndDepartureTimeBetweenOrderByDepartureTimeAsc(tenant,b.getOriginCode(),b.getDestinationCode(),b.getDepartureTime().minus(2,ChronoUnit.MINUTES),b.getDepartureTime().plus(2,ChronoUnit.MINUTES));if(!c.isEmpty()){AirCargoFlight f=flights.findByTenantIdAndIdForUpdate(tenant,c.get(0).getId()).orElse(null);if(f!=null){f.release(b.getRequestedWeightKg());flights.save(f);}}}
     private void audit(UUID bookingId,String action,String operation,String status){

@@ -1,0 +1,51 @@
+openapi: 3.0.3
+info:
+  title: AAL Enterprise Logistics API v1
+  version: 1.0.0
+  description: Versioned enterprise control-plane APIs for integrations, reconciliation and the operations control tower.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+paths:
+  /integrations/health:
+    get:
+      summary: Provider and integration health
+      responses:
+        '200': {description: OK}
+  /integrations/providers:
+    get:
+      summary: Provider capability discovery
+      responses:
+        '200': {description: OK}
+  /integrations/credentials:
+    get:
+      summary: Credential inventory without secret material
+      responses:
+        '200': {description: OK}
+  /integrations/accounts:
+    post:
+      summary: Register or update an integration account
+      responses:
+        '200': {description: OK}
+  /integrations/reconciliation:
+    get:
+      summary: Reconciliation queue and DLQ metrics
+      responses:
+        '200': {description: OK}
+  /control-tower/operational:
+    get:
+      summary: Operational exceptions and integration control tower
+      responses:
+        '200': {description: OK}
+  /data-quality/database-consistency:
+    get:
+      summary: Entity to database consistency audit
+      responses:
+        '200': {description: OK}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

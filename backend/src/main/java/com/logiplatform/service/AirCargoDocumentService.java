@@ -9,6 +9,8 @@ import com.logiplatform.repository.CustomsDeclarationRepository;
 import com.logiplatform.repository.DocumentTemplateRepository;
 import com.logiplatform.repository.ShipmentRepository;
 import com.logiplatform.tenancy.TenantContext;
+import com.logiplatform.service.control.ReconciliationTaskService;
+import com.logiplatform.integration.control.ExternalOperationException;
 import com.logiplatform.integration.AirCargoProviderRegistry;
 import com.logiplatform.service.AirlineIntegrationAttemptService;
 import java.util.LinkedHashMap;
@@ -34,6 +36,7 @@ public class AirCargoDocumentService {
     private final AirCargoProviderRegistry providers;
     private final AirlineIntegrationAttemptService integrationAttempts;
     private final ShipmentRepository shipments;
+    private final ReconciliationTaskService reconciliation;
 
     public AirCargoDocumentService(
             AwbRecordRepository awbs,
@@ -43,7 +46,7 @@ public class AirCargoDocumentService {
             DocumentTemplateRepository templates,
             AirCargoProviderRegistry providers,
             AirlineIntegrationAttemptService integrationAttempts,
-            ShipmentRepository shipments) {
+            ShipmentRepository shipments, ReconciliationTaskService reconciliation) {
         this.awbs = awbs;
         this.docs = docs;
         this.customs = customs;
@@ -52,6 +55,7 @@ public class AirCargoDocumentService {
         this.providers = providers;
         this.integrationAttempts = integrationAttempts;
         this.shipments = shipments;
+        this.reconciliation = reconciliation;
     }
 
     @Transactional
@@ -252,6 +256,10 @@ public class AirCargoDocumentService {
             return AwbResponse.from(awbs.save(awb));
         } catch (RuntimeException ex) {
             integrationAttempts.failure(attempt, null, ex.getMessage());
+            if (ex instanceof ExternalOperationException e && e.outcomeUnknown()) {
+                reconciliation.enqueue(provider.providerCode(), "AWB_SUBMIT", "AWB", awb.getId(), key, null, ex.getMessage());
+                throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.ACCEPTED, "AWB submission outcome is unknown and has been queued for reconciliation");
+            }
             throw ex;
         }
     }
@@ -272,7 +280,13 @@ public class AirCargoDocumentService {
         payload.put("currency", declaration.getCurrency());
         payload.put("idempotencyKey", "CUSTOMS-" + declaration.getId());
 
-        Map<String, Object> response = external.submitCustoms(payload);
+        Map<String, Object> response;
+        try {
+            response = external.submitCustoms(payload);
+        } catch (RuntimeException ex) {
+            reconciliation.enqueue("CUSTOMS", "CUSTOMS_SUBMIT", "CUSTOMS_DECLARATION", declaration.getId(), "CUSTOMS-" + declaration.getId(), null, ex.getMessage());
+            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.ACCEPTED, "Customs submission outcome is unknown and has been queued for reconciliation");
+        }
         declaration.submit(
                 String.valueOf(response.getOrDefault("reference", "PENDING-EXTERNAL-ACK")),
                 String.valueOf(response.getOrDefault(

@@ -7,6 +7,7 @@ import com.logiplatform.model.ShipmentStatus;
 import com.logiplatform.model.TransportMode;
 import com.logiplatform.repository.ShipmentRepository;
 import com.logiplatform.tenancy.TenantContext;
+import com.logiplatform.service.control.DistributedJobLockService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -15,14 +16,15 @@ import java.util.*;
 
 @Component
 public class AirCargoTrackingScheduler {
-    private final ShipmentRepository shipments; private final AirCargoProviderRegistry registry; private final ShipmentEtaTrackingService eta; private final UUID tenantId; private final boolean enabled;
-    public AirCargoTrackingScheduler(ShipmentRepository shipments,AirCargoProviderRegistry registry,ShipmentEtaTrackingService eta,@Value("${app.single-tenant.id}") String tenant,@Value("${aircargo.eta-poll.enabled:false}") boolean enabled){this.shipments=shipments;this.registry=registry;this.eta=eta;this.tenantId=UUID.fromString(tenant);this.enabled=enabled;}
+    private final ShipmentRepository shipments; private final AirCargoProviderRegistry registry; private final ShipmentEtaTrackingService eta; private final DistributedJobLockService jobLocks; private final UUID tenantId; private final boolean enabled;
+    public AirCargoTrackingScheduler(ShipmentRepository shipments,AirCargoProviderRegistry registry,ShipmentEtaTrackingService eta,DistributedJobLockService jobLocks,@Value("${app.single-tenant.id}") String tenant,@Value("${aircargo.eta-poll.enabled:false}") boolean enabled){this.shipments=shipments;this.registry=registry;this.eta=eta;this.jobLocks=jobLocks;this.tenantId=UUID.fromString(tenant);this.enabled=enabled;}
     @Scheduled(fixedDelayString="${aircargo.eta-poll.interval-ms:300000}")
     public void poll(){
         if(!enabled)return;
         AirCargoProviderPort p=registry.active();
         if(!p.capabilities().flightStatus())return;
         TenantContext.setTenantId(tenantId);
+        String owner=jobLocks.tryAcquire("air-cargo-eta-poll",Duration.ofMinutes(5)); if(owner==null){TenantContext.clear();return;}
         try {
             Set<UUID> ids=new LinkedHashSet<>();
             for(ShipmentStatus st:List.of(ShipmentStatus.BOOKED,ShipmentStatus.IN_TRANSIT,ShipmentStatus.PLANNING)){
@@ -37,7 +39,7 @@ public class AirCargoTrackingScheduler {
                 } catch(Exception ignored) {}
             }
         } finally {
-            TenantContext.clear();
+            jobLocks.release("air-cargo-eta-poll",owner); TenantContext.clear();
         }
     }
 }

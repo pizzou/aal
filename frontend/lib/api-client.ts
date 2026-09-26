@@ -676,6 +676,30 @@ export const publicTrackingApi = {
 * ============================================================================
   */
 
+export interface OperationalControlTower {
+  generatedAt: string;
+  integrations: {
+    generatedAt: string;
+    activeProvider: { code: string; capabilities: Record<string, unknown>; circuitBreaker: Record<string, unknown>; configured: boolean };
+    accounts: Array<Record<string, unknown>>;
+  };
+  reconciliation: Record<string, unknown>;
+  dlq: Record<string, unknown>;
+  shipmentsAtRisk: Array<Record<string, unknown>>;
+  bookingExceptions: Array<Record<string, unknown>>;
+  awbFailures: Array<Record<string, unknown>>;
+  customsExceptions: Array<Record<string, unknown>>;
+  documentsMissing: Array<Record<string, unknown>>;
+  dgExceptions: Array<Record<string, unknown>>;
+}
+
+export const enterpriseControlTowerApi = {
+  operational: () =>
+    apiFetch<OperationalControlTower>(
+      "/api/v1/control-tower/operational",
+    ),
+};
+
 export const commandCenterApi = {
   updateShipment: (id: string, data: Record<string, unknown>) =>
     apiFetch<Shipment>(`/api/shipments/${id}/command-center`, {
@@ -1669,17 +1693,13 @@ export function openOperationsEventStream(handlers: {
       });
 
       if (!response.ok || !response.body) {
-        const status = response.status;
-        handlers.onError?.(status);
-        if (status === 401) {
+        handlers.onError?.(response.status);
+        if (response.status === 401) {
           if (await confirmAuthenticationExpired()) {
             notifyAuthenticationExpired();
           }
         }
-
-        // Avoid hammering the backend/reverse proxy when the SSE endpoint is
-        // unavailable or rate-limited. Respect Retry-After when provided.
-        scheduleReconnect(response.headers.get("Retry-After"));
+        scheduleReconnect();
         return;
       }
 
@@ -1739,14 +1759,9 @@ export function openOperationsEventStream(handlers: {
     }
   };
 
-  const scheduleReconnect = (retryAfter?: string | null) => {
+  const scheduleReconnect = () => {
     if (stopped || reconnectTimer !== null) return;
-
-    const retrySeconds = Number.parseInt(retryAfter ?? "", 10);
-    const delay = Number.isFinite(retrySeconds)
-      ? Math.max(1000, Math.min(60000, retrySeconds * 1000))
-      : Math.min(60000, 2000 * 2 ** reconnectAttempt);
-
+    const delay = Math.min(30000, 1000 * 2 ** reconnectAttempt);
     reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = null;

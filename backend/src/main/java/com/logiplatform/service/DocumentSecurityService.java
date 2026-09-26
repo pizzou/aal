@@ -52,6 +52,7 @@ public class DocumentSecurityService {
                 tenant, shipmentId, documentId);
         if (file == null || file.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Document file is empty");
         if (file.getSize() > 50L * 1024L * 1024L) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Document exceeds 50 MB security-scan limit");
+        validateMimeAndSignature(file);
 
         String checksum = sha256(file);
         try {
@@ -69,6 +70,23 @@ public class DocumentSecurityService {
             db.update("UPDATE cargo_documents SET scan_status=?,scanned_at=now(),scanner_version=?,updated_at=now() WHERE tenant_id=? AND id=?","ERROR",scannerVersion,tenant,documentId);
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Document security scan failed", ex);
         }
+    }
+
+    private static void validateMimeAndSignature(MultipartFile file) {
+        String mime=file.getContentType()==null?"":file.getContentType().toLowerCase(Locale.ROOT);
+        Set<String> allowed=Set.of("application/pdf","image/jpeg","image/png","image/tiff","text/plain","text/csv","application/xml","text/xml","application/zip","application/vnd.openxmlformats-officedocument.wordprocessingml.document","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.openxmlformats-officedocument.presentationml.presentation");
+        if(!mime.isBlank()&&!allowed.contains(mime)) throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE,"Unsupported document MIME type");
+        try(InputStream in=file.getInputStream()){byte[] h=in.readNBytes(16);boolean ok=sig(h,mime);if(!ok)throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE,"Document content does not match its declared type");}
+        catch(IOException ex){throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Unable to validate document signature");}
+    }
+    private static boolean sig(byte[] h,String mime){
+        if(mime.contains("pdf"))return h.length>=5&&h[0]=='%'&&h[1]=='P'&&h[2]=='D'&&h[3]=='F'&&h[4]=='-';
+        if(mime.contains("jpeg"))return h.length>=3&&(h[0]&255)==0xFF&&(h[1]&255)==0xD8&&(h[2]&255)==0xFF;
+        if(mime.contains("png"))return h.length>=8&&(h[0]&255)==0x89&&h[1]=='P'&&h[2]=='N'&&h[3]=='G';
+        if(mime.contains("tiff"))return h.length>=4&&((h[0]=='I'&&h[1]=='I'&&h[2]==42&&h[3]==0)||(h[0]=='M'&&h[1]=='M'&&h[2]==0&&h[3]==42));
+        if(mime.contains("zip")||mime.contains("officedocument"))return h.length>=4&&h[0]=='P'&&h[1]=='K'&&h[2]==3&&h[3]==4;
+        if(mime.contains("xml")||mime.contains("text"))return true;
+        return false;
     }
 
     private ScanResult scanClamAv(InputStream input) throws IOException {

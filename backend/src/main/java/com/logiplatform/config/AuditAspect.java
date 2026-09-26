@@ -22,6 +22,7 @@ import java.util.Iterator;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.MDC;
 
 /**
  * Records authenticated controller mutations without storing credentials,
@@ -113,10 +114,9 @@ public class AuditAspect {
         }
 
         String userAgent = request.getHeader("User-Agent");
-        String correlation = request.getHeader("X-Correlation-ID");
-        if (correlation == null || correlation.isBlank()) {
-            correlation = UUID.randomUUID().toString();
-        }
+        String correlation = MDC.get("correlationId");
+        if (correlation == null || correlation.isBlank()) correlation = request.getHeader("X-Correlation-ID");
+        if (correlation == null || correlation.isBlank()) correlation = UUID.randomUUID().toString();
 
         boolean mutation = "POST".equalsIgnoreCase(method)
                 || "PUT".equalsIgnoreCase(method)

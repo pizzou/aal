@@ -7,6 +7,7 @@ import {
   ApiError,
   Shipment,
   commandCenterApi,
+  enterpriseControlTowerApi,
   shipmentsApi,
   platformHealthApi,
   operationsApi,
@@ -71,6 +72,9 @@ export default function AalControlTower() {
     status: string;
   } | null>(null);
   const [liveEventAt, setLiveEventAt] = useState<string | null>(null);
+  const [operational, setOperational] = useState<
+    import("@/lib/api-client").OperationalControlTower | null
+  >(null);
   const refreshTimerRef = useRef<number | null>(null);
   const lastLoadRef = useRef(0);
 
@@ -79,16 +83,18 @@ export default function AalControlTower() {
     setRefreshing(true);
     setError("");
     try {
-      const [dashboard, recent, health] = await Promise.all([
+      const [dashboard, recent, health, controlTower] = await Promise.all([
         commandCenterApi.advanced(asOf),
         shipmentsApi.list({ page: 0, size: 5 }),
         platformHealthApi.current(),
+        enterpriseControlTowerApi.operational(),
       ]);
       const fleet = await operationsApi.fleetLive().catch(() => []);
       setData(dashboard);
       setShipments(recent.content);
       setSystemHealth({ healthy: health.healthy, status: health.status });
       setFleetLive(fleet);
+      setOperational(controlTower);
     } catch (e) {
       setError(
         e instanceof ApiError
@@ -649,6 +655,120 @@ export default function AalControlTower() {
               {!data.exceptions.length && (
                 <div className="dashboard-empty">No open exceptions.</div>
               )}
+            </div>
+          </section>
+          <section className="card" style={{ marginTop: 24 }}>
+            <div className="dashboard-section-heading">
+              <div>
+                <div className="eyebrow">OPERATIONAL INTEGRATION CONTROL</div>
+                <h2>Live Exceptions & Provider Health</h2>
+              </div>
+              <span className="dashboard-online">
+                <span />{" "}
+                {operational?.integrations.activeProvider.code ?? "Provider"}
+              </span>
+            </div>
+            <div className="dashboard-kpis" style={{ marginTop: 16 }}>
+              <DashboardKpi
+                icon="bell"
+                accent="red"
+                title="At Risk"
+                value={(
+                  operational?.shipmentsAtRisk.length ?? 0
+                ).toLocaleString()}
+                meta="ETA / ETD risk"
+                trend="Attention"
+                href="/shipments"
+              />
+              <DashboardKpi
+                icon="plane"
+                accent="red"
+                title="Booking Exceptions"
+                value={(
+                  operational?.bookingExceptions.length ?? 0
+                ).toLocaleString()}
+                meta="Unknown / failed / pending"
+                trend="Reconcile"
+                href="/air-cargo/bookings"
+              />
+              <DashboardKpi
+                icon="file"
+                accent="yellow"
+                title="AWB / Customs"
+                value={(
+                  (operational?.awbFailures.length ?? 0) +
+                  (operational?.customsExceptions.length ?? 0)
+                ).toLocaleString()}
+                meta="Submission exceptions"
+                trend="Review"
+                href="/air-cargo"
+              />
+              <DashboardKpi
+                icon="shield"
+                accent="navy"
+                title="DLQ / Reconciliation"
+                value={String(
+                  operational?.dlq?.size ??
+                    operational?.reconciliation?.dlq_count ??
+                    0,
+                )}
+                meta="Unresolved external work"
+                trend="Control"
+                href="/exceptions"
+              />
+            </div>
+            <div className="dashboard-table-wrap" style={{ marginTop: 18 }}>
+              <table className="dashboard-table">
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Status</th>
+                    <th>Circuit</th>
+                    <th>Credential</th>
+                    <th>Credential expiry</th>
+                    <th>Last success</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(operational?.integrations.accounts ?? []).map(
+                    (account, index) => (
+                      <tr key={String(account.code ?? index)}>
+                        <td>
+                          {String(account.provider_name ?? account.code ?? "—")}
+                        </td>
+                        <td>
+                          {String(
+                            account.health_status ??
+                              account.status ??
+                              "UNKNOWN",
+                          )}
+                        </td>
+                        <td>
+                          {String(
+                            operational?.integrations.activeProvider
+                              .circuitBreaker?.state ?? "CLOSED",
+                          )}
+                        </td>
+                        <td>
+                          {String(
+                            account.enabled === true ? "ENABLED" : "DISABLED",
+                          )}
+                        </td>
+                        <td>{String(account.credential_expires_at ?? "—")}</td>
+                        <td>{String(account.last_success_at ?? "—")}</td>
+                      </tr>
+                    ),
+                  )}
+                  {(operational?.integrations.accounts ?? []).length === 0 ? (
+                    <tr>
+                      <td colSpan={6}>
+                        No provider accounts registered. Generic HTTP remains
+                        the fallback adapter.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
             </div>
           </section>
         </>

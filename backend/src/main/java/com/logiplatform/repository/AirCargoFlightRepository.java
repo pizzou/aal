@@ -18,6 +18,7 @@ public interface AirCargoFlightRepository extends JpaRepository<AirCargoFlight, 
             UUID tenantId,String origin,String destination,Instant from,Instant to);
     List<AirCargoFlight> findAllByTenantIdAndOriginCodeAndDepartureTimeBetweenOrderByDepartureTimeAsc(
             UUID tenantId,String origin,Instant from,Instant to);
+    List<AirCargoFlight> findAllByTenantIdAndFlightNumberAndDepartureTimeBetweenOrderByDepartureTimeAsc(UUID tenantId,String flightNumber,Instant from,Instant to);
     Optional<AirCargoFlight> findByTenantIdAndId(UUID tenantId,UUID id);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

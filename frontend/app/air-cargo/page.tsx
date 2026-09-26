@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   airCargoApi,
   AirCargoFlight,
+  AirCargoBookingResponse,
   ApiError,
   RouteOption,
   Shipment,
@@ -41,6 +42,12 @@ export default function AirCargoPage() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [booking, setBooking] = useState(false);
+  const [bookings, setBookings] = useState<AirCargoBookingResponse[]>([]);
+  const [etaHistory, setEtaHistory] = useState<Record<string, unknown>[]>([]);
+  const [integrationHealth, setIntegrationHealth] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
 
   useEffect(() => {
     if (!isLoading && !accessToken) router.push("/login");
@@ -48,6 +55,13 @@ export default function AirCargoPage() {
 
   useEffect(() => {
     if (!accessToken) return;
+    Promise.all([airCargoApi.bookings(), airCargoApi.integrationHealth()])
+      .then(([bookingRows, health]) => {
+        setBookings(bookingRows);
+        setIntegrationHealth(health);
+      })
+      .catch(() => undefined);
+
     shipmentsApi
       .list()
       .then((response) =>
@@ -142,9 +156,14 @@ export default function AirCargoPage() {
         originCode: selected.origin,
         destinationCode: selected.destination,
         weightKg: requestedWeight,
+        serviceLevel: "STANDARD",
         idempotencyKey: `AAL-AIR-${shipmentId}-${selected.id}-${requestedWeight}`,
       });
 
+      setBookings((current) => [
+        result,
+        ...current.filter((row) => row.id !== result.id),
+      ]);
       setMessage(
         `Booking ${result.status.toLowerCase()}${
           result.confirmationNumber ? ` · ${result.confirmationNumber}` : ""
@@ -154,6 +173,41 @@ export default function AirCargoPage() {
       setError(e instanceof ApiError ? e.message : "Booking failed");
     } finally {
       setBooking(false);
+    }
+  }
+
+  async function cancelBooking(row: AirCargoBookingResponse) {
+    if (
+      !window.confirm(
+        `Cancel booking ${row.confirmationNumber || row.providerReference || row.id}?`,
+      )
+    )
+      return;
+    try {
+      const result = await airCargoApi.cancelBooking(row.id, {
+        reason: "Operational amendment",
+        idempotencyKey: `AAL-CANCEL-${row.id}`,
+      });
+      setBookings((current) =>
+        current.map((item) => (item.id === result.id ? result : item)),
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Cancellation failed");
+    }
+  }
+
+  async function refreshShipmentEta() {
+    if (!shipmentId) {
+      setError("Select a shipment before refreshing ETA.");
+      return;
+    }
+    try {
+      await airCargoApi.refreshEta(shipmentId);
+      const history = await airCargoApi.etaHistory(shipmentId);
+      setEtaHistory(history as Record<string, unknown>[]);
+      setMessage("Flight status and ETA refreshed.");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "ETA refresh failed");
     }
   }
 
@@ -405,6 +459,123 @@ export default function AirCargoPage() {
           )}
         </div>
       </section>
+
+      <div className="grid grid-2" style={{ marginTop: 15 }}>
+        <section className="card">
+          <div className="page-head" style={{ marginBottom: 8 }}>
+            <div>
+              <h2 className="card-title">Airline bookings</h2>
+              <div className="card-muted">
+                Confirmed references, amendments and cancellations remain linked
+                to the shipment.
+              </div>
+            </div>
+            <span className="status status-neutral">
+              {String(integrationHealth?.provider || "LOCAL")}
+            </span>
+          </div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Flight</th>
+                  <th>Status</th>
+                  <th>Reference</th>
+                  <th>Weight</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {bookings.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <strong>{row.flightNumber}</strong>
+                      <div className="card-muted">
+                        {row.serviceLevel || "STANDARD"}
+                      </div>
+                    </td>
+                    <td>{row.status}</td>
+                    <td>
+                      {row.confirmationNumber || row.providerReference || "—"}
+                    </td>
+                    <td>{row.confirmedWeightKg ?? row.requestedWeightKg} kg</td>
+                    <td>
+                      <button
+                        className="btn"
+                        disabled={row.status === "CANCELLED"}
+                        onClick={() => cancelBooking(row)}
+                      >
+                        Cancel
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {!bookings.length && (
+                  <tr>
+                    <td colSpan={5} className="empty">
+                      No airline bookings yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="card">
+          <div className="page-head" style={{ marginBottom: 8 }}>
+            <div>
+              <h2 className="card-title">Real-time ETA</h2>
+              <div className="card-muted">
+                Provider changes are preserved as an auditable timeline.
+              </div>
+            </div>
+            <button className="btn btn-primary" onClick={refreshShipmentEta}>
+              Refresh
+            </button>
+          </div>
+          <div className="metric-row">
+            <span>Provider</span>
+            <strong>
+              {String(integrationHealth?.provider || "Not configured")}
+            </strong>
+          </div>
+          <div className="metric-row">
+            <span>Failed integration attempts</span>
+            <strong>
+              {String(
+                (
+                  integrationHealth?.attempts as
+                    | Record<string, unknown>
+                    | undefined
+                )?.failed ?? 0,
+              )}
+            </strong>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            {etaHistory.slice(0, 6).map((event, index) => (
+              <div
+                className="quick"
+                key={`${String(event.id)}-${index}`}
+                style={{ marginTop: 7 }}
+              >
+                <strong>
+                  {String(event.reason || event.flightStatus || "UPDATE")}
+                </strong>
+                <span>{String(event.newEta || "No ETA")}</span>
+                <span className="card-muted">
+                  {String(event.source)} · {String(event.observedAt)}
+                </span>
+              </div>
+            ))}
+            {!etaHistory.length && (
+              <div className="empty">
+                Select a shipment and refresh flight status to load ETA history.
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
     </main>
   );
 }

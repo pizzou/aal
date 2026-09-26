@@ -128,6 +128,12 @@ public class Shipment {
     @Column(name = "eta")
     private Instant eta;
 
+    @Column(name = "actual_departure")
+    private Instant actualDeparture;
+
+    @Column(name = "actual_arrival")
+    private Instant actualArrival;
+
     /*
      * ========================================================================
      * FINANCIAL INPUTS
@@ -450,6 +456,10 @@ public class Shipment {
         return eta;
     }
 
+    public Instant getActualDeparture() { return actualDeparture; }
+
+    public Instant getActualArrival() { return actualArrival; }
+
     public BigDecimal getSupplierCost() {
         return supplierCost;
     }
@@ -500,6 +510,20 @@ public class Shipment {
 
     public String getCurrency() {
         return currency;
+    }
+
+    public void updateFlightTracking(Instant newEtd, Instant newEta, Instant actualDeparture, Instant actualArrival, String providerStatus) {
+        this.etd = newEtd;
+        this.eta = newEta;
+        if (actualDeparture != null) {
+            this.actualDeparture = actualDeparture;
+            this.status = ShipmentStatus.IN_TRANSIT;
+        }
+        if (actualArrival != null) {
+            this.actualArrival = actualArrival;
+            this.status = ShipmentStatus.ARRIVED;
+        }
+        this.updatedAt = Instant.now();
     }
 
     public String getAirlineUsed() {

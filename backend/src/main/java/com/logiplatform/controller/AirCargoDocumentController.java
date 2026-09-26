@@ -5,15 +5,19 @@ import com.logiplatform.service.AirCargoDocumentService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
+import com.logiplatform.repository.AwbRecordRepository;
+import com.logiplatform.tenancy.TenantContext;
 import static com.logiplatform.dto.AirCargoDtos.*;
 
 @RestController
 @RequestMapping("/api/air-cargo/documents")
 public class AirCargoDocumentController {
     private final AirCargoDocumentService service;
+    private final AwbRecordRepository awbs;
 
-    public AirCargoDocumentController(AirCargoDocumentService s) {
+    public AirCargoDocumentController(AirCargoDocumentService s, AwbRecordRepository awbs) {
         service = s;
+        this.awbs = awbs;
     }
 
     @GetMapping("/shipment/{shipmentId}")
@@ -34,6 +38,12 @@ public class AirCargoDocumentController {
     @PostMapping("/awb/{id}/submit-to-carrier")
     public AwbResponse submitAwbToCarrier(@PathVariable UUID id) {
         return service.submitAwbToCarrier(id);
+    }
+
+    @GetMapping("/awb/{id}")
+    public AwbResponse awb(@PathVariable UUID id) {
+        return awbs.findByTenantIdAndId(TenantContext.getTenantId(), id).map(AwbResponse::from)
+                .orElseThrow(() -> new IllegalArgumentException("AWB not found"));
     }
 
     @PostMapping("/customs/{id}/submit-to-external")

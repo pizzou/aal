@@ -7,7 +7,10 @@ import com.logiplatform.repository.AwbRecordRepository;
 import com.logiplatform.repository.CargoDocumentRepository;
 import com.logiplatform.repository.CustomsDeclarationRepository;
 import com.logiplatform.repository.DocumentTemplateRepository;
+import com.logiplatform.repository.ShipmentRepository;
 import com.logiplatform.tenancy.TenantContext;
+import com.logiplatform.integration.AirCargoProviderRegistry;
+import com.logiplatform.service.AirlineIntegrationAttemptService;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,23 +31,38 @@ public class AirCargoDocumentService {
     private final CustomsDeclarationRepository customs;
     private final ExternalGatewayService external;
     private final DocumentTemplateRepository templates;
+    private final AirCargoProviderRegistry providers;
+    private final AirlineIntegrationAttemptService integrationAttempts;
+    private final ShipmentRepository shipments;
 
     public AirCargoDocumentService(
             AwbRecordRepository awbs,
             CargoDocumentRepository docs,
             CustomsDeclarationRepository customs,
             ExternalGatewayService external,
-            DocumentTemplateRepository templates) {
+            DocumentTemplateRepository templates,
+            AirCargoProviderRegistry providers,
+            AirlineIntegrationAttemptService integrationAttempts,
+            ShipmentRepository shipments) {
         this.awbs = awbs;
         this.docs = docs;
         this.customs = customs;
         this.external = external;
         this.templates = templates;
+        this.providers = providers;
+        this.integrationAttempts = integrationAttempts;
+        this.shipments = shipments;
     }
 
     @Transactional
     public AwbResponse createAwb(AwbRequest request) {
         UUID tenantId = TenantContext.getTenantId();
+        shipments.findByIdAndTenantId(request.shipmentId(), tenantId)
+                .orElseThrow(() -> new IllegalArgumentException("Shipment not found"));
+        if (request.hawbNumber() != null && !request.hawbNumber().isBlank() && request.mawbNumber() != null && !request.mawbNumber().isBlank()) {
+            awbs.findByTenantIdAndAwbNumber(tenantId, request.mawbNumber().trim())
+                    .orElseThrow(() -> new IllegalArgumentException("Parent MAWB does not exist for this HAWB"));
+        }
         AwbRecord awb = new AwbRecord(
                 tenantId,
                 request.shipmentId(),
@@ -221,9 +239,21 @@ public class AirCargoDocumentService {
         payload.put("commodity", awb.getCommodity());
         payload.put("idempotencyKey", "AWB-" + awb.getId());
 
-        Map<String, Object> response = external.submitAwb(payload);
-        awb.submitted(String.valueOf(response.getOrDefault("reference", awb.getAwbNumber())));
-        return AwbResponse.from(awbs.save(awb));
+        var provider = providers.active();
+        if (!provider.capabilities().awbSubmission()) {
+            throw new IllegalStateException("The configured airline provider does not support AWB submission");
+        }
+        String key = "AWB-" + awb.getId();
+        UUID attempt = integrationAttempts.start(provider.providerCode(), "AWB_SUBMIT", key, UUID.randomUUID().toString(), payload.toString());
+        try {
+            var result = provider.submitAwb(payload, key);
+            integrationAttempts.success(attempt, 200, result.rawResponse());
+            awb.submitted(result.providerReference() == null ? awb.getAwbNumber() : result.providerReference());
+            return AwbResponse.from(awbs.save(awb));
+        } catch (RuntimeException ex) {
+            integrationAttempts.failure(attempt, null, ex.getMessage());
+            throw ex;
+        }
     }
 
     @Transactional

@@ -1,63 +1,34 @@
 package com.logiplatform.service;
 
 import com.logiplatform.dto.ShipmentDtos;
-
-
+import com.logiplatform.integration.AirCargoProviderPort;
+import com.logiplatform.integration.AirCargoProviderRegistry;
+import com.logiplatform.model.Shipment;
+import com.logiplatform.repository.ShipmentRepository;
+import com.logiplatform.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
-
 import java.time.LocalDate;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 
-/**
- * Deliberately thin: this doesn't duplicate the EXCEPTION/notification machinery
- * already built and tested in ShipmentService — it calls the SAME
- * addTrackingEvent(EXCEPTION) path a manually-reported problem uses, so a
- * flight-detected delay shows up in the same tracking timeline and triggers the
- * same notification a human-reported exception would (see NotificationTest for
- * that behavior's coverage). This is the payoff of having built that pipeline
- * properly earlier — a genuinely new data source (real flight status) plugs into
- * existing, already-verified behavior instead of needing its own parallel system.
- */
 @Service
 public class FlightDelayCheckService {
-
-    private final FlightStatusPort flightStatusPort;
-    private final ShipmentService shipmentService;
-
-    public FlightDelayCheckService(FlightStatusPort flightStatusPort, ShipmentService shipmentService) {
-        this.flightStatusPort = flightStatusPort;
-        this.shipmentService = shipmentService;
-    }
-
-    public FlightStatusPort.FlightStatusResult checkAndFlagDelay(UUID shipmentId) {
-        ShipmentDtos.ShipmentResponse shipment = shipmentService.get(shipmentId);
-
-        if (shipment.flightNumber() == null || shipment.flightNumber().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "This shipment has no flight number set — nothing to check status for");
+    private final FlightStatusPort flightStatusPort; private final ShipmentService shipmentService; private final ShipmentRepository shipmentRepository; private final ShipmentEtaTrackingService etaTracking; private final AirCargoProviderRegistry providers;
+    public FlightDelayCheckService(FlightStatusPort flightStatusPort,ShipmentService shipmentService,ShipmentRepository shipmentRepository,ShipmentEtaTrackingService etaTracking,AirCargoProviderRegistry providers){this.flightStatusPort=flightStatusPort;this.shipmentService=shipmentService;this.shipmentRepository=shipmentRepository;this.etaTracking=etaTracking;this.providers=providers;}
+    public FlightStatusPort.FlightStatusResult checkAndFlagDelay(UUID shipmentId){
+        Shipment s=shipmentRepository.findByIdAndTenantId(shipmentId,TenantContext.getTenantId()).orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"Shipment not found"));
+        if(s.getFlightNumber()==null||s.getFlightNumber().isBlank())throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"This shipment has no flight number set");
+        Optional<FlightStatusPort.FlightStatusResult> result=flightStatusPort.getStatus(s.getFlightNumber(), LocalDate.now().toString());
+        if(result.isEmpty()){
+            AirCargoProviderPort p=providers.active();
+            if(!p.capabilities().flightStatus())throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"No flight-status provider is configured");
+            AirCargoProviderPort.FlightStatus x=p.getFlightStatus(s.getFlightNumber(),LocalDate.now().toString());
+            etaTracking.apply(shipmentId,x,p.providerCode());
+            return new FlightStatusPort.FlightStatusResult(x.flightStatus(),x.departureDelayMinutes(),x.arrivalDelayMinutes(),x.departureDelayMinutes()>=60||x.arrivalDelayMinutes()>=60,x.scheduledDeparture(),x.estimatedDeparture(),x.actualDeparture(),x.scheduledArrival(),x.estimatedArrival(),x.actualArrival(),x.providerEventId(),x.rawResponse());
         }
-
-        Optional<FlightStatusPort.FlightStatusResult> result =
-                flightStatusPort.getStatus(shipment.flightNumber(), LocalDate.now().toString());
-
-        if (result.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "Flight status is not available right now — either no provider is configured "
-                    + "(see flightstatus.aviationstack.enabled) or the lookup failed");
-        }
-
-        FlightStatusPort.FlightStatusResult status = result.get();
-        if (status.significantDelay()) {
-            shipmentService.addTrackingEvent(shipmentId, new ShipmentDtos.AddTrackingEventRequest(
-                    "EXCEPTION", null,
-                    "Flight " + shipment.flightNumber() + " significantly delayed — departure +"
-                    + status.departureDelayMinutes() + "min, arrival +" + status.arrivalDelayMinutes() + "min",
-                    null));
-        }
-
+        FlightStatusPort.FlightStatusResult status=result.get();
+        etaTracking.apply(shipmentId,new AirCargoProviderPort.FlightStatus(status.flightStatus(),status.scheduledDeparture(),status.estimatedDeparture(),status.actualDeparture(),status.scheduledArrival(),status.estimatedArrival(),status.actualArrival(),status.departureDelayMinutes(),status.arrivalDelayMinutes(),status.providerEventId(),status.rawResponse()),"FLIGHT_STATUS_PROVIDER");
         return status;
     }
 }

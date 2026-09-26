@@ -283,6 +283,8 @@ public class SecurityConfig {
                     "AIR_CARGO"
                 )
 
+                
+
                 /*
                  * SHIPMENTS - READ
                  */

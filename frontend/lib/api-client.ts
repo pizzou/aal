@@ -1149,11 +1149,33 @@ export type RouteOption = {
 };
 export type AirCargoBookingResponse = {
   id: string;
+  shipmentId: string;
   status: string;
   confirmationNumber?: string | null;
   providerReference?: string | null;
   flightNumber: string;
   requestedWeightKg: number;
+  confirmedWeightKg?: number | null;
+  departureTime: string;
+  arrivalTime?: string | null;
+  serviceLevel?: string | null;
+  cancellationReason?: string | null;
+  cancelledAt?: string | null;
+};
+
+export type ShipmentEtaHistory = {
+  id: string;
+  shipmentId: string;
+  source: string;
+  providerEventId?: string | null;
+  flightNumber?: string | null;
+  flightStatus?: string | null;
+  previousEtd?: string | null;
+  newEtd?: string | null;
+  previousEta?: string | null;
+  newEta?: string | null;
+  reason?: string | null;
+  observedAt: string;
 };
 
 export const airCargoApi = {
@@ -1186,6 +1208,35 @@ export const airCargoApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  bookings: () =>
+    apiFetch<AirCargoBookingResponse[]>("/api/air-cargo/bookings"),
+
+  amendBooking: (id: string, data: Record<string, unknown>) =>
+    apiFetch<AirCargoBookingResponse>(`/api/air-cargo/bookings/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  cancelBooking: (id: string, data: Record<string, unknown>) =>
+    apiFetch<AirCargoBookingResponse>(`/api/air-cargo/bookings/${id}/cancel`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  refreshEta: (shipmentId: string) =>
+    apiFetch<Record<string, unknown>>(
+      `/api/shipments/${shipmentId}/eta/refresh`,
+      {
+        method: "POST",
+      },
+    ),
+
+  etaHistory: (shipmentId: string) =>
+    apiFetch<ShipmentEtaHistory[]>(`/api/shipments/${shipmentId}/eta/history`),
+
+  integrationHealth: () =>
+    apiFetch<Record<string, unknown>>("/api/air-cargo/integration/health"),
 
   optimizeRoutes: (data: {
     origin: string;

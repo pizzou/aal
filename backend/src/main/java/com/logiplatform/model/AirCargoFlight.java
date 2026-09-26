@@ -58,4 +58,11 @@ public class AirCargoFlight {
         if(kg==null||kg.signum()<=0||availableCapacityKg.compareTo(kg)<0)return false;
         availableCapacityKg=availableCapacityKg.subtract(kg); updatedAt=Instant.now(); return true;
     }
+
+    public void release(BigDecimal kg){
+        if(kg==null||kg.signum()<=0)return;
+        availableCapacityKg=availableCapacityKg.add(kg);
+        if(availableCapacityKg.compareTo(totalCapacityKg)>0) availableCapacityKg=totalCapacityKg;
+        updatedAt=Instant.now();
+    }
 }

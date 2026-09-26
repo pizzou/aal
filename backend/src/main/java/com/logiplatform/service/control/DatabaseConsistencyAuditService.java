@@ -9,6 +9,7 @@ import jakarta.persistence.Version;
 import jakarta.persistence.Basic;
 import jakarta.persistence.Transient;
 import jakarta.persistence.JoinColumn;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -18,7 +19,7 @@ import java.util.*;
 @Service
 public class DatabaseConsistencyAuditService {
     private final EntityManager em; private final JdbcTemplate db;
-    public DatabaseConsistencyAuditService(EntityManager em,JdbcTemplate db){this.em=em;this.db=db;}
+    public DatabaseConsistencyAuditService(EntityManager em, @Qualifier("tenantJdbcTemplate") JdbcTemplate db){this.em=em;this.db=db;}
     public Map<String,Object> audit(){
         List<Map<String,Object>> issues=new ArrayList<>();
         for(var entity:em.getMetamodel().getEntities()){

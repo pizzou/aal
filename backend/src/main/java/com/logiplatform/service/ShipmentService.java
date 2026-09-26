@@ -33,35 +33,58 @@ public class ShipmentService {
     private final FinancePostingService financePostingService;
     private final MilestoneOrchestrationService milestoneOrchestrationService;
     private final OperationsEventStreamService operationsEventStreamService;
+    private final FinanceDocumentSequenceService documentSequences;
+    private final BillingService billingService;
 
     public ShipmentService(ShipmentRepository shipmentRepository,
             ShipmentTrackingEventRepository trackingEventRepository,
             NotificationService notificationService,
             FinancePostingService financePostingService,
             MilestoneOrchestrationService milestoneOrchestrationService,
-            OperationsEventStreamService operationsEventStreamService) {
+            OperationsEventStreamService operationsEventStreamService,
+            FinanceDocumentSequenceService documentSequences,
+            BillingService billingService) {
         this.shipmentRepository = shipmentRepository;
         this.trackingEventRepository = trackingEventRepository;
         this.notificationService = notificationService;
         this.financePostingService = financePostingService;
         this.milestoneOrchestrationService = milestoneOrchestrationService;
         this.operationsEventStreamService = operationsEventStreamService;
+        this.documentSequences = documentSequences;
+        this.billingService = billingService;
     }
 
     @Transactional
     public ShipmentResponse create(CreateShipmentRequest request) {
         UUID tenantId = TenantContext.getTenantId();
-
-        if (shipmentRepository.existsByTenantIdAndReferenceCode(tenantId, request.referenceCode())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "A shipment with reference code '" + request.referenceCode() + "' already exists");
+        if (tenantId == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
         }
 
         TransportMode mode = parseTransportMode(request.transportMode());
 
+        // Document numbers are allocated server-side. Operators never need to
+        // invent an AWB/shipment reference or invoice number.
+        String reference = request.referenceCode() == null || request.referenceCode().isBlank()
+                ? (mode == TransportMode.AIR
+                    ? documentSequences.nextAwbNumber()
+                    : nextShipmentReference())
+                : request.referenceCode().trim();
+
+        if (shipmentRepository.existsByTenantIdAndReferenceCode(tenantId, reference)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A shipment with reference code '" + reference + "' already exists");
+        }
+
+        String invoiceNumber = documentSequences.nextInvoiceNumber();
+
         Shipment shipment = new Shipment(
-                tenantId, request.referenceCode(), request.originAddress(), request.destinationAddress(),
+                tenantId, reference, request.originAddress(), request.destinationAddress(),
                 mode, request.carrierName(), request.carrierReferenceNumber());
+        shipment.updateCommandCenterFields(
+                null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null,
+                "Outstanding", null, invoiceNumber, null, null, null, null, null, null, "USD");
         Shipment saved = shipmentRepository.save(shipment);
 
         // Every shipment's timeline starts here — this is what "high-end tracking" is
@@ -192,6 +215,16 @@ public class ShipmentService {
         }
 
         Shipment saved = shipmentRepository.save(shipment);
+
+        // Once client revenue exists, create the canonical commercial invoice.
+        // BillingService is idempotent per shipment and reuses the invoice number
+        // already allocated during shipment registration.
+        if (nz(saved.getAmountBilledToClient()).signum() > 0) {
+            billingService.billShipment(saved.getId(),
+                    request.nextActionDate() != null ? request.nextActionDate() : java.time.LocalDate.now().plusDays(30),
+                    request.ownerName());
+        }
+
         BigDecimal supplierDelta = requestedSupplierPaid.subtract(previousSupplierPaid);
         if (supplierDelta.signum() > 0) {
             financePostingService.postSupplierPayment(
@@ -271,6 +304,10 @@ public class ShipmentService {
 
     private static BigDecimal nz(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private String nextShipmentReference() {
+        return documentSequences.nextShipmentNumber();
     }
 
     private TransportMode parseTransportMode(String raw) {

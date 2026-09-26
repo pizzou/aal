@@ -17,7 +17,7 @@ public final class ShipmentDtos {
     }
 
     public record CreateShipmentRequest(
-            @NotBlank String referenceCode,
+            String referenceCode,
             @NotBlank String originAddress,
             @NotBlank String destinationAddress,
             @NotNull String transportMode,

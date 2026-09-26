@@ -194,10 +194,11 @@ public class CommercialOperationsService {
 
         UUID tenantId = TenantContext.getTenantId();
 
-        if (invoices.findByTenantIdAndInvoiceNo(
-                tenantId,
-                r.invoiceNo()).isPresent()) {
+        String invoiceNo = (r.invoiceNo() == null || r.invoiceNo().isBlank())
+                ? documentSequences.nextInvoiceNumber()
+                : r.invoiceNo().trim();
 
+        if (invoices.findByTenantIdAndInvoiceNo(tenantId, invoiceNo).isPresent()) {
             throw conflict("Invoice exists");
         }
 
@@ -227,7 +228,7 @@ public class CommercialOperationsService {
         CommercialInvoice invoice = invoices.save(
                 new CommercialInvoice(
                         tenantId,
-                        r.invoiceNo().trim(),
+                        invoiceNo,
                         r.issueDate(),
                         r.client(),
                         r.shipmentId(),

@@ -85,7 +85,10 @@ public class BillingService {
                         ? "USD"
                         : shipment.getCurrency());
 
-        String invoiceNo = documentSequences.nextInvoiceNumber();
+        String invoiceNo = shipment.getInvoiceNo();
+        if (invoiceNo == null || invoiceNo.isBlank()) {
+            invoiceNo = documentSequences.nextInvoiceNumber();
+        }
 
         CommercialInvoice invoice = invoices.saveAndFlush(
                 new CommercialInvoice(

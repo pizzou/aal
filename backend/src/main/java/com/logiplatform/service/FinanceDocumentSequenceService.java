@@ -18,6 +18,44 @@ public class FinanceDocumentSequenceService {
     }
 
     @Transactional
+    public String nextShipmentNumber() {
+        UUID tenant = TenantContext.getTenantId();
+        int year = LocalDate.now().getYear();
+        db.update("""
+            INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
+            VALUES(?,?,?,0)
+            ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
+            """, tenant, "SHIPMENT", year);
+        Long sequence = db.queryForObject("""
+            UPDATE finance_document_sequences
+               SET last_value=last_value+1,updated_at=now()
+             WHERE tenant_id=? AND document_type='SHIPMENT' AND fiscal_year=?
+            RETURNING last_value
+            """, Long.class, tenant, year);
+        if (sequence == null) throw new IllegalStateException("Unable to allocate shipment sequence");
+        return "AAL-SHP-" + year + "-" + String.format("%06d", sequence);
+    }
+
+    @Transactional
+    public String nextAwbNumber() {
+        UUID tenant = TenantContext.getTenantId();
+        int year = LocalDate.now().getYear();
+        db.update("""
+            INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
+            VALUES(?,?,?,0)
+            ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
+            """, tenant, "AWB", year);
+        Long sequence = db.queryForObject("""
+            UPDATE finance_document_sequences
+               SET last_value=last_value+1,updated_at=now()
+             WHERE tenant_id=? AND document_type='AWB' AND fiscal_year=?
+            RETURNING last_value
+            """, Long.class, tenant, year);
+        if (sequence == null) throw new IllegalStateException("Unable to allocate AWB sequence");
+        return "AAL-AWB-" + year + "-" + String.format("%06d", sequence);
+    }
+
+    @Transactional
     public String nextInvoiceNumber() {
         UUID tenant = TenantContext.getTenantId();
         int year = LocalDate.now().getYear();

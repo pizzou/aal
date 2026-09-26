@@ -483,7 +483,7 @@ export const shipmentsApi = {
   get: (id: string) => apiFetch<Shipment>(`/api/shipments/${id}`),
 
   create: (data: {
-    referenceCode: string;
+    referenceCode?: string;
     originAddress: string;
     destinationAddress: string;
     transportMode: string;
@@ -680,7 +680,12 @@ export interface OperationalControlTower {
   generatedAt: string;
   integrations: {
     generatedAt: string;
-    activeProvider: { code: string; capabilities: Record<string, unknown>; circuitBreaker: Record<string, unknown>; configured: boolean };
+    activeProvider: {
+      code: string;
+      capabilities: Record<string, unknown>;
+      circuitBreaker: Record<string, unknown>;
+      configured: boolean;
+    };
     accounts: Array<Record<string, unknown>>;
   };
   reconciliation: Record<string, unknown>;
@@ -695,9 +700,7 @@ export interface OperationalControlTower {
 
 export const enterpriseControlTowerApi = {
   operational: () =>
-    apiFetch<OperationalControlTower>(
-      "/api/v1/control-tower/operational",
-    ),
+    apiFetch<OperationalControlTower>("/api/v1/control-tower/operational"),
 };
 
 export const commandCenterApi = {

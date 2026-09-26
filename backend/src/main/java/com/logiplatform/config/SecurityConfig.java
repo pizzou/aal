@@ -4,6 +4,8 @@ import com.logiplatform.security.AuthRateLimitFilter;
 import com.logiplatform.security.BrowserCsrfFilter;
 import com.logiplatform.security.JwtAuthenticationFilter;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -18,6 +20,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.filter.CorsFilter;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
@@ -64,8 +67,6 @@ public class SecurityConfig {
                         .maxAgeInSeconds(31536000))
             )
 
-            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-
             .sessionManagement(session ->
                 session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
@@ -93,6 +94,11 @@ public class SecurityConfig {
             )
 
             .authorizeHttpRequests(auth -> auth
+                // CORS preflight requests never carry the application JWT.
+                // They must be allowed through Spring Security after the global
+                // CorsFilter has validated the Origin and requested headers.
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
 
                 /*
                  * PUBLIC
@@ -475,6 +481,19 @@ public class SecurityConfig {
         );
 
         return source;
+    }
+
+    /**
+     * Run CORS before the servlet/security filters. This is important in production
+     * because rate-limit/auth filters are ordinary servlet filters and can reject a
+     * request before Spring Security's internal CorsFilter gets a chance to add the
+     * Access-Control-Allow-Origin header. Without this, a real 503/429/401 is masked
+     * by the browser as a CORS failure.
+     */
+    @Bean
+    @Order(Ordered.HIGHEST_PRECEDENCE)
+    public CorsFilter globalCorsFilter(CorsConfigurationSource source) {
+        return new CorsFilter(source);
     }
 
     private static String normalizeOrigin(String origin) {

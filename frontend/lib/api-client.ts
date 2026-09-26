@@ -1669,13 +1669,17 @@ export function openOperationsEventStream(handlers: {
       });
 
       if (!response.ok || !response.body) {
-        handlers.onError?.(response.status);
-        if (response.status === 401) {
+        const status = response.status;
+        handlers.onError?.(status);
+        if (status === 401) {
           if (await confirmAuthenticationExpired()) {
             notifyAuthenticationExpired();
           }
         }
-        scheduleReconnect();
+
+        // Avoid hammering the backend/reverse proxy when the SSE endpoint is
+        // unavailable or rate-limited. Respect Retry-After when provided.
+        scheduleReconnect(response.headers.get("Retry-After"));
         return;
       }
 
@@ -1735,9 +1739,14 @@ export function openOperationsEventStream(handlers: {
     }
   };
 
-  const scheduleReconnect = () => {
+  const scheduleReconnect = (retryAfter?: string | null) => {
     if (stopped || reconnectTimer !== null) return;
-    const delay = Math.min(30000, 1000 * 2 ** reconnectAttempt);
+
+    const retrySeconds = Number.parseInt(retryAfter ?? "", 10);
+    const delay = Number.isFinite(retrySeconds)
+      ? Math.max(1000, Math.min(60000, retrySeconds * 1000))
+      : Math.min(60000, 2000 * 2 ** reconnectAttempt);
+
     reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = null;

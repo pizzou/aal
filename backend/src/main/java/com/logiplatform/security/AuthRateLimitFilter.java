@@ -43,6 +43,14 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
 
                 String uri = request.getRequestURI();
 
+                // CORS preflight is infrastructure traffic, not an authentication
+                // or public-API attempt. Never send OPTIONS through Redis rate
+                // limiting; the global CorsFilter validates it first.
+                if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+                        filterChain.doFilter(request, response);
+                        return;
+                }
+
                 /*
                  * CSRF bootstrap and session discovery are not login attempts.
                  * They must remain lightweight and must not consume the login bucket.

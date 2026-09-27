@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   shipmentsApi,
   sensorsApi,
-  awbDownloadUrl,
+  downloadAwbPdf,
   flightStatusApi,
   Shipment,
   TrackingEvent,
@@ -54,6 +54,7 @@ export default function ShipmentTrackingPage() {
   const [flightStatusError, setFlightStatusError] = useState<string | null>(
     null,
   );
+  const [downloadingAwb, setDownloadingAwb] = useState(false);
   const [form, setForm] = useState({
     eventType: "IN_TRANSIT",
     location: "",
@@ -128,13 +129,43 @@ export default function ShipmentTrackingPage() {
 
   async function checkFlightStatus() {
     setFlightStatusError(null);
+    const number = flightNumber.trim().toUpperCase();
+    if (!number) {
+      setFlightStatusError("Enter a flight number first.");
+      return;
+    }
     try {
+      // Persist the value currently shown in the form before asking the backend
+      // for status. This prevents a common race where the user types KQ100 and
+      // immediately clicks Check status while the shipment still has no flight.
+      if (shipment?.flightNumber?.trim().toUpperCase() !== number) {
+        const updated = await shipmentsApi.updateFlightNumber(
+          params.id,
+          number,
+        );
+        setShipment(updated);
+        setFlightNumber(updated.flightNumber ?? number);
+      }
       setFlightStatus(await flightStatusApi.check(params.id));
-      refresh();
+      await refresh();
     } catch (err) {
       setFlightStatusError(
         err instanceof ApiError ? err.message : "Flight status check failed",
       );
+    }
+  }
+
+  async function handleAwbDownload() {
+    if (!shipment) return;
+    setDownloadingAwb(true);
+    try {
+      await downloadAwbPdf(shipment.id);
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "Unable to download AWB PDF",
+      );
+    } finally {
+      setDownloadingAwb(false);
     }
   }
 
@@ -199,381 +230,567 @@ export default function ShipmentTrackingPage() {
 
   if (isLoading || !accessToken) return null;
 
-  return (
-    <main
-      style={{ maxWidth: 700, margin: "40px auto", fontFamily: "sans-serif" }}
-    >
-      <Link href="/shipments">&larr; Shipments</Link>
-      <h1>Tracking</h1>
+  const statusLabel = shipment?.status
+    ? shipment.status.replace(/_/g, " ")
+    : "LOADING";
+  const etaLabel = shipment?.eta
+    ? new Date(shipment.eta).toLocaleString()
+    : "Not scheduled";
+  const etdLabel = shipment?.etd
+    ? new Date(shipment.etd).toLocaleString()
+    : "Not scheduled";
 
-      {shipment && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <button onClick={copyShareLink}>
-            {copied ? "Copied!" : "Copy customer share link"}
-          </button>
-          <a
-            href={awbDownloadUrl(shipment.id)}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <button type="button">Download AWB (PDF)</button>
-          </a>
+  return (
+    <main className="page">
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">AAL / SHIPMENT 360</div>
+          <h1 className="page-title">
+            {shipment?.referenceCode || "Shipment"}
+          </h1>
+          <p className="page-subtitle">
+            One operational record for cargo, flight, documents, tracking and
+            customer delivery.
+          </p>
         </div>
-      )}
+
+        <div className="actions">
+          <Link className="btn" href="/shipments">
+            ← Shipment register
+          </Link>
+          <Link className="btn" href="/air-cargo">
+            Air cargo
+          </Link>
+          {shipment && (
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={handleAwbDownload}
+              disabled={downloadingAwb}
+            >
+              {downloadingAwb ? "Preparing AWB…" : "Download AWB PDF"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error && <div className="alert alert-error">{error}</div>}
 
       {shipment && (
         <>
+          <section
+            className="card"
+            style={{
+              marginTop: 14,
+              padding: 22,
+              background:
+                "linear-gradient(135deg, var(--aal-navy-950), var(--aal-navy-800))",
+              color: "#fff",
+              border: "1px solid rgba(255,255,255,.08)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 20,
+                flexWrap: "wrap",
+                alignItems: "flex-start",
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 800,
+                    letterSpacing: ".12em",
+                    opacity: 0.7,
+                  }}
+                >
+                  OPERATIONAL SHIPMENT
+                </div>
+                <h2 style={{ margin: "7px 0 6px", fontSize: 28 }}>
+                  {shipment.referenceCode}
+                </h2>
+                <div style={{ opacity: 0.78, fontSize: 13 }}>
+                  {shipment.originCityPort || shipment.originAddress}{" "}
+                  <span style={{ opacity: 0.55 }}>→</span>{" "}
+                  {shipment.destinationCityPort || shipment.destinationAddress}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  padding: "9px 13px",
+                  borderRadius: 999,
+                  background: "rgba(255,255,255,.11)",
+                  border: "1px solid rgba(255,255,255,.16)",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  letterSpacing: ".04em",
+                }}
+              >
+                {statusLabel}
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))",
+                gap: 10,
+                marginTop: 20,
+              }}
+            >
+              {[
+                ["Client", shipment.clientName || "—"],
+                ["Mode", shipment.transportMode || "—"],
+                ["Flight", shipment.flightNumber || "Not assigned"],
+                ["Invoice", shipment.invoiceNo || "Generated / pending"],
+              ].map(([label, value]) => (
+                <div
+                  key={label}
+                  style={{
+                    padding: 12,
+                    borderRadius: 10,
+                    background: "rgba(255,255,255,.07)",
+                    border: "1px solid rgba(255,255,255,.09)",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 10,
+                      textTransform: "uppercase",
+                      letterSpacing: ".08em",
+                      opacity: 0.58,
+                    }}
+                  >
+                    {label}
+                  </div>
+                  <strong style={{ display: "block", marginTop: 4 }}>
+                    {value}
+                  </strong>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <div className="grid grid-4" style={{ marginTop: 14 }}>
+            {[
+              ["Client revenue", shipment.amountBilledToClient],
+              ["Total cost", shipment.totalCost],
+              ["Gross profit", shipment.grossProfit],
+              ["Receivable", shipment.amountRemaining],
+            ].map(([label, value]) => (
+              <div className="kpi" key={String(label)}>
+                <div className="kpi-label">{label}</div>
+                <div className="kpi-value" style={{ fontSize: 19 }}>
+                  {typeof value === "number" ? value.toLocaleString() : "—"}{" "}
+                  {shipment.currency || ""}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-2" style={{ marginTop: 14 }}>
+            <section className="card">
+              <div className="page-head" style={{ marginBottom: 12 }}>
+                <div>
+                  <h2 className="card-title">Flight & ETA</h2>
+                  <div className="card-muted">
+                    Scheduled milestones remain visible even when no live
+                    airline feed is configured.
+                  </div>
+                </div>
+                <span className="status status-neutral">
+                  {flightStatus?.flightStatus || "SCHEDULED"}
+                </span>
+              </div>
+
+              <div className="grid grid-2">
+                <div className="kpi">
+                  <div className="kpi-label">Flight number</div>
+                  <div className="kpi-value" style={{ fontSize: 18 }}>
+                    {shipment.flightNumber || "Not assigned"}
+                  </div>
+                </div>
+                <div className="kpi">
+                  <div className="kpi-label">ETA</div>
+                  <div className="kpi-value" style={{ fontSize: 16 }}>
+                    {etaLabel}
+                  </div>
+                </div>
+              </div>
+
+              <form
+                onSubmit={saveFlightNumber}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto auto",
+                  gap: 8,
+                  marginTop: 12,
+                }}
+              >
+                <input
+                  aria-label="Flight number"
+                  placeholder="KQ100"
+                  value={flightNumber}
+                  onChange={(e) => setFlightNumber(e.target.value)}
+                />
+                <button
+                  className="btn"
+                  type="submit"
+                  disabled={!flightNumber.trim()}
+                >
+                  Save
+                </button>
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  onClick={checkFlightStatus}
+                  disabled={!flightNumber.trim()}
+                >
+                  Check status
+                </button>
+              </form>
+
+              <div className="card-muted" style={{ marginTop: 10 }}>
+                ETD: {etdLabel}
+              </div>
+
+              {flightStatusError && (
+                <div className="alert alert-error" style={{ marginTop: 10 }}>
+                  {flightStatusError}
+                </div>
+              )}
+
+              {flightStatus && (
+                <div
+                  className="alert"
+                  style={{
+                    marginTop: 10,
+                    borderColor: flightStatus.significantDelay
+                      ? "rgba(180,71,8,.22)"
+                      : "rgba(8,116,67,.22)",
+                  }}
+                >
+                  Status: <strong>{flightStatus.flightStatus}</strong> ·
+                  departure +{flightStatus.departureDelayMinutes} min · arrival
+                  +{flightStatus.arrivalDelayMinutes} min
+                </div>
+              )}
+            </section>
+
+            <section className="card">
+              <div className="page-head" style={{ marginBottom: 12 }}>
+                <div>
+                  <h2 className="card-title">Customer & access</h2>
+                  <div className="card-muted">
+                    Keep the customer-facing tracking link separate from the
+                    internal control workspace.
+                  </div>
+                </div>
+              </div>
+
+              <div className="field">
+                <label>Notification email</label>
+                <input
+                  type="email"
+                  placeholder="customer@example.com"
+                  value={notificationEmail}
+                  onChange={(e) => setNotificationEmail(e.target.value)}
+                />
+              </div>
+
+              <div className="actions" style={{ marginTop: 10 }}>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await shipmentsApi.updateNotificationEmail(
+                        params.id,
+                        notificationEmail,
+                      );
+                      await refresh();
+                    } catch (err) {
+                      setError(
+                        err instanceof ApiError
+                          ? err.message
+                          : "Failed to save notification email",
+                      );
+                    }
+                  }}
+                >
+                  Save email
+                </button>
+                <button className="btn" type="button" onClick={copyShareLink}>
+                  {copied ? "Link copied" : "Copy customer tracking link"}
+                </button>
+              </div>
+            </section>
+          </div>
+
+          <div className="grid grid-2" style={{ marginTop: 14 }}>
+            <section className="card">
+              <div className="page-head" style={{ marginBottom: 10 }}>
+                <div>
+                  <h2 className="card-title">Tracking timeline</h2>
+                  <div className="card-muted">
+                    Operational events from booking through delivery.
+                  </div>
+                </div>
+              </div>
+
+              <form
+                onSubmit={handleSubmit}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "160px 1fr 1fr auto",
+                  gap: 8,
+                  marginBottom: 16,
+                }}
+              >
+                <select
+                  value={form.eventType}
+                  onChange={(e) =>
+                    setForm({ ...form, eventType: e.target.value })
+                  }
+                >
+                  {EVENT_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t.replace(/_/g, " ")}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  placeholder="Location"
+                  value={form.location}
+                  onChange={(e) =>
+                    setForm({ ...form, location: e.target.value })
+                  }
+                />
+                <input
+                  placeholder="Operational note"
+                  value={form.notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                />
+                <button className="btn btn-primary" type="submit">
+                  Add event
+                </button>
+              </form>
+
+              <ol
+                style={{
+                  listStyle: "none",
+                  margin: 0,
+                  padding: 0,
+                  borderLeft: "2px solid var(--aal-line)",
+                }}
+              >
+                {events.map((ev) => (
+                  <li
+                    key={ev.id}
+                    style={{
+                      position: "relative",
+                      padding: "0 0 16px 18px",
+                      marginLeft: 0,
+                    }}
+                  >
+                    <span
+                      style={{
+                        position: "absolute",
+                        left: -7,
+                        top: 3,
+                        width: 12,
+                        height: 12,
+                        borderRadius: "50%",
+                        background:
+                          ev.eventType === "EXCEPTION"
+                            ? "var(--aal-danger)"
+                            : "var(--aal-blue)",
+                        boxShadow: "0 0 0 4px var(--aal-panel)",
+                      }}
+                    />
+                    <strong>{ev.eventType.replace(/_/g, " ")}</strong>
+                    <div className="card-muted">
+                      {new Date(ev.occurredAt).toLocaleString()}
+                      {ev.location ? ` · ${ev.location}` : ""}
+                    </div>
+                    {ev.notes && <div style={{ marginTop: 3 }}>{ev.notes}</div>}
+                  </li>
+                ))}
+                {!events.length && (
+                  <li style={{ paddingLeft: 18 }} className="empty">
+                    No tracking events yet.
+                  </li>
+                )}
+              </ol>
+            </section>
+
+            <section className="card">
+              <div className="page-head" style={{ marginBottom: 10 }}>
+                <div>
+                  <h2 className="card-title">Operations</h2>
+                  <div className="card-muted">
+                    Documents, billing, dispatch and cold-chain controls.
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-2">
+                <Link className="btn" href="/documents">
+                  Documents & customs
+                </Link>
+                <Link className="btn" href="/billing">
+                  Invoice & payment
+                </Link>
+                <Link className="btn" href="/trips">
+                  Dispatch / POD
+                </Link>
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  onClick={handleAwbDownload}
+                  disabled={downloadingAwb}
+                >
+                  {downloadingAwb ? "Preparing…" : "Download AWB"}
+                </button>
+              </div>
+
+              <div className="section-heading" style={{ marginTop: 18 }}>
+                <div className="section-number">COLD</div>
+                <div>
+                  <h3 style={{ margin: 0 }}>Cold-chain monitoring</h3>
+                  <p className="card-muted">
+                    Record sensor readings and monitor exceptions for sensitive
+                    cargo.
+                  </p>
+                </div>
+              </div>
+
+              <form
+                onSubmit={submitReading}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr auto",
+                  gap: 8,
+                }}
+              >
+                <input
+                  placeholder="Temperature °C"
+                  value={readingForm.temperatureCelsius}
+                  onChange={(e) =>
+                    setReadingForm({
+                      ...readingForm,
+                      temperatureCelsius: e.target.value,
+                    })
+                  }
+                />
+                <input
+                  placeholder="Humidity %"
+                  value={readingForm.humidityPercent}
+                  onChange={(e) =>
+                    setReadingForm({
+                      ...readingForm,
+                      humidityPercent: e.target.value,
+                    })
+                  }
+                />
+                <button className="btn" type="submit">
+                  Log reading
+                </button>
+              </form>
+
+              <div className="table-wrap" style={{ marginTop: 12 }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Temperature</th>
+                      <th>Humidity</th>
+                      <th>When</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {readings.slice(0, 5).map((r) => (
+                      <tr key={r.id}>
+                        <td>
+                          {r.temperatureCelsius != null
+                            ? `${r.temperatureCelsius}°C`
+                            : "—"}
+                        </td>
+                        <td>
+                          {r.humidityPercent != null
+                            ? `${r.humidityPercent}%`
+                            : "—"}
+                        </td>
+                        <td>{new Date(r.recordedAt).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                    {!readings.length && (
+                      <tr>
+                        <td colSpan={3} className="empty">
+                          No sensor readings yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
           <section className="card" style={{ marginTop: 14 }}>
-            <div className="eyebrow">SHIPMENT 360</div>
-            <h2 className="card-title">{shipment.referenceCode}</h2>
-            <div className="card-muted" style={{ marginBottom: 12 }}>
-              Customer → Quote → Booking → Cargo → AWB → Flight / Transport →
-              Documents → Customs → Delivery → POD → Invoice → Payment →
-              Profitability
+            <div className="page-head" style={{ marginBottom: 10 }}>
+              <div>
+                <h2 className="card-title">Notification log</h2>
+                <div className="card-muted">
+                  Customer and operations notifications generated from shipment
+                  events.
+                </div>
+              </div>
+              <span className="status status-neutral">
+                {notifications.length} records
+              </span>
             </div>
-            <div className="grid grid-4">
-              <div className="kpi">
-                <div className="kpi-label">Client revenue</div>
-                <div className="kpi-value" style={{ fontSize: 18 }}>
-                  {shipment.amountBilledToClient?.toLocaleString() || "—"}{" "}
-                  {shipment.currency || ""}
-                </div>
-              </div>
-              <div className="kpi">
-                <div className="kpi-label">Total cost</div>
-                <div className="kpi-value" style={{ fontSize: 18 }}>
-                  {shipment.totalCost?.toLocaleString() || "—"}{" "}
-                  {shipment.currency || ""}
-                </div>
-              </div>
-              <div className="kpi">
-                <div className="kpi-label">Gross profit</div>
-                <div className="kpi-value" style={{ fontSize: 18 }}>
-                  {shipment.grossProfit?.toLocaleString() || "—"}{" "}
-                  {shipment.currency || ""}
-                </div>
-              </div>
-              <div className="kpi">
-                <div className="kpi-label">Receivable</div>
-                <div className="kpi-value" style={{ fontSize: 18 }}>
-                  {shipment.amountRemaining?.toLocaleString() || "—"}{" "}
-                  {shipment.currency || ""}
-                </div>
-              </div>
-            </div>
-            <div className="actions" style={{ marginTop: 12 }}>
-              <Link className="btn" href="/documents">
-                Documents & customs
-              </Link>
-              <Link className="btn" href="/billing">
-                Invoice & payment
-              </Link>
-              <Link className="btn" href="/trips">
-                Dispatch / POD
-              </Link>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Recipient</th>
+                    <th>Subject</th>
+                    <th>When</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {notifications.map((n) => (
+                    <tr key={n.id}>
+                      <td>{n.status.replace(/_/g, " ")}</td>
+                      <td>{n.recipient || "—"}</td>
+                      <td>{n.subject}</td>
+                      <td>{new Date(n.createdAt).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {!notifications.length && (
+                    <tr>
+                      <td colSpan={4} className="empty">
+                        No notifications yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </section>
         </>
       )}
 
-      <form
-        onSubmit={saveWeight}
-        style={{
-          display: "flex",
-          gap: 8,
-          alignItems: "center",
-          margin: "12px 0",
-        }}
-      >
-        <label style={{ fontSize: 14, color: "#555" }}>Weight (kg):</label>
-        <input
-          type="number"
-          min={0}
-          value={weightKg}
-          onChange={(e) => setWeightKg(e.target.value)}
-          style={{ width: 100 }}
-        />
-        <button type="submit">Save</button>
-      </form>
-
-      <form
-        onSubmit={saveNotificationEmail}
-        style={{
-          display: "flex",
-          gap: 8,
-          alignItems: "center",
-          margin: "12px 0",
-        }}
-      >
-        <label style={{ fontSize: 14, color: "#555" }}>
-          Notify customer at:
-        </label>
-        <input
-          type="email"
-          placeholder="customer@example.com"
-          value={notificationEmail}
-          onChange={(e) => setNotificationEmail(e.target.value)}
-          style={{ width: 220 }}
-        />
-        <button type="submit">Save</button>
-      </form>
-
-      <form
-        onSubmit={saveFlightNumber}
-        style={{
-          display: "flex",
-          gap: 8,
-          alignItems: "center",
-          margin: "12px 0",
-        }}
-      >
-        <label style={{ fontSize: 14, color: "#555" }}>Flight number:</label>
-        <input
-          placeholder="KQ100"
-          value={flightNumber}
-          onChange={(e) => setFlightNumber(e.target.value)}
-          style={{ width: 120 }}
-        />
-        <button type="submit">Save</button>
-        <button type="button" onClick={checkFlightStatus}>
-          Check status
-        </button>
-      </form>
-      {flightStatusError && (
-        <p
-          style={{
-            color: flightStatusError.includes("not available")
-              ? "#888"
-              : "crimson",
-            fontSize: 14,
-          }}
-        >
-          {flightStatusError}
-        </p>
+      {!shipment && !error && (
+        <section className="card empty" style={{ marginTop: 14, padding: 40 }}>
+          Loading shipment…
+        </section>
       )}
-      {flightStatus && (
-        <p
-          style={{
-            fontSize: 14,
-            color: flightStatus.significantDelay ? "crimson" : "#137333",
-          }}
-        >
-          Status: {flightStatus.flightStatus} — departure +
-          {flightStatus.departureDelayMinutes}min, arrival +
-          {flightStatus.arrivalDelayMinutes}min
-          {flightStatus.significantDelay && " — logged as an exception below"}
-        </p>
-      )}
-
-      <form
-        onSubmit={handleSubmit}
-        style={{ display: "flex", gap: 8, margin: "20px 0" }}
-      >
-        <select
-          value={form.eventType}
-          onChange={(e) => setForm({ ...form, eventType: e.target.value })}
-        >
-          {EVENT_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t.replace(/_/g, " ")}
-            </option>
-          ))}
-        </select>
-        <input
-          placeholder="Location (optional)"
-          value={form.location}
-          onChange={(e) => setForm({ ...form, location: e.target.value })}
-        />
-        <input
-          placeholder="Notes (optional)"
-          value={form.notes}
-          onChange={(e) => setForm({ ...form, notes: e.target.value })}
-        />
-        <button type="submit">Add event</button>
-      </form>
-
-      {error && <p style={{ color: "crimson" }}>{error}</p>}
-
-      <ol
-        style={{
-          listStyle: "none",
-          padding: 0,
-          borderLeft: "2px solid #ddd",
-          marginLeft: 8,
-        }}
-      >
-        {events.map((ev) => (
-          <li
-            key={ev.id}
-            style={{ padding: "0 0 16px 20px", position: "relative" }}
-          >
-            <span
-              style={{
-                position: "absolute",
-                left: -7,
-                top: 4,
-                width: 12,
-                height: 12,
-                borderRadius: "50%",
-                background:
-                  ev.eventType === "EXCEPTION" ? "crimson" : "#0070f3",
-              }}
-            />
-            <strong>{ev.eventType.replace(/_/g, " ")}</strong>
-            <div style={{ color: "#666", fontSize: 14 }}>
-              {new Date(ev.occurredAt).toLocaleString()}
-              {ev.location ? ` · ${ev.location}` : ""}
-            </div>
-            {ev.notes && <div style={{ fontSize: 14 }}>{ev.notes}</div>}
-          </li>
-        ))}
-        {events.length === 0 && (
-          <p style={{ color: "#888" }}>No tracking events yet.</p>
-        )}
-      </ol>
-
-      <h2 style={{ marginTop: 24 }}>Cold-chain monitoring</h2>
-      <details style={{ marginBottom: 12 }}>
-        <summary style={{ cursor: "pointer", color: "#666", fontSize: 14 }}>
-          Set threshold
-        </summary>
-        <form
-          onSubmit={saveThreshold}
-          style={{ display: "flex", gap: 8, marginTop: 8 }}
-        >
-          <input
-            placeholder="Min °C"
-            value={thresholdForm.minTemperatureCelsius}
-            onChange={(e) =>
-              setThresholdForm({
-                ...thresholdForm,
-                minTemperatureCelsius: e.target.value,
-              })
-            }
-          />
-          <input
-            placeholder="Max °C"
-            value={thresholdForm.maxTemperatureCelsius}
-            onChange={(e) =>
-              setThresholdForm({
-                ...thresholdForm,
-                maxTemperatureCelsius: e.target.value,
-              })
-            }
-          />
-          <button type="submit">Save threshold</button>
-        </form>
-      </details>
-      <form
-        onSubmit={submitReading}
-        style={{ display: "flex", gap: 8, marginBottom: 12 }}
-      >
-        <input
-          placeholder="Temp °C"
-          value={readingForm.temperatureCelsius}
-          onChange={(e) =>
-            setReadingForm({
-              ...readingForm,
-              temperatureCelsius: e.target.value,
-            })
-          }
-        />
-        <input
-          placeholder="Humidity %"
-          value={readingForm.humidityPercent}
-          onChange={(e) =>
-            setReadingForm({ ...readingForm, humidityPercent: e.target.value })
-          }
-        />
-        <button type="submit">Log reading</button>
-      </form>
-      <table
-        width="100%"
-        cellPadding={6}
-        style={{ borderCollapse: "collapse", fontSize: 14 }}
-      >
-        <thead>
-          <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
-            <th>Temp</th>
-            <th>Humidity</th>
-            <th>When</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {readings.map((r) => (
-            <tr
-              key={r.id}
-              style={{
-                borderBottom: "1px solid #eee",
-                background: r.violatesThreshold ? "#fff4f4" : "transparent",
-              }}
-            >
-              <td>
-                {r.temperatureCelsius != null
-                  ? `${r.temperatureCelsius}°C`
-                  : "—"}
-              </td>
-              <td>
-                {r.humidityPercent != null ? `${r.humidityPercent}%` : "—"}
-              </td>
-              <td>{new Date(r.recordedAt).toLocaleString()}</td>
-              <td>{r.violatesThreshold ? "⚠ out of range" : ""}</td>
-            </tr>
-          ))}
-          {readings.length === 0 && (
-            <tr>
-              <td colSpan={4} style={{ color: "#888" }}>
-                No sensor readings yet.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-
-      <h2 style={{ marginTop: 24 }}>Notification log</h2>
-      <table
-        width="100%"
-        cellPadding={6}
-        style={{ borderCollapse: "collapse", fontSize: 14 }}
-      >
-        <thead>
-          <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
-            <th>Status</th>
-            <th>Recipient</th>
-            <th>Subject</th>
-            <th>When</th>
-          </tr>
-        </thead>
-        <tbody>
-          {notifications.map((n) => (
-            <tr key={n.id} style={{ borderBottom: "1px solid #eee" }}>
-              <td
-                style={{
-                  color:
-                    n.status === "SENT"
-                      ? "#137333"
-                      : n.status === "FAILED"
-                        ? "crimson"
-                        : "#888",
-                }}
-              >
-                {n.status.replace(/_/g, " ")}
-              </td>
-              <td>{n.recipient ?? "—"}</td>
-              <td>{n.subject}</td>
-              <td>{new Date(n.createdAt).toLocaleString()}</td>
-            </tr>
-          ))}
-          {notifications.length === 0 && (
-            <tr>
-              <td colSpan={4} style={{ color: "#888" }}>
-                No notifications yet.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
     </main>
   );
 }

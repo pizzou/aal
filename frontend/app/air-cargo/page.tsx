@@ -67,19 +67,27 @@ export default function AirCargoPage() {
       .then((response) =>
         setShipments(
           response.content.filter(
-            (shipment) =>
-              shipment.transportMode === "AIR" ||
-              shipment.transportMode === "ROAD",
+            (shipment) => shipment.transportMode === "AIR",
           ),
         ),
       )
-      .catch(() => undefined);
+      .catch((e) => {
+        setError(
+          e instanceof ApiError ? e.message : "Unable to load shipments",
+        );
+      });
   }, [accessToken]);
 
   const selectedShipment = useMemo(
     () => shipments.find((shipment) => shipment.id === shipmentId) ?? null,
     [shipments, shipmentId],
   );
+
+  useEffect(() => {
+    if (!shipmentId && shipments.length === 1) {
+      setShipmentId(shipments[0].id);
+    }
+  }, [shipmentId, shipments]);
 
   if (isLoading || !accessToken) return null;
 
@@ -207,7 +215,8 @@ export default function AirCargoPage() {
       setEtaHistory(history as Record<string, unknown>[]);
       setMessage("Flight status and ETA refreshed.");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "ETA refresh failed");
+      const message = e instanceof ApiError ? e.message : "ETA refresh failed";
+      setError(message);
     }
   }
 
@@ -568,9 +577,32 @@ export default function AirCargoPage() {
                 </span>
               </div>
             ))}
-            {!etaHistory.length && (
+            {!etaHistory.length && selectedShipment && (
+              <div
+                className="quick"
+                style={{
+                  marginTop: 7,
+                  borderColor: "var(--aal-line)",
+                  background: "var(--aal-panel-soft)",
+                }}
+              >
+                <strong>Scheduled ETA</strong>
+                <span>
+                  {selectedShipment.eta
+                    ? new Date(selectedShipment.eta).toLocaleString()
+                    : "No ETA has been scheduled for this shipment."}
+                </span>
+                <span className="card-muted">
+                  {selectedShipment.flightNumber
+                    ? `Flight ${selectedShipment.flightNumber}`
+                    : "Assign a flight number on the shipment record."}
+                </span>
+              </div>
+            )}
+            {!etaHistory.length && !selectedShipment && (
               <div className="empty">
-                Select a shipment and refresh flight status to load ETA history.
+                Select an air shipment to view its scheduled ETA and refresh
+                live status.
               </div>
             )}
           </div>

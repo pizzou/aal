@@ -9,5 +9,6 @@ public interface AirCargoBookingRepository extends JpaRepository<AirCargoBooking
  Optional<AirCargoBooking> findByTenantIdAndId(UUID tenantId,UUID id);
  Optional<AirCargoBooking> findByTenantIdAndIdempotencyKey(UUID tenantId,String key);
  Optional<AirCargoBooking> findByTenantIdAndProviderReference(UUID tenantId,String reference);
+ List<AirCargoBooking> findAllByTenantIdAndShipmentIdOrderByCreatedAtDesc(UUID tenantId,UUID shipmentId);
  List<AirCargoBooking> findAllByTenantIdOrderByCreatedAtDesc(UUID tenantId);
 }

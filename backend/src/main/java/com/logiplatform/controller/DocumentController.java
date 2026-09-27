@@ -27,7 +27,7 @@ public class DocumentController {
         byte[] pdf = awbDocumentService.generateAwb(shipmentId);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"awb-" + shipmentId + ".pdf\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"AAL-AWB-" + shipmentId + ".pdf\"")
                 .body(pdf);
     }
 }

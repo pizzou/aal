@@ -1155,6 +1155,40 @@ export function awbDownloadUrl(shipmentId: string): string {
   return `${API_BASE}/api/shipments/${shipmentId}/documents/awb`;
 }
 
+export async function downloadAwbPdf(shipmentId: string): Promise<void> {
+  const headers = new Headers();
+  applyAuthenticationHeader(headers, `/api/shipments/${shipmentId}/documents/awb`);
+  const response = await fetch(awbDownloadUrl(shipmentId), {
+    method: "GET",
+    credentials: "include",
+    headers,
+  });
+
+  if (!response.ok) {
+    const message = await extractErrorMessage(
+      response,
+      `Unable to download AWB (HTTP ${response.status})`,
+    );
+    if (response.status === 401) {
+      notifyAuthenticationExpired();
+    }
+    throw new ApiError(response.status, message);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="([^"]+)"/i);
+  const filename = match?.[1] || `AAL-AWB-${shipmentId}.pdf`;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const logisticsApi = {
   capabilities: () =>
     apiFetch<Record<string, unknown>>("/api/universal/capabilities"),

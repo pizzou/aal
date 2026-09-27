@@ -5,6 +5,7 @@ import com.logiplatform.service.ShipmentService;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -32,7 +33,8 @@ public class ShipmentController {
     public ResponseEntity<ShipmentResponse> create(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @Valid @RequestBody CreateShipmentRequest request) {
-        return ResponseEntity.ok(shipmentService.create(request, idempotencyKey));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(shipmentService.create(request, idempotencyKey));
     }
 
     @GetMapping

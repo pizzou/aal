@@ -72,8 +72,8 @@ export default function ShipmentsPage() {
   useEffect(() => {
     if (!accessToken) return;
 
+    let active = true;
     const timer = window.setTimeout(() => {
-      let active = true;
       setError("");
 
       shipmentsApi
@@ -92,13 +92,12 @@ export default function ShipmentsPage() {
               : "Failed to load shipments.",
           );
         });
-
-      return () => {
-        active = false;
-      };
     }, 250);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
   }, [accessToken, page, query, mode, status]);
 
   useEffect(() => {

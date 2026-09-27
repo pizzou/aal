@@ -113,6 +113,7 @@ public class SecurityConfig {
                     new AntPathRequestMatcher("/api/public/tracking/**"),
 
                     new AntPathRequestMatcher("/actuator/health"),
+                    new AntPathRequestMatcher("/actuator/health/**"),
                     new AntPathRequestMatcher("/actuator/prometheus"),
                     new AntPathRequestMatcher("/actuator/info")
                 )

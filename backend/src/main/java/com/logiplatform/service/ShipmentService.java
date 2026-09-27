@@ -135,27 +135,23 @@ public class ShipmentService {
         UUID tenantId = TenantContext.getTenantId();
 
         String normalizedQuery = query == null ? "" : query.trim();
-        TransportMode transportMode = parseOptionalTransportMode(mode);
-        ShipmentStatus shipmentStatus = parseOptionalShipmentStatus(status);
+        String normalizedMode = normalizeOptionalTransportMode(mode);
+        String normalizedStatus = normalizeOptionalShipmentStatus(status);
 
         return shipmentRepository
-                .search(tenantId, normalizedQuery, transportMode, shipmentStatus, pageable)
+                .search(tenantId, normalizedQuery, normalizedMode, normalizedStatus, pageable)
                 .map(ShipmentResponse::from);
     }
 
-    private TransportMode parseOptionalTransportMode(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
-        return parseTransportMode(raw);
+    private String normalizeOptionalTransportMode(String raw) {
+        if (raw == null || raw.isBlank()) return "";
+        return parseTransportMode(raw).name();
     }
 
-    private ShipmentStatus parseOptionalShipmentStatus(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
+    private String normalizeOptionalShipmentStatus(String raw) {
+        if (raw == null || raw.isBlank()) return "";
         try {
-            return ShipmentStatus.valueOf(raw.trim().toUpperCase());
+            return ShipmentStatus.valueOf(raw.trim().toUpperCase()).name();
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Invalid status: " + raw);

@@ -156,12 +156,17 @@ async function extractErrorMessage(
   try {
     const body = (await response.json()) as {
       error?: string;
+      code?: string;
       message?: string;
       detail?: string;
+      requestId?: string;
+      correlationId?: string;
     };
-    if (body?.error) return body.error;
-    if (body?.message) return body.message;
-    if (body?.detail) return body.detail;
+    const message = body?.message || body?.error || body?.detail;
+    if (message) {
+      const requestId = body.requestId || response.headers.get("X-Request-Id");
+      return requestId ? `${message} (Request ${requestId})` : message;
+    }
   } catch {
     // Ignore non-JSON responses.
   }
@@ -467,6 +472,77 @@ export interface ShipmentListParams {
   mode?: string;
   status?: string;
 }
+
+export interface ShipmentConsolidation {
+  id: string;
+  consolidation_reference: string;
+  mode: string;
+  master_reference: string | null;
+  origin_code: string | null;
+  destination_code: string | null;
+  status: string;
+  planned_departure: string | null;
+  planned_arrival: string | null;
+  member_count?: number;
+  members?: Array<{
+    shipment_id: string;
+    house_reference: string | null;
+    role: string;
+    reference_code: string;
+    status: string;
+    transport_mode: string;
+  }>;
+}
+
+export const consolidationsApi = {
+  list: () =>
+    apiFetch<ShipmentConsolidation[]>("/api/operations/consolidations"),
+  get: (id: string) =>
+    apiFetch<ShipmentConsolidation>(
+      `/api/operations/consolidations/${encodeURIComponent(id)}`,
+    ),
+  create: (data: {
+    reference: string;
+    mode: string;
+    masterReference?: string;
+    origin?: string;
+    destination?: string;
+    plannedDeparture?: string;
+    plannedArrival?: string;
+    notes?: string;
+  }) =>
+    apiFetch<ShipmentConsolidation>("/api/operations/consolidations", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  addMember: (id: string, shipmentId: string, houseReference?: string) =>
+    apiFetch<ShipmentConsolidation>(
+      `/api/operations/consolidations/${encodeURIComponent(id)}/members`,
+      {
+        method: "POST",
+        body: JSON.stringify({ shipmentId, houseReference }),
+      },
+    ),
+  removeMember: (id: string, shipmentId: string) =>
+    apiFetch<void>(
+      `/api/operations/consolidations/${encodeURIComponent(id)}/members/${encodeURIComponent(shipmentId)}`,
+      { method: "DELETE" },
+    ),
+};
+
+export interface FinanceAccount {
+  id: string;
+  accountCode: string;
+  accountName: string;
+  accountType: string;
+  parentCode: string | null;
+  normalBalance: string;
+  active: boolean;
+}
+
+export const financeAccountsApi = {
+  list: () => apiFetch<FinanceAccount[]>("/api/finance/accounts"),
+};
 
 export const shipmentsApi = {
   list: (params: ShipmentListParams = {}) => {

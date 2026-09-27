@@ -42,7 +42,9 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> handleConflict(DataIntegrityViolationException ex) {
-        log.warn("Data integrity conflict requestId={} correlationId={}", requestId(), correlationId());
+        Throwable root = rootCause(ex);
+        log.warn("Data integrity conflict requestId={} correlationId={} rootCause={}",
+                requestId(), correlationId(), root.getMessage());
         return response(409, "DATA_CONFLICT", "The requested operation conflicts with existing data");
     }
 
@@ -84,6 +86,12 @@ public class GlobalExceptionHandler {
         if (correlationId() != null) body.put("correlationId", correlationId());
         body.put("details", List.of());
         return body;
+    }
+
+    private static Throwable rootCause(Throwable ex) {
+        Throwable current = ex;
+        while (current.getCause() != null && current.getCause() != current) current = current.getCause();
+        return current;
     }
 
     private static String requestId() { return MDC.get("requestId"); }

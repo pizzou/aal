@@ -2,7 +2,7 @@ package com.logiplatform.repository;
 
 import com.logiplatform.model.Shipment;
 import com.logiplatform.model.ShipmentStatus;
-import com.logiplatform.model.TransportMode;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Query;
@@ -19,32 +19,54 @@ public interface ShipmentRepository extends JpaRepository<Shipment, UUID> {
     Optional<Shipment> findByIdAndTenantId(UUID id, UUID tenantId);
     Page<Shipment> findAllByTenantId(UUID tenantId, Pageable pageable);
 
-    @Query("""
-            SELECT s
-              FROM Shipment s
-             WHERE s.tenantId = :tenantId
+    @Query(value = """
+            SELECT *
+              FROM shipments s
+             WHERE s.tenant_id = :tenantId
                AND (
-                    :q IS NULL OR :q = ''
-                    OR LOWER(COALESCE(s.referenceCode,'')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.clientName,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    :q = ''
+                    OR LOWER(COALESCE(s.reference_code,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.client_name,'')) LIKE LOWER(CONCAT('%', :q, '%'))
                     OR LOWER(COALESCE(s.contact,'')) LIKE LOWER(CONCAT('%', :q, '%'))
                     OR LOWER(COALESCE(s.commodity,'')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.airlineUsed,'')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.carrierName,'')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.invoiceNo,'')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.originCityPort,'')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.destinationCityPort,'')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.originAddress,'')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.destinationAddress,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.airline_used,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.carrier_name,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.invoice_no,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.origin_city_port,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.destination_city_port,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.origin_address,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.destination_address,'')) LIKE LOWER(CONCAT('%', :q, '%'))
                )
-               AND (:mode IS NULL OR s.transportMode = :mode)
-               AND (:status IS NULL OR s.status = :status)
-            """)
+               AND (:mode = '' OR UPPER(s.transport_mode) = UPPER(:mode))
+               AND (:status = '' OR UPPER(s.status) = UPPER(:status))
+            """,
+            countQuery = """
+            SELECT COUNT(*)
+              FROM shipments s
+             WHERE s.tenant_id = :tenantId
+               AND (
+                    :q = ''
+                    OR LOWER(COALESCE(s.reference_code,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.client_name,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.contact,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.commodity,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.airline_used,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.carrier_name,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.invoice_no,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.origin_city_port,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.destination_city_port,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.origin_address,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+                    OR LOWER(COALESCE(s.destination_address,'')) LIKE LOWER(CONCAT('%', :q, '%'))
+               )
+               AND (:mode = '' OR UPPER(s.transport_mode) = UPPER(:mode))
+               AND (:status = '' OR UPPER(s.status) = UPPER(:status))
+            """,
+            nativeQuery = true)
     Page<Shipment> search(
             @Param("tenantId") UUID tenantId,
             @Param("q") String q,
-            @Param("mode") TransportMode mode,
-            @Param("status") ShipmentStatus status,
+            @Param("mode") String mode,
+            @Param("status") String status,
             Pageable pageable);
     List<Shipment> findAllByTenantIdAndWeightKgIsNotNullAndStatus(UUID tenantId, ShipmentStatus status);
     boolean existsByTenantIdAndReferenceCode(UUID tenantId, String referenceCode);

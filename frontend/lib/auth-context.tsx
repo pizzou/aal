@@ -26,6 +26,12 @@ interface AuthState {
 }
 
 const AUTH_EXPIRED_EVENT = "aal:auth-expired";
+const AUTH_CONTEXT_STORAGE_KEY = "aal.auth-context";
+
+type StoredAuthContext = {
+  tenantId: string;
+  role: string;
+};
 
 const AuthContext = createContext<AuthState | null>(null);
 
@@ -33,6 +39,56 @@ let currentTenant: string | null = null;
 
 export function getTenantId(): string | null {
   return currentTenant;
+}
+
+function readStoredAuthContext(): StoredAuthContext | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(AUTH_CONTEXT_STORAGE_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as Partial<StoredAuthContext>;
+    if (
+      typeof parsed.tenantId !== "string" ||
+      !parsed.tenantId.trim() ||
+      typeof parsed.role !== "string" ||
+      !parsed.role.trim()
+    ) {
+      window.sessionStorage.removeItem(AUTH_CONTEXT_STORAGE_KEY);
+      return null;
+    }
+
+    return {
+      tenantId: parsed.tenantId,
+      role: parsed.role,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAuthContext(tenantId: string, role: string): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(
+      AUTH_CONTEXT_STORAGE_KEY,
+      JSON.stringify({ tenantId, role }),
+    );
+  } catch {
+    // Session storage can be unavailable in privacy-restricted browsers.
+  }
+}
+
+function clearStoredAuthContext(): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.removeItem(AUTH_CONTEXT_STORAGE_KEY);
+  } catch {
+    // Ignore storage cleanup failures; the in-memory session is still cleared.
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -45,39 +101,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function restoreSession() {
-      /*
-       * IMPORTANT:
-       * Keep storedToken outside the try block because both the
-       * success and error paths need access to the same token.
-       */
       const storedToken = getAccessToken();
+      const storedContext = readStoredAuthContext();
 
       try {
-        /*
-         * There is no reason to call the authenticated session
-         * endpoint when no bearer token exists.
-         */
         if (!storedToken) {
           clearAccessToken();
+          clearStoredAuthContext();
 
           currentTenant = null;
           setTenantId(null);
           setRole(null);
           setAccessTokenState(null);
-
           return;
         }
 
         /*
-         * apiFetch is responsible for attaching the stored bearer token.
+         * The server remains the source of truth for authentication and role.
+         * The cached context below is only a continuity fallback when a full
+         * page refresh happens while the API is temporarily unavailable.
          */
         const session: AuthSessionResponse = await authApi.session();
 
         if (cancelled) return;
 
-        /*
-         * Customer accounts are not internal operations sessions.
-         */
+        if (!session.authenticated || !session.tenantId || !session.role) {
+          throw new Error("Authentication required");
+        }
+
         if (session.role === "CUSTOMER") {
           try {
             await authApi.logout();
@@ -86,27 +137,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
 
           clearAccessToken();
+          clearStoredAuthContext();
 
           currentTenant = null;
           setTenantId(null);
           setRole(null);
           setAccessTokenState(null);
-
           return;
         }
 
-        /*
-         * Restore the complete authenticated session.
-         */
         currentTenant = session.tenantId;
+        writeStoredAuthContext(session.tenantId, session.role);
 
         setTenantId(session.tenantId);
         setRole(session.role);
         setAccessTokenState(storedToken);
 
-        /*
-         * Force password change when required by the backend.
-         */
         if (
           session.mustChangePassword &&
           typeof window !== "undefined" &&
@@ -120,25 +166,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         const isAuthenticationFailure =
           error instanceof Error &&
-          /401|authentication required|invalid or expired token/i.test(
+          /401|403|authentication required|invalid or expired token|token revoked/i.test(
             error.message,
           );
 
         /*
-         * If a token still exists and this was not an authentication
-         * failure, preserve the session. This prevents a temporary
-         * backend/network failure from logging the user out.
+         * A refresh can race the backend cold start, network recovery, or a
+         * temporary Render/Supabase delay. Do not throw away a valid local JWT
+         * or render an empty role-filtered sidebar in that situation.
+         *
+         * The cached tenant/role is UI continuity only. Every protected API
+         * request is still authenticated by the backend, so this does not grant
+         * permissions by itself.
          */
-        if (storedToken && !isAuthenticationFailure) {
+        if (storedToken && storedContext && !isAuthenticationFailure) {
+          currentTenant = storedContext.tenantId;
+          setTenantId(storedContext.tenantId);
+          setRole(storedContext.role);
           setAccessTokenState(storedToken);
           return;
         }
 
-        /*
-         * A genuine authentication failure invalidates the local
-         * session.
-         */
         clearAccessToken();
+        clearStoredAuthContext();
 
         currentTenant = null;
         setTenantId(null);
@@ -160,16 +210,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handleAuthenticationExpired = () => {
-      /*
-       * Do not destroy the authenticated UI for a transient 401
-       * while the API layer still has a valid token.
-       */
       const token = getAccessToken();
 
-      if (token) {
-        return;
-      }
+      if (token) return;
 
+      clearStoredAuthContext();
       currentTenant = null;
 
       setTenantId(null);
@@ -188,17 +233,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function login(token: string | null, tenant: string, userRole: string) {
-    /*
-     * OTP verification must return the actual JWT.
-     */
     if (!token) {
       throw new Error("Authentication succeeded without an access token.");
     }
 
-    /*
-     * Persist the real JWT before navigating to the dashboard.
-     */
     setAccessToken(token);
+    writeStoredAuthContext(tenant, userRole);
 
     currentTenant = tenant;
 
@@ -211,13 +251,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await authApi.logout();
     } catch {
-      /*
-       * Local credentials must always be removed even when
-       * the backend logout request fails.
-       */
+      // Local credentials must always be removed even when backend logout fails.
     }
 
     clearAccessToken();
+    clearStoredAuthContext();
 
     currentTenant = null;
 

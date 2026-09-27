@@ -19,7 +19,7 @@ public class FinanceDocumentSequenceService {
 
     @Transactional
     public String nextShipmentNumber() {
-        UUID tenant = TenantContext.getTenantId();
+        UUID tenant = requireTenant();
         int year = LocalDate.now().getYear();
         db.update("""
             INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
@@ -38,7 +38,7 @@ public class FinanceDocumentSequenceService {
 
     @Transactional
     public String nextAwbNumber() {
-        UUID tenant = TenantContext.getTenantId();
+        UUID tenant = requireTenant();
         int year = LocalDate.now().getYear();
         db.update("""
             INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
@@ -57,7 +57,7 @@ public class FinanceDocumentSequenceService {
 
     @Transactional
     public String nextInvoiceNumber() {
-        UUID tenant = TenantContext.getTenantId();
+        UUID tenant = requireTenant();
         int year = LocalDate.now().getYear();
         db.update("""
             INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
@@ -72,5 +72,13 @@ public class FinanceDocumentSequenceService {
             """, Long.class, tenant, year);
         if (sequence == null) throw new IllegalStateException("Unable to allocate invoice sequence");
         return "AAL-INV-" + year + "-" + String.format("%06d", sequence);
+    }
+
+    private UUID requireTenant() {
+        UUID tenant = TenantContext.getTenantId();
+        if (tenant == null) {
+            throw new IllegalStateException("Tenant context is required for document number allocation");
+        }
+        return tenant;
     }
 }

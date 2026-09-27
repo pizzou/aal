@@ -2,6 +2,7 @@ package com.logiplatform.config;
 
 import com.logiplatform.security.AuthRateLimitFilter;
 import com.logiplatform.security.BrowserCsrfFilter;
+import com.logiplatform.security.EnterpriseRateLimitFilter;
 import com.logiplatform.security.JwtAuthenticationFilter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -35,12 +36,12 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final AuthRateLimitFilter authRateLimitFilter;
     private final BrowserCsrfFilter browserCsrfFilter;
-    private final com.logiplatform.security.EnterpriseRateLimitFilter enterpriseRateLimitFilter;
+    private final EnterpriseRateLimitFilter enterpriseRateLimitFilter;
 
     public SecurityConfig(
             JwtAuthenticationFilter jwtAuthenticationFilter,
             AuthRateLimitFilter authRateLimitFilter,
-            BrowserCsrfFilter browserCsrfFilter, com.logiplatform.security.EnterpriseRateLimitFilter enterpriseRateLimitFilter) {
+            BrowserCsrfFilter browserCsrfFilter, EnterpriseRateLimitFilter enterpriseRateLimitFilter) {
 
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.authRateLimitFilter = authRateLimitFilter;

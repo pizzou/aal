@@ -88,6 +88,8 @@ public class BillingService {
         String invoiceNo = shipment.getInvoiceNo();
         if (invoiceNo == null || invoiceNo.isBlank()) {
             invoiceNo = documentSequences.nextInvoiceNumber();
+            shipment.assignInvoiceNoIfBlank(invoiceNo);
+            shipments.save(shipment);
         }
 
         CommercialInvoice invoice = invoices.saveAndFlush(

@@ -84,7 +84,7 @@ public class ShipmentService {
         shipment.updateCommandCenterFields(
                 null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null,
-                "Outstanding", null, invoiceNumber, null, null, null, null, null, null, "USD");
+                "Outstanding", null, invoiceNumber, null, null, null, null, null, "USD");
         Shipment saved = shipmentRepository.save(shipment);
 
         // Every shipment's timeline starts here — this is what "high-end tracking" is

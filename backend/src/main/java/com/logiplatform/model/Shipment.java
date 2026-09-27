@@ -496,6 +496,22 @@ public class Shipment {
         return invoiceNo;
     }
 
+    /**
+     * Assigns a system-generated invoice number only when the shipment does not
+     * already have one. This keeps invoice numbering stable across retries and
+     * allows imported legacy shipments to enter the canonical billing workflow.
+     */
+    public void assignInvoiceNoIfBlank(String generatedInvoiceNo) {
+        if (this.invoiceNo != null && !this.invoiceNo.isBlank()) {
+            return;
+        }
+        if (generatedInvoiceNo == null || generatedInvoiceNo.isBlank()) {
+            throw new IllegalArgumentException("Generated invoice number cannot be blank");
+        }
+        this.invoiceNo = generatedInvoiceNo.trim();
+        this.updatedAt = Instant.now();
+    }
+
     public String getNextAction() {
         return nextAction;
     }

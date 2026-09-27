@@ -2,6 +2,10 @@
 package com.logiplatform.service;
 
 import com.logiplatform.dto.CommercialDtos.*;
+import com.logiplatform.dto.CommandCenterShipmentDtos.UpdateRequest;
+import com.logiplatform.dto.ShipmentDtos.CreateShipmentRequest;
+import com.logiplatform.dto.ShipmentDtos.ShipmentResponse;
+import com.logiplatform.dto.ShipmentDtos.UpdateStatusRequest;
 import com.logiplatform.model.*;
 import com.logiplatform.repository.*;
 import com.logiplatform.tenancy.TenantContext;
@@ -27,12 +31,11 @@ public class CommercialOperationsService {
     private final TaskRecordRepository tasks;
     private final ExpenseRecordRepository expenses;
     private final ShipmentRepository shipments;
-    private final ShipmentTrackingEventRepository trackingEvents;
+    private final ShipmentService shipmentService;
 
     private final BillingService billing;
     private final FinancePostingService finance;
     private final QuoteLifecycleService quoteLifecycle;
-    private final MilestoneOrchestrationService milestoneOrchestrationService;
     private final FinanceDocumentSequenceService documentSequences;
     private final org.springframework.jdbc.core.JdbcTemplate tenantDb;
 
@@ -44,11 +47,10 @@ public class CommercialOperationsService {
             TaskRecordRepository tasks,
             ExpenseRecordRepository expenses,
             ShipmentRepository shipments,
-            ShipmentTrackingEventRepository trackingEvents,
+            ShipmentService shipmentService,
             BillingService billing,
             FinancePostingService finance,
             QuoteLifecycleService quoteLifecycle,
-            MilestoneOrchestrationService milestoneOrchestrationService,
             FinanceDocumentSequenceService documentSequences,
             @Qualifier("tenantJdbcTemplate") org.springframework.jdbc.core.JdbcTemplate tenantDb) {
 
@@ -59,11 +61,10 @@ public class CommercialOperationsService {
         this.tasks = tasks;
         this.expenses = expenses;
         this.shipments = shipments;
-        this.trackingEvents = trackingEvents;
+        this.shipmentService = shipmentService;
         this.billing = billing;
         this.finance = finance;
         this.quoteLifecycle = quoteLifecycle;
-        this.milestoneOrchestrationService = milestoneOrchestrationService;
         this.documentSequences = documentSequences;
         this.tenantDb = tenantDb;
     }
@@ -117,37 +118,126 @@ public class CommercialOperationsService {
     }
 
     @Transactional
-    public QuoteToShipmentResponse convertQuoteToShipment(UUID quoteId, String shipmentReference, String origin, String destination) {
+    public QuoteToShipmentResponse convertQuoteToShipment(
+            UUID quoteId,
+            String shipmentReference,
+            String origin,
+            String destination) {
+
         UUID tenantId = TenantContext.getTenantId();
-        CommercialQuote quote = quotes.findById(quoteId).filter(q -> tenantId.equals(q.getTenantId()))
+        CommercialQuote quote = quotes.findById(quoteId)
+                .filter(q -> tenantId.equals(q.getTenantId()))
                 .orElseThrow(() -> notFound("Quote not found"));
-        quote.changeStatus("WON");
-        String ref = (shipmentReference == null || shipmentReference.isBlank()) ? "AAL-" + quote.getQuoteId() : shipmentReference.trim();
-        if (shipments.existsByTenantIdAndReferenceCode(tenantId, ref)) throw conflict("Shipment reference already exists");
-        String[] route = quote.getRoute() == null ? new String[]{origin == null ? "" : origin, destination == null ? "" : destination} : quote.getRoute().split("\\s*(?:→|->|TO)\\s*",2);
-        String o = route.length > 0 && !route[0].isBlank() ? route[0].trim() : (origin == null ? "" : origin.trim());
-        String d = route.length > 1 && !route[1].isBlank() ? route[1].trim() : (destination == null ? "" : destination.trim());
-        if (o.isBlank() || d.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Origin and destination are required for shipment conversion");
+
+        String[] route = quote.getRoute() == null
+                ? new String[]{origin == null ? "" : origin, destination == null ? "" : destination}
+                : quote.getRoute().split("\\s*(?:→|->|TO)\\s*", 2);
+        String o = route.length > 0 && !route[0].isBlank()
+                ? route[0].trim()
+                : (origin == null ? "" : origin.trim());
+        String d = route.length > 1 && !route[1].isBlank()
+                ? route[1].trim()
+                : (destination == null ? "" : destination.trim());
+
+        if (o.isBlank() || d.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Origin and destination are required for shipment conversion");
+        }
+
         TransportMode mode;
-        try { mode = TransportMode.valueOf((quote.getServiceType() == null ? "ROAD" : quote.getServiceType()).toUpperCase(Locale.ROOT).replace(" FREIGHT","_FREIGHT").replace("SEA_FREIGHT","SEA").replace("AIR_FREIGHT","AIR").replace("ROAD_FREIGHT","ROAD")); }
-        catch (Exception e) { mode = TransportMode.ROAD; }
-        BigDecimal governedAmount = quote.getLockedAmount() != null ? quote.getLockedAmount() : quote.getQuotedAmount();
-        String governedCurrency = quote.getLockedCurrency() != null ? quote.getLockedCurrency() : (quote.getCurrency() == null ? "USD" : quote.getCurrency());
-        if (governedAmount == null) throw conflict("Quote has no governed price");
-        Shipment shipment = new Shipment(tenantId,ref,o,d,mode,null,null);
-        shipment.updateCommandCenterFields(quote.getClient(),null,quote.getCommodity(),null,o,null,d,quote.getChargeableWeightKg(),null,null,null,quote.getServiceType(),null,quote.getSupplierCost(),quote.getOtherCost(),governedAmount,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,"UNPAID",quote.getOwner(),null,null,null,null,null,quote.getNotes(),governedCurrency);
-        Shipment saved=shipments.save(shipment);
-        trackingEvents.save(new ShipmentTrackingEvent(
-                tenantId,
-                saved.getId(),
-                TrackingEventType.BOOKED,
-                o,
-                "Shipment booked from quotation " + quote.getQuoteId(),
-                java.time.Instant.now()));
-        milestoneOrchestrationService.initialize(saved.getId(), mode.name(), o, d);
+        try {
+            mode = TransportMode.valueOf(
+                    (quote.getServiceType() == null ? "ROAD" : quote.getServiceType())
+                            .toUpperCase(Locale.ROOT)
+                            .replace(" FREIGHT", "_FREIGHT")
+                            .replace("SEA_FREIGHT", "SEA")
+                            .replace("AIR_FREIGHT", "AIR")
+                            .replace("ROAD_FREIGHT", "ROAD"));
+        } catch (Exception e) {
+            mode = TransportMode.ROAD;
+        }
+
+        BigDecimal governedAmount = quote.getLockedAmount() != null
+                ? quote.getLockedAmount()
+                : quote.getQuotedAmount();
+        String governedCurrency = quote.getLockedCurrency() != null
+                ? quote.getLockedCurrency()
+                : (quote.getCurrency() == null ? "USD" : quote.getCurrency());
+
+        if (governedAmount == null) {
+            throw conflict("Quote has no governed price");
+        }
+
+        // Do not manufacture a shipment number here. The canonical ShipmentService
+        // allocates the tenant/year sequence and, for AIR, the AAL house AWB.
+        // This keeps quote conversion, public booking and direct shipment creation
+        // on exactly the same numbering path.
+        ShipmentResponse created = shipmentService.create(
+                new CreateShipmentRequest(
+                        null,
+                        o,
+                        d,
+                        mode.name(),
+                        null,
+                        null));
+
+        String notes = quote.getNotes();
+        if (shipmentReference != null && !shipmentReference.isBlank()) {
+            String customerReferenceNote = "Customer reference: " + shipmentReference.trim();
+            notes = notes == null || notes.isBlank()
+                    ? customerReferenceNote
+                    : notes.trim() + " | " + customerReferenceNote;
+        }
+
+        ShipmentResponse enriched = shipmentService.updateCommandCenter(
+                created.id(),
+                new UpdateRequest(
+                        quote.getClient(),
+                        null,
+                        quote.getCommodity(),
+                        null,
+                        o,
+                        null,
+                        d,
+                        null,
+                        null,
+                        null,
+                        null,
+                        quote.getServiceType(),
+                        null,
+                        quote.getSupplierCost(),
+                        quote.getOtherCost(),
+                        governedAmount,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        "UNPAID",
+                        quote.getOwner(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        notes,
+                        governedCurrency,
+                        LocalDate.now(),
+                        "BOOKED"));
+
+        ShipmentResponse booked = shipmentService.updateStatus(
+                enriched.id(),
+                new UpdateStatusRequest("BOOKED"));
+
         quote.changeStatus("CONVERTED");
         quotes.save(quote);
-        return new QuoteToShipmentResponse(quote.getId(),quote.getQuoteId(),saved.getId(),saved.getReferenceCode(),"CONVERTED","Quote converted to shipment");
+
+        return new QuoteToShipmentResponse(
+                quote.getId(),
+                quote.getQuoteId(),
+                booked.id(),
+                booked.referenceCode(),
+                "CONVERTED",
+                "Quote converted to shipment");
     }
 
     @Transactional(readOnly = true)

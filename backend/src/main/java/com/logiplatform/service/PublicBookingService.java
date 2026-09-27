@@ -53,12 +53,9 @@ public class PublicBookingService {
         TenantContext.setTenantId(context.tenantId());
 
         try {
-            String reference =
-                    normalizeReference(customerReference, context.requestId());
-
             ShipmentResponse shipment = shipments.create(
                     new CreateShipmentRequest(
-                            reference,
+                            null,
                             context.origin().trim(),
                             context.destination().trim(),
                             context.mode(),
@@ -83,7 +80,7 @@ public class PublicBookingService {
                             BigDecimal.ZERO,
                             BigDecimal.ZERO,
                             nz(context.quotedAmount()),
-                            "PUBLIC WEB BOOKING",
+                            bookingNotes("PUBLIC WEB BOOKING", customerReference),
                             safeCurrency(context.currency())));
 
             String email = blankToNull(context.email());
@@ -140,14 +137,9 @@ public class PublicBookingService {
 
         String mode = normalizeMode(serviceType);
 
-        String reference =
-                normalizeReference(
-                        customerReference,
-                        UUID.randomUUID());
-
         ShipmentResponse shipment = shipments.create(
                 new CreateShipmentRequest(
-                        reference,
+                        null,
                         origin.trim(),
                         destination.trim(),
                         mode,
@@ -174,7 +166,7 @@ public class PublicBookingService {
                         BigDecimal.ZERO,
                         BigDecimal.ZERO,
                         BigDecimal.ZERO,
-                        "PUBLIC WEB DIRECT BOOKING",
+                        bookingNotes("PUBLIC WEB DIRECT BOOKING", customerReference),
                         "USD"));
 
         String normalizedEmail =
@@ -300,20 +292,11 @@ public class PublicBookingService {
         }
     }
 
-    private static String normalizeReference(
-            String raw,
-            UUID fallbackSeed) {
-
-        if (raw != null && !raw.isBlank()) {
-            return raw.trim();
-        }
-
-        return "WEB-"
-                + fallbackSeed
-                .toString()
-                .replace("-", "")
-                .substring(0, 12)
-                .toUpperCase(Locale.ROOT);
+    private static String bookingNotes(String base, String customerReference) {
+        String reference = blankToNull(customerReference);
+        return reference == null
+                ? base
+                : base + " | Customer reference: " + reference;
     }
 
     private static String normalizeMode(

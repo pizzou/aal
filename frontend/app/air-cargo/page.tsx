@@ -97,7 +97,8 @@ export default function AirCargoPage() {
   // exposing the shipment's own flight as an explicit AAL planning request.
   // It is never presented as live carrier capacity.
   const planningFlight = useMemo<AirCargoFlight | null>(() => {
-    if (!selectedShipment?.flightNumber) return null;
+    if (!selectedShipment) return null;
+
     const carrierName =
       selectedShipment.airlineUsed ||
       selectedShipment.carrierName ||
@@ -108,17 +109,36 @@ export default function AirCargoPage() {
         .toUpperCase()
         .replace(/[^A-Z]/g, "")
         .slice(0, 3) || "AAL";
-    const departure = selectedShipment.etd
+
+    // A shipment can enter the air desk before an airline flight number has
+    // been assigned.  Keep that workflow bookable as an internal planning
+    // request instead of disabling the only action on the page.
+    const generatedFlightNumber = `AAL-PLAN-${selectedShipment.referenceCode
+      .replace(/[^A-Z0-9]/gi, "")
+      .slice(-12)}`;
+    const flightNumber =
+      selectedShipment.flightNumber?.trim() || generatedFlightNumber;
+
+    const scheduledDeparture = selectedShipment.etd
       ? new Date(selectedShipment.etd)
-      : new Date(Date.now() + 30 * 60 * 1000);
-    const arrival = selectedShipment.eta
+      : new Date(Date.now() + 2 * 60 * 60 * 1000);
+    const departure =
+      scheduledDeparture.getTime() > Date.now() + 60_000
+        ? scheduledDeparture
+        : new Date(Date.now() + 2 * 60 * 60 * 1000);
+    const scheduledArrival = selectedShipment.eta
       ? new Date(selectedShipment.eta)
       : new Date(departure.getTime() + 2 * 60 * 60 * 1000);
+    const arrival =
+      scheduledArrival.getTime() > departure.getTime()
+        ? scheduledArrival
+        : new Date(departure.getTime() + 2 * 60 * 60 * 1000);
+
     return {
       id: `planning-${selectedShipment.id}`,
       carrierCode,
       carrierName,
-      flightNumber: selectedShipment.flightNumber,
+      flightNumber,
       origin: airportCode(selectedShipment.originCityPort, origin),
       destination: airportCode(
         selectedShipment.destinationCityPort,
@@ -371,7 +391,7 @@ export default function AirCargoPage() {
               <h2 className="card-title">Carrier options</h2>
               <div className="card-muted">
                 Live carrier data is used when configured; otherwise
-                shipment-linked planning requests remain available.
+                shipment-linked AAL planning requests remain available.
               </div>
             </div>
             <span
@@ -442,10 +462,15 @@ export default function AirCargoPage() {
         </section>
 
         <section className="card">
-          <h2 className="card-title">Secure this capacity</h2>
+          <h2 className="card-title">
+            {bookingFlight?.source === "AAL_PLANNING"
+              ? "Create booking request"
+              : "Secure this capacity"}
+          </h2>
           <div className="card-muted" style={{ margin: "4px 0 12px" }}>
-            The server reserves capacity transactionally and enforces the
-            idempotency key.
+            {bookingFlight?.source === "AAL_PLANNING"
+              ? "Create an auditable shipment-linked planning request. Live airline capacity is used when an external provider is configured."
+              : "The server reserves capacity transactionally and enforces the idempotency key."}
           </div>
           <div className="field">
             <label>Shipment</label>
@@ -467,7 +492,7 @@ export default function AirCargoPage() {
               <span>{selectedShipment.clientName || "Client"}</span>
             </div>
           )}
-          {selected && (
+          {bookingFlight && (
             <div
               style={{
                 marginTop: 12,
@@ -479,15 +504,15 @@ export default function AirCargoPage() {
               }}
             >
               <strong>
-                {selected.carrierName} {selected.flightNumber}
+                {bookingFlight.carrierName} {bookingFlight.flightNumber}
               </strong>
               <div className="card-muted" style={{ marginTop: 4 }}>
-                {selected.origin} → {selected.destination}
+                {bookingFlight.origin} → {bookingFlight.destination}
               </div>
               <div className="card-muted">
-                {selected.source === "AAL_PLANNING"
-                  ? "Request is queued in AAL planning mode; live carrier capacity is not connected."
-                  : `Available ${selected.availableCapacityKg.toLocaleString()} kg`}
+                {bookingFlight.source === "AAL_PLANNING"
+                  ? "AAL planning request — no external airline capacity is being claimed."
+                  : `Available ${bookingFlight.availableCapacityKg.toLocaleString()} kg`}
               </div>
             </div>
           )}
@@ -498,7 +523,11 @@ export default function AirCargoPage() {
             onClick={book}
           >
             <Icon name="plane" size={15} />{" "}
-            {booking ? "Submitting…" : "Request booking"}
+            {booking
+              ? "Submitting…"
+              : bookingFlight?.source === "AAL_PLANNING"
+                ? "Create booking request"
+                : "Request booking"}
           </button>
         </section>
       </div>
@@ -638,6 +667,24 @@ export default function AirCargoPage() {
                     )?.failed ?? 0,
                   )}
             </strong>
+          </div>
+          <div
+            className="quick"
+            style={{
+              marginTop: 12,
+              borderColor:
+                integrationHealth?.mode === "INTERNAL_AAL"
+                  ? "var(--aal-line)"
+                  : "var(--line)",
+              background: "var(--aal-panel-soft)",
+            }}
+          >
+            <strong>Integration status</strong>
+            <span>
+              {integrationHealth?.mode === "INTERNAL_AAL"
+                ? "AAL internal planning is operational. Configure an airline provider to enable live schedules, capacity, booking and flight-status synchronization."
+                : "External airline integration is connected."}
+            </span>
           </div>
           <div style={{ marginTop: 12 }}>
             {etaHistory.slice(0, 6).map((event, index) => (

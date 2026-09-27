@@ -35,6 +35,7 @@ public class ShipmentService {
     private final OperationsEventStreamService operationsEventStreamService;
     private final FinanceDocumentSequenceService documentSequences;
     private final BillingService billingService;
+    private final ShipmentCreationIdempotencyService creationIdempotency;
 
     public ShipmentService(ShipmentRepository shipmentRepository,
             ShipmentTrackingEventRepository trackingEventRepository,
@@ -43,7 +44,8 @@ public class ShipmentService {
             MilestoneOrchestrationService milestoneOrchestrationService,
             OperationsEventStreamService operationsEventStreamService,
             FinanceDocumentSequenceService documentSequences,
-            BillingService billingService) {
+            BillingService billingService,
+            ShipmentCreationIdempotencyService creationIdempotency) {
         this.shipmentRepository = shipmentRepository;
         this.trackingEventRepository = trackingEventRepository;
         this.notificationService = notificationService;
@@ -52,23 +54,38 @@ public class ShipmentService {
         this.operationsEventStreamService = operationsEventStreamService;
         this.documentSequences = documentSequences;
         this.billingService = billingService;
+        this.creationIdempotency = creationIdempotency;
     }
 
     @Transactional
     public ShipmentResponse create(CreateShipmentRequest request) {
+        return create(request, null);
+    }
+
+    @Transactional
+    public ShipmentResponse create(CreateShipmentRequest request, String idempotencyKey) {
         UUID tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
         }
 
         TransportMode mode = parseTransportMode(request.transportMode());
+        String requestHash = creationIdempotency.requestHash(request);
+        String normalizedIdempotencyKey = creationIdempotency.normalize(idempotencyKey);
 
-        // Document numbers are allocated server-side. Operators never need to
-        // invent an AWB/shipment reference or invoice number.
+        if (normalizedIdempotencyKey != null) {
+            ShipmentResponse prior = creationIdempotency.findExisting(normalizedIdempotencyKey, requestHash);
+            if (prior != null) {
+                return prior;
+            }
+            creationIdempotency.reserve(normalizedIdempotencyKey, requestHash);
+        }
+
+        // The shipment reference is an AAL operational identifier, not an AWB.
+        // A real MAWB/HAWB belongs to AwbRecord and must come from an allocated
+        // airline/agent AWB range or a configured carrier integration.
         String reference = request.referenceCode() == null || request.referenceCode().isBlank()
-                ? (mode == TransportMode.AIR
-                    ? documentSequences.nextAwbNumber()
-                    : nextShipmentReference())
+                ? nextShipmentReference()
                 : request.referenceCode().trim();
 
         if (shipmentRepository.existsByTenantIdAndReferenceCode(tenantId, reference)) {
@@ -86,6 +103,10 @@ public class ShipmentService {
                 null, null, null, null, null, null, null, null, null,
                 "Outstanding", null, invoiceNumber, null, null, null, null, null, "USD");
         Shipment saved = shipmentRepository.save(shipment);
+
+        if (normalizedIdempotencyKey != null) {
+            creationIdempotency.complete(normalizedIdempotencyKey, requestHash, saved.getId());
+        }
 
         // Every shipment's timeline starts here — this is what "high-end tracking" is
         // built out of: a consistent audit trail from booking to delivery.

@@ -482,7 +482,8 @@ public class SecurityConfig {
                 "Pragma",
                 "X-CSRF-Token",
                 "X-Request-Id",
-                "X-Correlation-Id"
+                "X-Correlation-Id",
+                "Idempotency-Key"
             )
         );
 

@@ -29,8 +29,10 @@ public class ShipmentController {
     }
 
     @PostMapping
-    public ResponseEntity<ShipmentResponse> create(@Valid @RequestBody CreateShipmentRequest request) {
-        return ResponseEntity.ok(shipmentService.create(request));
+    public ResponseEntity<ShipmentResponse> create(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Valid @RequestBody CreateShipmentRequest request) {
+        return ResponseEntity.ok(shipmentService.create(request, idempotencyKey));
     }
 
     @GetMapping

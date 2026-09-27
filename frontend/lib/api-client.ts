@@ -497,18 +497,29 @@ export const shipmentsApi = {
 
   get: (id: string) => apiFetch<Shipment>(`/api/shipments/${id}`),
 
-  create: (data: {
-    referenceCode?: string;
-    originAddress: string;
-    destinationAddress: string;
-    transportMode: string;
-    carrierName?: string;
-    carrierReferenceNumber?: string;
-  }) =>
-    apiFetch<Shipment>("/api/shipments", {
+  create: (
+    data: {
+      referenceCode?: string;
+      originAddress: string;
+      destinationAddress: string;
+      transportMode: string;
+      carrierName?: string;
+      carrierReferenceNumber?: string;
+    },
+    idempotencyKey?: string,
+  ) => {
+    const key =
+      idempotencyKey?.trim() ||
+      (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+    return apiFetch<Shipment>("/api/shipments", {
       method: "POST",
+      headers: { "Idempotency-Key": key },
       body: JSON.stringify(data),
-    }),
+    });
+  },
 
   updateStatus: (id: string, status: string) =>
     apiFetch<Shipment>(`/api/shipments/${id}/status`, {

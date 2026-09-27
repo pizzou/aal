@@ -26,6 +26,14 @@ public class FinanceDocumentSequenceService {
             VALUES(?,?,?,0)
             ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
             """, tenant, "SHIPMENT", year);
+        synchronizeSequenceWithExistingData(
+            tenant,
+            "SHIPMENT",
+            year,
+            "shipments",
+            "reference_code",
+            "AAL-SHP-"
+        );
         Long sequence = db.queryForObject("""
             UPDATE finance_document_sequences
                SET last_value=last_value+1,updated_at=now()
@@ -45,6 +53,14 @@ public class FinanceDocumentSequenceService {
             VALUES(?,?,?,0)
             ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
             """, tenant, "AWB", year);
+        synchronizeSequenceWithExistingData(
+            tenant,
+            "AWB",
+            year,
+            "shipments",
+            "reference_code",
+            "AAL-AWB-"
+        );
         Long sequence = db.queryForObject("""
             UPDATE finance_document_sequences
                SET last_value=last_value+1,updated_at=now()
@@ -64,6 +80,22 @@ public class FinanceDocumentSequenceService {
             VALUES(?,?,?,0)
             ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
             """, tenant, "INVOICE", year);
+        synchronizeSequenceWithExistingData(
+            tenant,
+            "INVOICE",
+            year,
+            "commercial_invoices",
+            "invoice_no",
+            "AAL-INV-"
+        );
+        synchronizeSequenceWithExistingData(
+            tenant,
+            "INVOICE",
+            year,
+            "shipments",
+            "invoice_no",
+            "AAL-INV-"
+        );
         Long sequence = db.queryForObject("""
             UPDATE finance_document_sequences
                SET last_value=last_value+1,updated_at=now()
@@ -72,6 +104,57 @@ public class FinanceDocumentSequenceService {
             """, Long.class, tenant, year);
         if (sequence == null) throw new IllegalStateException("Unable to allocate invoice sequence");
         return "AAL-INV-" + year + "-" + String.format("%06d", sequence);
+    }
+
+
+    /**
+     * Keeps the durable sequence cursor ahead of legacy/imported documents.
+     *
+     * The original sequence table is concurrency-safe, but a sequence can be
+     * legitimately behind historical Excel-imported numbers. In that case the
+     * next generated number would collide with an existing document and the
+     * API would return HTTP 409. We advance the cursor to the highest existing
+     * suffix before taking the next atomic value.
+     */
+    private void synchronizeSequenceWithExistingData(
+            UUID tenant,
+            String documentType,
+            int year,
+            String table,
+            String column,
+            String prefix
+    ) {
+        String sql = """
+            SELECT COALESCE(MAX(
+                CASE
+                    WHEN %s ~ ? THEN
+                        substring(%s FROM '([0-9]+)$')::BIGINT
+                    ELSE 0
+                END
+            ), 0)
+            FROM %s
+            WHERE tenant_id = ?
+              AND %s ~ ?
+            """.formatted(column, column, table, column);
+
+        String exactPattern = "^" + prefix + year + "-[0-9]+$";
+        Long maxExisting = db.queryForObject(
+                sql,
+                Long.class,
+                exactPattern,
+                tenant,
+                exactPattern
+        );
+
+        if (maxExisting == null || maxExisting <= 0) {
+            return;
+        }
+
+        db.update("""
+            UPDATE finance_document_sequences
+               SET last_value=GREATEST(last_value, ?),updated_at=now()
+             WHERE tenant_id=? AND document_type=? AND fiscal_year=?
+            """, maxExisting, tenant, documentType, year);
     }
 
     private UUID requireTenant() {

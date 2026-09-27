@@ -34,19 +34,38 @@ public class AirCargoBookingService {
         UUID tenant=TenantContext.getTenantId(); validate(r); shipments.get(r.shipmentId()); String idem=cleanKey(r.idempotencyKey());
         AirCargoBooking prior=bookings.findByTenantIdAndIdempotencyKey(tenant,idem).orElse(null); if(prior!=null)return BookingResponse.from(prior);
         AirCargoProviderPort provider=providers.active();
-        AirCargoFlight reserved=findAndReserve(tenant,r);
+        // External providers own their live capacity. Only reserve AAL-persisted
+        // capacity when operating in internal mode.
+        AirCargoFlight reserved=provider.capabilities().booking()?null:findAndReserve(tenant,r);
         String source=provider.capabilities().booking()?provider.providerCode():"INTERNAL_CAPACITY";
         AirCargoBooking b=new AirCargoBooking(tenant,r.shipmentId(),r.carrierCode().trim().toUpperCase(),r.carrierName(),r.flightNumber().trim().toUpperCase(),r.departureTime(),r.arrivalTime(),r.originCode().trim().toUpperCase(),r.destinationCode().trim().toUpperCase(),r.weightKg(),"REQUESTED",source,idem);
         b.setServiceLevel(r.serviceLevel()); b.operation(idem,"BOOK");
-        try { bookings.saveAndFlush(b); stateMachine.transition(b,"PENDING_PROVIDER","BOOK_REQUESTED",correlationId()); } catch (DataIntegrityViolationException duplicate) {
+        try {
+            bookings.saveAndFlush(b);
+            // Only move into provider-pending when an external provider will actually
+            // receive the request, or when AAL has persisted capacity to confirm.
+            if (provider.capabilities().booking() || reserved != null) {
+                stateMachine.transition(b,"PENDING_PROVIDER","BOOK_REQUESTED",correlationId());
+            }
+        } catch (DataIntegrityViolationException duplicate) {
             AirCargoBooking existing = bookings.findByTenantIdAndIdempotencyKey(tenant, idem).orElseThrow(() -> duplicate);
             TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
             return BookingResponse.from(existing);
         }
-        if(!provider.capabilities().booking() && reserved==null) throw new ResponseStatusException(HttpStatus.CONFLICT,"No persisted capacity is available for this flight");
         if(!provider.capabilities().booking()){
-            String ref="CAP-"+UUID.randomUUID().toString().replace("-","").substring(0,16).toUpperCase(); b.confirm(r.weightKg(),ref,ref,"INTERNAL_CAPACITY_RESERVATION"); stateMachine.transition(b,"CONFIRMED","INTERNAL_CAPACITY",correlationId()); BookingResponse response=BookingResponse.from(bookings.save(b));
-            metrics.booking(response.status()); audit(response.id(),"AIR_BOOKING_CREATED","CREATE",response.status());
+            // AAL must remain usable when no airline API credentials are configured.
+            // If a persisted flight exists, reserve its real AAL capacity. If it does
+            // not exist, keep the request as an internal planning request instead of
+            // returning a misleading 409. It can later be fulfilled/reconciled when
+            // carrier capacity is ingested or an external provider is enabled.
+            if (reserved != null) {
+                String ref="CAP-"+UUID.randomUUID().toString().replace("-","").substring(0,16).toUpperCase();
+                b.confirm(r.weightKg(),ref,ref,"INTERNAL_CAPACITY_RESERVATION");
+                stateMachine.transition(b,"CONFIRMED","INTERNAL_CAPACITY",correlationId());
+            }
+            BookingResponse response=BookingResponse.from(bookings.save(b));
+            metrics.booking(response.status());
+            audit(response.id(),"AIR_BOOKING_CREATED","CREATE",response.status());
             return response;
         }
         String correlation=correlationId(); UUID attempt=attempts.start(provider.providerCode(),"BOOK",idem,correlation,r.toString());

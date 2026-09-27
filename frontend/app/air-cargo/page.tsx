@@ -25,6 +25,16 @@ function text(value: unknown): string {
   return value == null ? "—" : String(value);
 }
 
+function airportCode(
+  value: string | null | undefined,
+  fallback: string,
+): string {
+  const candidate = (value || "").trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(candidate)
+    ? candidate
+    : fallback.trim().toUpperCase();
+}
+
 export default function AirCargoPage() {
   const { accessToken, isLoading } = useAuth();
   const router = useRouter();
@@ -83,6 +93,53 @@ export default function AirCargoPage() {
     [shipments, shipmentId],
   );
 
+  // When no live airline schedule is configured, keep the air desk usable by
+  // exposing the shipment's own flight as an explicit AAL planning request.
+  // It is never presented as live carrier capacity.
+  const planningFlight = useMemo<AirCargoFlight | null>(() => {
+    if (!selectedShipment?.flightNumber) return null;
+    const carrierName =
+      selectedShipment.airlineUsed ||
+      selectedShipment.carrierName ||
+      "AAL Planning";
+    const carrierCode =
+      carrierName
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z]/g, "")
+        .slice(0, 3) || "AAL";
+    const departure = selectedShipment.etd
+      ? new Date(selectedShipment.etd)
+      : new Date(Date.now() + 30 * 60 * 1000);
+    const arrival = selectedShipment.eta
+      ? new Date(selectedShipment.eta)
+      : new Date(departure.getTime() + 2 * 60 * 60 * 1000);
+    return {
+      id: `planning-${selectedShipment.id}`,
+      carrierCode,
+      carrierName,
+      flightNumber: selectedShipment.flightNumber,
+      origin: airportCode(selectedShipment.originCityPort, origin),
+      destination: airportCode(
+        selectedShipment.destinationCityPort,
+        destination,
+      ),
+      departure: departure.toISOString(),
+      arrival: arrival.toISOString(),
+      totalCapacityKg: 0,
+      availableCapacityKg: 0,
+      status: "PLANNING",
+      source: "AAL_PLANNING",
+    };
+  }, [selectedShipment, origin, destination]);
+
+  const bookingFlight = selected || planningFlight;
+  const displayFlights = flights.length
+    ? flights
+    : planningFlight
+      ? [planningFlight]
+      : [];
+
   useEffect(() => {
     if (!shipmentId && shipments.length === 1) {
       setShipmentId(shipments[0].id);
@@ -138,8 +195,10 @@ export default function AirCargoPage() {
   }
 
   async function book() {
-    if (!selected || !shipmentId) {
-      setError("Select a shipment and a flight before booking.");
+    if (!bookingFlight || !shipmentId) {
+      setError(
+        "Select an air shipment with a flight number before requesting a booking.",
+      );
       return;
     }
 
@@ -156,16 +215,16 @@ export default function AirCargoPage() {
     try {
       const result = await airCargoApi.book({
         shipmentId,
-        carrierCode: selected.carrierCode,
-        carrierName: selected.carrierName,
-        flightNumber: selected.flightNumber,
-        departureTime: selected.departure,
-        arrivalTime: selected.arrival ?? undefined,
-        originCode: selected.origin,
-        destinationCode: selected.destination,
+        carrierCode: bookingFlight.carrierCode,
+        carrierName: bookingFlight.carrierName,
+        flightNumber: bookingFlight.flightNumber,
+        departureTime: bookingFlight.departure,
+        arrivalTime: bookingFlight.arrival ?? undefined,
+        originCode: bookingFlight.origin,
+        destinationCode: bookingFlight.destination,
         weightKg: requestedWeight,
         serviceLevel: "STANDARD",
-        idempotencyKey: `AAL-AIR-${shipmentId}-${selected.id}-${requestedWeight}`,
+        idempotencyKey: `AAL-AIR-${shipmentId}-${bookingFlight.id}-${requestedWeight}`,
       });
 
       setBookings((current) => [
@@ -311,10 +370,17 @@ export default function AirCargoPage() {
             <div>
               <h2 className="card-title">Carrier options</h2>
               <div className="card-muted">
-                Only persisted/configured provider data is displayed.
+                Live carrier data is used when configured; otherwise
+                shipment-linked planning requests remain available.
               </div>
             </div>
-            <span className="status status-success">Capacity protected</span>
+            <span
+              className={`status ${planningFlight && !flights.length ? "status-neutral" : "status-success"}`}
+            >
+              {planningFlight && !flights.length
+                ? "AAL planning mode"
+                : "Capacity protected"}
+            </span>
           </div>
           <div className="table-wrap">
             <table className="table">
@@ -330,7 +396,7 @@ export default function AirCargoPage() {
                 </tr>
               </thead>
               <tbody>
-                {flights.map((flight) => (
+                {displayFlights.map((flight) => (
                   <tr
                     key={flight.id}
                     style={{
@@ -347,8 +413,9 @@ export default function AirCargoPage() {
                     <td>{text(flight.departure)}</td>
                     <td>{text(flight.arrival)}</td>
                     <td>
-                      {flight.availableCapacityKg.toLocaleString()} /{" "}
-                      {flight.totalCapacityKg.toLocaleString()} kg
+                      {flight.source === "AAL_PLANNING"
+                        ? "Request only"
+                        : `${flight.availableCapacityKg.toLocaleString()} / ${flight.totalCapacityKg.toLocaleString()} kg`}
                     </td>
                     <td>{flight.source || "—"}</td>
                     <td>
@@ -361,10 +428,11 @@ export default function AirCargoPage() {
                     </td>
                   </tr>
                 ))}
-                {!flights.length && (
+                {!displayFlights.length && (
                   <tr>
                     <td colSpan={7} className="empty">
-                      Search a lane and date to compare available capacity.
+                      Search a lane and date, or assign a flight number and
+                      schedule to an air shipment.
                     </td>
                   </tr>
                 )}
@@ -417,14 +485,16 @@ export default function AirCargoPage() {
                 {selected.origin} → {selected.destination}
               </div>
               <div className="card-muted">
-                Available {selected.availableCapacityKg.toLocaleString()} kg
+                {selected.source === "AAL_PLANNING"
+                  ? "Request is queued in AAL planning mode; live carrier capacity is not connected."
+                  : `Available ${selected.availableCapacityKg.toLocaleString()} kg`}
               </div>
             </div>
           )}
           <button
             className="btn btn-primary"
             style={{ width: "100%", justifyContent: "center", marginTop: 12 }}
-            disabled={!selected || !shipmentId || booking}
+            disabled={!bookingFlight || !shipmentId || booking}
             onClick={book}
           >
             <Icon name="plane" size={15} />{" "}
@@ -546,19 +616,27 @@ export default function AirCargoPage() {
           <div className="metric-row">
             <span>Provider</span>
             <strong>
-              {String(integrationHealth?.provider || "Not configured")}
+              {integrationHealth?.mode === "INTERNAL_AAL"
+                ? "AAL internal planning"
+                : String(integrationHealth?.provider || "Not configured")}
             </strong>
           </div>
           <div className="metric-row">
-            <span>Failed integration attempts</span>
+            <span>
+              {integrationHealth?.mode === "INTERNAL_AAL"
+                ? "External integration"
+                : "Failed integration attempts"}
+            </span>
             <strong>
-              {String(
-                (
-                  integrationHealth?.attempts as
-                    | Record<string, unknown>
-                    | undefined
-                )?.failed ?? 0,
-              )}
+              {integrationHealth?.mode === "INTERNAL_AAL"
+                ? "Not configured"
+                : String(
+                    (
+                      integrationHealth?.attempts as
+                        | Record<string, unknown>
+                        | undefined
+                    )?.failed ?? 0,
+                  )}
             </strong>
           </div>
           <div style={{ marginTop: 12 }}>

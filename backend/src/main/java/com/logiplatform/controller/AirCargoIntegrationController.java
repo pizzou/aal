@@ -13,7 +13,18 @@ import java.util.*;
 public class AirCargoIntegrationController {
     private final AirCargoProviderRegistry providers; private final AirlineDeadLetterService deadLetters; private final AirlineIntegrationAttemptService attempts;
     public AirCargoIntegrationController(AirCargoProviderRegistry providers,AirlineDeadLetterService deadLetters,AirlineIntegrationAttemptService attempts){this.providers=providers;this.deadLetters=deadLetters;this.attempts=attempts;}
-    @GetMapping("/health") public Map<String,Object> health(){var p=providers.active();Map<String,Object> out=new LinkedHashMap<>();out.put("provider",p.providerCode());out.put("capabilities",p.capabilities());out.put("deadLetters",deadLetters.list().size());out.put("attempts",attempts.health(p.providerCode()));return out;}
+    @GetMapping("/health") public Map<String,Object> health(){
+        var p=providers.active();
+        var capabilities=p.capabilities();
+        Map<String,Object> out=new LinkedHashMap<>();
+        out.put("provider",p.providerCode());
+        out.put("mode",capabilities.booking()?"EXTERNAL_PROVIDER":"INTERNAL_AAL");
+        out.put("configured",capabilities.booking());
+        out.put("capabilities",capabilities);
+        out.put("deadLetters",deadLetters.list().size());
+        out.put("attempts",attempts.health(p.providerCode()));
+        return out;
+    }
     @GetMapping("/dead-letters") public List<Map<String,Object>> deadLetters(){return deadLetters.list();}
     @PostMapping("/dead-letters/{id}/requeue") public Map<String,Object> requeue(@PathVariable UUID id){deadLetters.requeue(id);return Map.of("id",id,"status","OPEN");}
     @PostMapping("/dead-letters/{id}/resolve") public Map<String,Object> resolve(@PathVariable UUID id){deadLetters.resolve(id);return Map.of("id",id,"status","RESOLVED");}

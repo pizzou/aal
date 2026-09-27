@@ -1,5 +1,7 @@
 package com.logiplatform.controller;
 
+import com.logiplatform.dto.PageResponse;
+
 import com.logiplatform.dto.AuditDtos.Response;
 import com.logiplatform.service.AuditService;
 import org.springframework.data.domain.Page;
@@ -16,7 +18,7 @@ public class AuditController {
     }
 
     @GetMapping
-    public Page<Response> list(Pageable pageable) {
-        return service.list(pageable);
+    public PageResponse<Response> list(Pageable pageable) {
+        return PageResponse.from(service.list(pageable));
     }
 }

@@ -1,5 +1,7 @@
 package com.logiplatform.controller;
 
+import com.logiplatform.dto.PageResponse;
+
 import com.logiplatform.service.SensorMonitoringService;
 
 import jakarta.validation.Valid;
@@ -28,8 +30,8 @@ public class SensorMonitoringController {
     }
 
     @GetMapping("/readings")
-    public ResponseEntity<Page<ReadingResponse>> history(@PathVariable UUID shipmentId, Pageable pageable) {
-        return ResponseEntity.ok(sensorMonitoringService.history(shipmentId, pageable));
+    public ResponseEntity<PageResponse<ReadingResponse>> history(@PathVariable UUID shipmentId, Pageable pageable) {
+        return ResponseEntity.ok(PageResponse.from(sensorMonitoringService.history(shipmentId, pageable)));
     }
 
     @PutMapping("/threshold")

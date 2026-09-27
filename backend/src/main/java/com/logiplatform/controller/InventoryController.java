@@ -1,8 +1,9 @@
 package com.logiplatform.controller;
 
+import com.logiplatform.dto.PageResponse;
+
 import com.logiplatform.service.InventoryService;
 import com.logiplatform.service.StockMovementService;
-
 
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
@@ -12,8 +13,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
 import static com.logiplatform.dto.WarehouseDtos.*;
-
-
 
 @RestController
 public class InventoryController {
@@ -33,9 +32,9 @@ public class InventoryController {
     }
 
     @GetMapping("/api/warehouses/{warehouseId}/inventory")
-    public ResponseEntity<Page<InventoryItemResponse>> list(
+    public ResponseEntity<PageResponse<InventoryItemResponse>> list(
             @PathVariable UUID warehouseId, Pageable pageable) {
-        return ResponseEntity.ok(inventoryService.list(warehouseId, pageable));
+        return ResponseEntity.ok(PageResponse.from(inventoryService.list(warehouseId, pageable)));
     }
 
     @GetMapping("/api/inventory/{itemId}")
@@ -50,8 +49,7 @@ public class InventoryController {
     }
 
     @GetMapping("/api/inventory/{itemId}/movements")
-    public ResponseEntity<Page<MovementResponse>> history(@PathVariable UUID itemId, Pageable pageable) {
-        return ResponseEntity.ok(stockMovementService.history(itemId, pageable));
+    public ResponseEntity<PageResponse<MovementResponse>> history(@PathVariable UUID itemId, Pageable pageable) {
+        return ResponseEntity.ok(PageResponse.from(stockMovementService.history(itemId, pageable)));
     }
 }
-

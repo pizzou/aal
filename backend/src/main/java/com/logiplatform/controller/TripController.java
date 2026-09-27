@@ -1,7 +1,8 @@
 package com.logiplatform.controller;
 
-import com.logiplatform.service.TripService;
+import com.logiplatform.dto.PageResponse;
 
+import com.logiplatform.service.TripService;
 
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
@@ -11,8 +12,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
 import static com.logiplatform.dto.TmsDtos.*;
-
-
 
 @RestController
 @RequestMapping("/api/trips")
@@ -30,8 +29,8 @@ public class TripController {
     }
 
     @GetMapping
-    public ResponseEntity<Page<TripResponse>> list(Pageable pageable) {
-        return ResponseEntity.ok(tripService.list(pageable));
+    public ResponseEntity<PageResponse<TripResponse>> list(Pageable pageable) {
+        return ResponseEntity.ok(PageResponse.from(tripService.list(pageable)));
     }
 
     @GetMapping("/{id}")
@@ -54,4 +53,3 @@ public class TripController {
         return ResponseEntity.ok(tripService.cancel(id));
     }
 }
-

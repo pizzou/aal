@@ -1,5 +1,7 @@
 package com.logiplatform.controller;
 
+import com.logiplatform.dto.PageResponse;
+
 import com.logiplatform.model.NotificationResponse;
 import com.logiplatform.service.ShipmentService;
 import jakarta.validation.Valid;
@@ -38,12 +40,12 @@ public class ShipmentController {
     }
 
     @GetMapping
-    public ResponseEntity<Page<ShipmentResponse>> list(
+    public ResponseEntity<PageResponse<ShipmentResponse>> list(
             Pageable pageable,
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String mode,
             @RequestParam(required = false) String status) {
-        return ResponseEntity.ok(shipmentService.list(pageable, q, mode, status));
+        return ResponseEntity.ok(PageResponse.from(shipmentService.list(pageable, q, mode, status)));
     }
 
     @GetMapping("/{id}")
@@ -82,9 +84,9 @@ public class ShipmentController {
     }
 
     @GetMapping("/{id}/notifications")
-    public ResponseEntity<Page<NotificationResponse>> notifications(
+    public ResponseEntity<PageResponse<NotificationResponse>> notifications(
             @PathVariable UUID id, Pageable pageable) {
-        return ResponseEntity.ok(shipmentService.notificationHistory(id, pageable));
+        return ResponseEntity.ok(PageResponse.from(shipmentService.notificationHistory(id, pageable)));
     }
 
     @PostMapping("/{id}/events")

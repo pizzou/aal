@@ -102,7 +102,10 @@ public class ShipmentService {
                 null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null,
                 "Outstanding", null, invoiceNumber, null, null, null, null, null, "USD");
-        Shipment saved = shipmentRepository.save(shipment);
+        // Flush the JPA INSERT before the JDBC idempotency row references the shipment.
+        // tenantJdbcTemplate uses a separate JDBC connection, so an unflushed JPA
+        // INSERT is not yet visible to PostgreSQL's foreign-key check.
+        Shipment saved = shipmentRepository.saveAndFlush(shipment);
 
         if (normalizedIdempotencyKey != null) {
             creationIdempotency.complete(normalizedIdempotencyKey, requestHash, saved.getId());
@@ -233,9 +236,7 @@ public class ShipmentService {
 
         Shipment saved = shipmentRepository.save(shipment);
 
-        // Once client revenue exists, create the canonical commercial invoice.
-        // BillingService is idempotent per shipment and reuses the invoice number
-        // already allocated during shipment registration.
+       
         if (nz(saved.getAmountBilledToClient()).signum() > 0) {
             billingService.billShipment(saved.getId(),
                     request.nextActionDate() != null ? request.nextActionDate() : java.time.LocalDate.now().plusDays(30),

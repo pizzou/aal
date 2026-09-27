@@ -80,8 +80,18 @@ public class ShipmentCreationIdempotencyService {
                     "The shipment creation request is already in progress");
         }
         Shipment shipment = shipments.findByIdAndTenantId(existing.shipmentId(), tenant)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
-                        "The idempotency record refers to a missing shipment"));
+                .orElse(null);
+        if (shipment == null) {
+            // A shipment may have been removed by an administrative cleanup or
+            // legacy-data repair while its idempotency row remained. Treat that
+            // row as stale and allow the original request to be recreated rather
+            // than permanently returning HTTP 409 for the same browser request.
+            db.update("""
+                DELETE FROM shipment_creation_idempotency
+                 WHERE tenant_id=? AND idempotency_key=? AND request_hash=?
+                """, tenant, key, requestHash);
+            return null;
+        }
         return ShipmentResponse.from(shipment);
     }
 

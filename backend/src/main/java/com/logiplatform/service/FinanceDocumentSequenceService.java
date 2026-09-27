@@ -21,11 +21,8 @@ public class FinanceDocumentSequenceService {
     public String nextShipmentNumber() {
         UUID tenant = requireTenant();
         int year = LocalDate.now().getYear();
-        db.update("""
-            INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
-            VALUES(?,?,?,0)
-            ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
-            """, tenant, "SHIPMENT", year);
+        ensureSequenceRow(tenant, "SHIPMENT", year);
+        lockSequenceRow(tenant, "SHIPMENT", year);
         synchronizeSequenceWithExistingData(
             tenant,
             "SHIPMENT",
@@ -48,11 +45,8 @@ public class FinanceDocumentSequenceService {
     public String nextAwbNumber() {
         UUID tenant = requireTenant();
         int year = LocalDate.now().getYear();
-        db.update("""
-            INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
-            VALUES(?,?,?,0)
-            ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
-            """, tenant, "AWB", year);
+        ensureSequenceRow(tenant, "AWB", year);
+        lockSequenceRow(tenant, "AWB", year);
         synchronizeSequenceWithExistingData(
             tenant,
             "AWB",
@@ -75,11 +69,8 @@ public class FinanceDocumentSequenceService {
     public String nextInvoiceNumber() {
         UUID tenant = requireTenant();
         int year = LocalDate.now().getYear();
-        db.update("""
-            INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
-            VALUES(?,?,?,0)
-            ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
-            """, tenant, "INVOICE", year);
+        ensureSequenceRow(tenant, "INVOICE", year);
+        lockSequenceRow(tenant, "INVOICE", year);
         synchronizeSequenceWithExistingData(
             tenant,
             "INVOICE",
@@ -106,6 +97,30 @@ public class FinanceDocumentSequenceService {
         return "AAL-INV-" + year + "-" + String.format("%06d", sequence);
     }
 
+
+    private void ensureSequenceRow(UUID tenant, String documentType, int year) {
+        db.update("""
+            INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
+            VALUES(?,?,?,0)
+            ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
+            """, tenant, documentType, year);
+    }
+
+    /**
+     * Serialize allocation for a tenant/document/year before reconciling the
+     * cursor with imported legacy data. The previous implementation performed
+     * the reconciliation before taking a row lock, which left a small race
+     * window where concurrent shipment creation could allocate the same
+     * document number after an import or cursor repair.
+     */
+    private void lockSequenceRow(UUID tenant, String documentType, int year) {
+        db.queryForObject("""
+            SELECT id
+              FROM finance_document_sequences
+             WHERE tenant_id=? AND document_type=? AND fiscal_year=?
+             FOR UPDATE
+            """, UUID.class, tenant, documentType, year);
+    }
 
     /**
      * Keeps the durable sequence cursor ahead of legacy/imported documents.

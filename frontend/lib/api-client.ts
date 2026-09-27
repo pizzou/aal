@@ -215,7 +215,22 @@ export async function apiFetch<T>(
   applyAuthenticationHeader(headers, path);
 
   const mutating = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
-  if (mutating) headers.set("X-CSRF-Token", await ensureCsrf());
+
+  /*
+   * BrowserCsrfFilter deliberately excludes the public authentication and
+   * public quote/tracking endpoints. Keep the client consistent with that
+   * server contract: a login must not depend on a separate /api/auth/csrf
+   * bootstrap request. This is especially important during a backend cold
+   * start because the login endpoint itself is the actual authentication
+   * operation. Protected mutations still obtain and send the CSRF token.
+   */
+  const csrfExempt =
+    PUBLIC_BEARER_EXEMPT_PATHS.has(path.split("?", 1)[0]) ||
+    path.startsWith("/api/public/");
+
+  if (mutating && !csrfExempt) {
+    headers.set("X-CSRF-Token", await ensureCsrf());
+  }
 
   const request = () =>
     fetch(`${API_BASE}${path}`, {

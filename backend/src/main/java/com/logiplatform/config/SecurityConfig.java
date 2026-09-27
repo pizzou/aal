@@ -478,8 +478,11 @@ public class SecurityConfig {
                 "Content-Type",
                 "Accept",
                 "Origin",
+                "Cache-Control",
+                "Pragma",
                 "X-CSRF-Token",
-                "X-Request-Id"
+                "X-Request-Id",
+                "X-Correlation-Id"
             )
         );
 

@@ -15,6 +15,22 @@ public interface AirCargoProviderPort {
 
     String providerCode();
 
+    /**
+     * Whether this adapter has the credentials and endpoint configuration it
+     * needs to execute its advertised live capabilities. Implementations may
+     * override this when capability flags alone are not sufficient.
+     */
+    default boolean configured() {
+        ProviderCapabilities c = capabilities();
+        return c.scheduleSearch() || c.liveCapacity() || c.booking() || c.amendment()
+                || c.cancellation() || c.flightStatus() || c.awbSubmission();
+    }
+
+    /** Human-readable configuration problems for operations diagnostics. */
+    default List<String> configurationIssues() {
+        return configured() ? List.of() : List.of("Provider is not configured");
+    }
+
     ProviderCapabilities capabilities();
 
     List<FlightOffer> searchFlights(

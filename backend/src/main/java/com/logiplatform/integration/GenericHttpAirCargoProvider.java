@@ -62,7 +62,7 @@ public class GenericHttpAirCargoProvider implements AirCargoProviderPort {
             @Value("${aircargo.provider.oauth2.token-url:}") String tokenUrl,
             @Value("${aircargo.provider.oauth2.client-id:}") String clientId,
             @Value("${aircargo.provider.oauth2.client-secret:}") String clientSecret,
-            @Value("${aircargo.provider.code:GENERIC_HTTP}") String providerCode,
+            @Value("${aircargo.generic.provider.code:GENERIC_HTTP}") String providerCode,
             @Value("${aircargo.provider.schedules-path:/schedules}") String schedulesPath,
             @Value("${aircargo.provider.booking-path:/bookings}") String bookingPath,
             @Value("${aircargo.provider.cancel-path:/bookings}") String cancelPath,

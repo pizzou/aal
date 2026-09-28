@@ -2,6 +2,7 @@ package com.logiplatform.service;
 
 import com.logiplatform.integration.AirCargoProviderPort;
 import com.logiplatform.integration.AirCargoProviderRegistry;
+import com.logiplatform.model.AirCargoBooking;
 import com.logiplatform.model.Shipment;
 import com.logiplatform.model.ShipmentStatus;
 import com.logiplatform.model.TransportMode;
@@ -20,13 +21,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-/**
- * Background live ETA poller for air shipments.
- *
- * <p>Provider-reference tracking is attempted first. This allows adapters such
- * as CargoAi to use their flight UUID rather than guessing a flight from a
- * flight number/date pair.</p>
- */
+/** Background live ETA poller for air shipments. */
 @Component
 public class AirCargoTrackingScheduler {
     private final ShipmentRepository shipments;
@@ -56,20 +51,10 @@ public class AirCargoTrackingScheduler {
 
     @Scheduled(fixedDelayString = "${aircargo.eta-poll.interval-ms:300000}")
     public void poll() {
-        if (!enabled) {
-            return;
-        }
-
-        AirCargoProviderPort provider = registry.active();
-        if (!provider.capabilities().flightStatus()) {
-            return;
-        }
+        if (!enabled) return;
 
         TenantContext.setTenantId(tenantId);
-        String owner = jobLocks.tryAcquire(
-                "air-cargo-eta-poll",
-                Duration.ofMinutes(5));
-
+        String owner = jobLocks.tryAcquire("air-cargo-eta-poll", Duration.ofMinutes(5));
         if (owner == null) {
             TenantContext.clear();
             return;
@@ -81,9 +66,7 @@ public class AirCargoTrackingScheduler {
                     ShipmentStatus.BOOKED,
                     ShipmentStatus.IN_TRANSIT,
                     ShipmentStatus.PLANNING)) {
-                for (Shipment shipment : shipments.findAllByTenantIdAndWeightKgIsNotNullAndStatus(
-                        tenantId,
-                        status)) {
+                for (Shipment shipment : shipments.findAllByTenantIdAndWeightKgIsNotNullAndStatus(tenantId, status)) {
                     if (shipment.getTransportMode() == TransportMode.AIR
                             && shipment.getFlightNumber() != null
                             && !shipment.getFlightNumber().isBlank()) {
@@ -94,48 +77,59 @@ public class AirCargoTrackingScheduler {
 
             for (UUID id : ids) {
                 try {
-                    Shipment shipment = shipments
-                            .findByIdAndTenantId(id, tenantId)
-                            .orElse(null);
-                    if (shipment == null) {
-                        continue;
-                    }
+                    Shipment shipment = shipments.findByIdAndTenantId(id, tenantId).orElse(null);
+                    if (shipment == null) continue;
 
-                    var latestBooking = bookings
-                            .findAllByTenantIdAndShipmentIdOrderByCreatedAtDesc(
-                                    tenantId,
-                                    id)
+                    AirCargoBooking latestBooking = bookings
+                            .findAllByTenantIdAndShipmentIdOrderByCreatedAtDesc(tenantId, id)
                             .stream()
                             .findFirst()
                             .orElse(null);
+
+                    AirCargoProviderPort provider = resolveProvider(latestBooking);
+                    if (provider == null || !provider.capabilities().flightStatus()) continue;
 
                     AirCargoProviderPort.FlightStatus live;
                     if (latestBooking != null
                             && latestBooking.getProviderReference() != null
                             && !latestBooking.getProviderReference().isBlank()
-                            && !"INTERNAL_CAPACITY".equalsIgnoreCase(latestBooking.getProvider()) ) {
+                            && !isInternal(latestBooking.getProvider())) {
                         try {
-                            live = provider.getFlightStatusByProviderReference(
-                                    latestBooking.getProviderReference());
+                            live = provider.getFlightStatusByProviderReference(latestBooking.getProviderReference());
                         } catch (UnsupportedOperationException ex) {
-                            live = provider.getFlightStatus(
-                                    shipment.getFlightNumber(),
-                                    LocalDate.now().toString());
+                            live = provider.getFlightStatus(shipment.getFlightNumber(), LocalDate.now().toString());
                         }
                     } else {
-                        live = provider.getFlightStatus(
-                                shipment.getFlightNumber(),
-                                LocalDate.now().toString());
+                        live = provider.getFlightStatus(shipment.getFlightNumber(), LocalDate.now().toString());
                     }
-
                     eta.apply(id, live, provider.providerCode());
                 } catch (Exception ignored) {
-                    // One stale provider response must not stop polling other shipments.
+                    // One provider failure must not stop the remaining shipment polls.
                 }
             }
         } finally {
             jobLocks.release("air-cargo-eta-poll", owner);
             TenantContext.clear();
         }
+    }
+
+    private AirCargoProviderPort resolveProvider(AirCargoBooking booking) {
+        if (booking != null && booking.getProvider() != null && !booking.getProvider().isBlank()
+                && !isInternal(booking.getProvider())) {
+            return registry.find(booking.getProvider())
+                    .filter(AirCargoProviderPort::configured)
+                    .orElse(null);
+        }
+        return registry.searchProviders().stream()
+                .filter(p -> p.capabilities().flightStatus())
+                .findFirst()
+                .orElseGet(() -> {
+                    AirCargoProviderPort active = registry.active();
+                    return active != null && active.capabilities().flightStatus() ? active : null;
+                });
+    }
+
+    private static boolean isInternal(String provider) {
+        return "INTERNAL_CAPACITY".equalsIgnoreCase(provider) || "INTERNAL".equalsIgnoreCase(provider);
     }
 }

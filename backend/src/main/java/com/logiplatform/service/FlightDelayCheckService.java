@@ -72,14 +72,15 @@ public class FlightDelayCheckService {
                     "This shipment has no flight number or air booking yet");
         }
 
-        AirCargoProviderPort provider = providers.active();
+        AirCargoProviderPort provider = resolveProvider(latestBooking);
 
         // Prefer the concrete provider reference for a live AAL air booking.
         if (latestBooking != null
                 && latestBooking.getProviderReference() != null
                 && !latestBooking.getProviderReference().isBlank()
+                && provider != null
                 && provider.capabilities().flightStatus()
-                && !"INTERNAL_CAPACITY".equalsIgnoreCase(latestBooking.getProvider())) {
+                && !isInternal(latestBooking.getProvider())) {
             try {
                 AirCargoProviderPort.FlightStatus live = provider
                         .getFlightStatusByProviderReference(latestBooking.getProviderReference());
@@ -102,7 +103,7 @@ public class FlightDelayCheckService {
             return external.get();
         }
 
-        if (provider.capabilities().flightStatus()) {
+        if (provider != null && provider.capabilities().flightStatus()) {
             try {
                 AirCargoProviderPort.FlightStatus live = provider.getFlightStatus(
                         flightNumber,
@@ -144,6 +145,26 @@ public class FlightDelayCheckService {
                 null,
                 "AAL_SCHEDULE_BASELINE",
                 "Live provider status unavailable; showing the auditable AAL shipment/booking schedule baseline");
+    }
+
+    private AirCargoProviderPort resolveProvider(com.logiplatform.model.AirCargoBooking booking) {
+        if (booking != null && booking.getProvider() != null && !booking.getProvider().isBlank()
+                && !isInternal(booking.getProvider())) {
+            return providers.find(booking.getProvider())
+                    .filter(AirCargoProviderPort::configured)
+                    .orElse(null);
+        }
+        return providers.searchProviders().stream()
+                .filter(p -> p.capabilities().flightStatus())
+                .findFirst()
+                .orElseGet(() -> {
+                    AirCargoProviderPort active = providers.active();
+                    return active != null && active.capabilities().flightStatus() ? active : null;
+                });
+    }
+
+    private static boolean isInternal(String provider) {
+        return "INTERNAL_CAPACITY".equalsIgnoreCase(provider) || "INTERNAL".equalsIgnoreCase(provider);
     }
 
     private FlightStatusPort.FlightStatusResult applyLiveStatus(

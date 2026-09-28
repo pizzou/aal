@@ -64,8 +64,16 @@ public class AirCargoBookingService {
         AirCargoBooking prior = bookings.findByTenantIdAndIdempotencyKey(tenant, idem).orElse(null);
         if (prior != null)
             return BookingResponse.from(prior);
-        AirCargoProviderPort provider = providers.active();
+        AirCargoProviderPort provider = resolveProviderForRequest(tenant, r);
         AirCargoProviderPort.ProviderCapabilities capabilities = provider.capabilities();
+        boolean explicitExternalProvider = r.providerCode() != null
+                && !r.providerCode().isBlank()
+                && !"INTERNAL".equalsIgnoreCase(r.providerCode())
+                && !"INTERNAL_CAPACITY".equalsIgnoreCase(r.providerCode());
+        if (explicitExternalProvider && !capabilities.booking()) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    "The selected airline provider exposes live availability but not booking in the configured contract");
+        }
         boolean externalBooking = capabilities.booking();
 
         // A real external booking must originate from a live provider offer.
@@ -186,7 +194,7 @@ public class AirCargoBookingService {
         if (key.equals(b.getLastOperationKey()) && "AMEND".equals(b.getLastProviderOperation()))
             return BookingResponse.from(b);
         b.operation(key, "AMEND");
-        AirCargoProviderPort p = providers.active();
+        AirCargoProviderPort p = resolveProviderForBooking(b);
         if (!p.capabilities().amendment())
             throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
                     "The configured airline provider does not support booking amendments");
@@ -231,7 +239,7 @@ public class AirCargoBookingService {
         if ("CANCELLED".equals(b.getStatus()))
             return BookingResponse.from(b);
         String key = cleanKey(r.idempotencyKey());
-        AirCargoProviderPort p = providers.active();
+        AirCargoProviderPort p = resolveProviderForBooking(b);
         if (key.equals(b.getLastOperationKey()) && "CANCEL".equals(b.getLastProviderOperation()))
             return BookingResponse.from(b);
         stateMachine.transition(b, "CANCELLATION_PENDING", "CANCEL_REQUESTED", correlationId());
@@ -270,6 +278,57 @@ public class AirCargoBookingService {
         metrics.booking(response.status());
         audit(response.id(), "AIR_BOOKING_CANCELLED", "CANCEL", response.status());
         return response;
+    }
+
+
+    private AirCargoProviderPort resolveProviderForRequest(UUID tenant, BookRequest request) {
+        if (request.providerCode() != null && !request.providerCode().isBlank()) {
+            String code = request.providerCode().trim();
+            if ("INTERNAL".equalsIgnoreCase(code) || "INTERNAL_CAPACITY".equalsIgnoreCase(code)) {
+                return providers.find("GENERIC_HTTP").orElseGet(providers::active);
+            }
+            try {
+                return providers.resolve(code);
+            } catch (IllegalArgumentException | IllegalStateException ex) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+            }
+        }
+
+        if (request.providerReference() != null && !request.providerReference().isBlank()) {
+            List<AirCargoFlight> candidates = flights
+                    .findAllByTenantIdAndOriginCodeAndDestinationCodeAndDepartureTimeBetweenOrderByDepartureTimeAsc(
+                            tenant,
+                            request.originCode().trim().toUpperCase(Locale.ROOT),
+                            request.destinationCode().trim().toUpperCase(Locale.ROOT),
+                            request.departureTime().minus(2, ChronoUnit.MINUTES),
+                            request.departureTime().plus(2, ChronoUnit.MINUTES));
+            for (AirCargoFlight flight : candidates) {
+                if (request.providerReference().equals(flight.getProviderReference())
+                        && flight.getProviderCode() != null
+                        && !flight.getProviderCode().isBlank()) {
+                    try {
+                        return providers.resolve(flight.getProviderCode());
+                    } catch (IllegalArgumentException | IllegalStateException ex) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+                    }
+                }
+            }
+        }
+        return providers.active();
+    }
+
+    private AirCargoProviderPort resolveProviderForBooking(AirCargoBooking booking) {
+        String code = booking.getProvider();
+        if (code != null && !code.isBlank()
+                && !"INTERNAL_CAPACITY".equalsIgnoreCase(code)
+                && !"INTERNAL".equalsIgnoreCase(code)) {
+            try {
+                return providers.resolve(code);
+            } catch (IllegalArgumentException | IllegalStateException ex) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, ex.getMessage(), ex);
+            }
+        }
+        return providers.active();
     }
 
     @Transactional(readOnly = true)

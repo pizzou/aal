@@ -1300,6 +1300,7 @@ export type AirCargoFlight = {
   availableCapacityKg: number;
   status: string;
   source: string;
+  providerCode?: string | null;
   providerReference?: string | null;
   bookable?: boolean;
   availableReason?: string | null;

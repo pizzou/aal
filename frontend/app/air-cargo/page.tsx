@@ -58,6 +58,7 @@ export default function AirCargoPage() {
     string,
     unknown
   > | null>(null);
+  const liveSearchConfigured = integrationHealth?.liveSearchConfigured === true;
   const externalConfigured = integrationHealth?.configured === true;
 
   useEffect(() => {
@@ -98,7 +99,7 @@ export default function AirCargoPage() {
   // exposing the shipment's own flight as an explicit AAL planning request.
   // It is never presented as live carrier capacity.
   const planningFlight = useMemo<AirCargoFlight | null>(() => {
-    if (!selectedShipment || externalConfigured) return null;
+    if (!selectedShipment || liveSearchConfigured) return null;
 
     const carrierName =
       selectedShipment.airlineUsed ||
@@ -202,11 +203,11 @@ export default function AirCargoPage() {
         weightKg: requestedWeight,
         ...range,
       };
-      const [flightResults, routeResults] = await Promise.all([
-        airCargoApi.searchFlights(request),
-        airCargoApi.optimizeRoutes(request),
-      ]);
+      // Refresh provider offers first so the local route optimizer scores the
+      // same live snapshot the user sees on this screen.
+      const flightResults = await airCargoApi.searchFlights(request);
       setFlights(flightResults);
+      const routeResults = await airCargoApi.optimizeRoutes(request);
       setRoutes(routeResults);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Air cargo search failed");
@@ -247,6 +248,11 @@ export default function AirCargoPage() {
         serviceLevel: "STANDARD",
         idempotencyKey: `AAL-AIR-${shipmentId}-${bookingFlight.id}-${requestedWeight}`,
         providerReference: bookingFlight.providerReference ?? undefined,
+        providerCode:
+          bookingFlight.providerCode ??
+          (bookingFlight.source !== "AAL_PLANNING"
+            ? bookingFlight.source
+            : undefined),
       });
 
       setBookings((current) => [
@@ -308,9 +314,9 @@ export default function AirCargoPage() {
           <div className="eyebrow">Air freight intelligence</div>
           <h1 className="page-title">Capacity & booking desk</h1>
           <p className="page-subtitle">
-            Search live airline rates and capacity when CargoAi is connected,
-            then select a bookable option and create the airline booking from
-            AAL.
+            Search live airline rates and capacity across every connected
+            airline/provider, then select a bookable option and create the
+            airline booking from AAL.
           </p>
         </div>
         <div className="actions">
@@ -393,15 +399,15 @@ export default function AirCargoPage() {
             <div>
               <h2 className="card-title">Carrier options</h2>
               <div className="card-muted">
-                {externalConfigured
-                  ? `Live ${String(integrationHealth?.provider || "airline")} availability`
+                {liveSearchConfigured
+                  ? `Live ${Array.isArray(integrationHealth?.liveSearchProviders) ? integrationHealth.liveSearchProviders.join(" · ") : String(integrationHealth?.provider || "airline")} availability`
                   : "Live airline provider not connected; AAL planning remains available."}
               </div>
             </div>
             <span
               className={`status ${planningFlight && !flights.length ? "status-neutral" : "status-success"}`}
             >
-              {externalConfigured
+              {liveSearchConfigured
                 ? "LIVE AIRLINE"
                 : planningFlight && !flights.length
                   ? "AAL planning mode"
@@ -417,6 +423,7 @@ export default function AirCargoPage() {
                   <th>Departure</th>
                   <th>Arrival</th>
                   <th>Available</th>
+                  <th>Provider</th>
                   <th>Source</th>
                   <th />
                 </tr>
@@ -453,6 +460,7 @@ export default function AirCargoPage() {
                         </div>
                       )}
                     </td>
+                    <td>{flight.providerCode || flight.source || "—"}</td>
                     <td>{flight.source || "—"}</td>
                     <td>
                       <button

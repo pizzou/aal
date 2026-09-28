@@ -12,12 +12,12 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Selects the best configured air-cargo adapter.
+ * Central registry for air-cargo providers.
  *
- * <p>AAL uses AUTO as the production default. When AUTO is selected, a
- * configured real provider is preferred over the generic adapter. CargoAi is
- * preferred because it supplies a concrete search/quote/book/track workflow;
- * the generic HTTP adapter remains available as a partner-specific fallback.</p>
+ * <p>AAL uses AUTO in production so a configured live airline/provider adapter
+ * can participate without changing shipment or quotation code. Search may fan
+ * out to more than one provider, while booking/tracking/cancellation are routed
+ * back to the provider that supplied the selected offer or booking.</p>
  */
 @Service
 public class AirCargoProviderRegistry {
@@ -36,7 +36,8 @@ public class AirCargoProviderRegistry {
             boolean oauth2,
             boolean apiKey,
             List<String> standards,
-            String status) {
+            String status,
+            List<String> configurationIssues) {
     }
 
     private final GenericHttpAirCargoProvider generic;
@@ -53,56 +54,112 @@ public class AirCargoProviderRegistry {
                 : configuredCode.trim().toUpperCase(Locale.ROOT);
 
         Map<String, AirCargoProviderPort> discovered = new LinkedHashMap<>();
-        for (AirCargoProviderPort provider : providers) {
-            discovered.put(
-                    provider.providerCode().trim().toUpperCase(Locale.ROOT),
-                    provider);
+        if (providers != null) {
+            for (AirCargoProviderPort provider : providers) {
+                if (provider == null || provider.providerCode() == null || provider.providerCode().isBlank()) {
+                    continue;
+                }
+                discovered.put(
+                        provider.providerCode().trim().toUpperCase(Locale.ROOT),
+                        provider);
+            }
         }
         discovered.putIfAbsent("GENERIC_HTTP", generic);
         this.adapters = Map.copyOf(discovered);
     }
 
+    /** Provider used when an operation does not carry an explicit provider. */
     public AirCargoProviderPort active() {
         if (!"AUTO".equals(configuredCode)) {
             return adapters.getOrDefault(configuredCode, generic);
         }
 
-        // Prefer a provider that can execute the complete live air workflow.
+        // Prefer a configured provider that supports both live search and booking.
         AirCargoProviderPort cargoAi = adapters.get("CARGOAI");
-        if (isLiveBookProvider(cargoAi)) {
+        if (isConfiguredBookProvider(cargoAi)) {
             return cargoAi;
         }
 
-        // Then prefer any other concrete provider with search and booking.
         for (AirCargoProviderPort provider : adapters.values()) {
-            if (provider == generic) {
+            if (provider == generic || "CARGOAI".equalsIgnoreCase(provider.providerCode())) {
                 continue;
             }
-            if (isLiveBookProvider(provider)) {
+            if (isConfiguredBookProvider(provider)) {
                 return provider;
             }
         }
 
-        // Finally use a configured generic HTTP adapter if available.
-        if (isConfigured(generic)) {
-            return generic;
+        // A live search-only adapter (for example direct Qatar Availability)
+        // should still be visible to users and used for search, but it cannot be
+        // silently selected for a booking operation.
+        for (AirCargoProviderPort provider : adapters.values()) {
+            if (provider == generic) {
+                continue;
+            }
+            if (isConfiguredSearchProvider(provider)) {
+                return provider;
+            }
         }
 
+        if (generic != null && generic.configured()) {
+            return generic;
+        }
         return generic;
+    }
+
+    /** All currently configured provider adapters capable of live search. */
+    public List<AirCargoProviderPort> searchProviders() {
+        List<AirCargoProviderPort> result = new ArrayList<>();
+        if (!"AUTO".equals(configuredCode)) {
+            AirCargoProviderPort selected = adapters.get(configuredCode);
+            if (isConfiguredSearchProvider(selected)) {
+                result.add(selected);
+            }
+            return result;
+        }
+
+        for (AirCargoProviderPort provider : adapters.values()) {
+            if (provider == generic) {
+                continue;
+            }
+            if (isConfiguredSearchProvider(provider)) {
+                result.add(provider);
+            }
+        }
+        result.sort((a, b) -> {
+            // Keep CargoAi first as the broad aggregation source, then sort
+            // remaining direct airline adapters deterministically.
+            if ("CARGOAI".equalsIgnoreCase(a.providerCode())) return -1;
+            if ("CARGOAI".equalsIgnoreCase(b.providerCode())) return 1;
+            return a.providerCode().compareToIgnoreCase(b.providerCode());
+        });
+        return result;
+    }
+
+    /** Resolve a provider by the code persisted on an offer/booking. */
+    public AirCargoProviderPort resolve(String code) {
+        if (code == null || code.isBlank()) {
+            return active();
+        }
+        AirCargoProviderPort provider = adapters.get(code.trim().toUpperCase(Locale.ROOT));
+        if (provider == null) {
+            throw new IllegalArgumentException("Unknown air-cargo provider: " + code);
+        }
+        if (!provider.configured() && !"GENERIC_HTTP".equalsIgnoreCase(provider.providerCode())) {
+            throw new IllegalStateException("Air-cargo provider is not configured: " + provider.providerCode());
+        }
+        return provider;
     }
 
     public Optional<AirCargoProviderPort> find(String code) {
         if (code == null || code.isBlank()) {
             return Optional.empty();
         }
-        return Optional.ofNullable(
-                adapters.get(code.trim().toUpperCase(Locale.ROOT)));
+        return Optional.ofNullable(adapters.get(code.trim().toUpperCase(Locale.ROOT)));
     }
 
     public List<AirCargoProviderPort.ProviderCapabilities> capabilities() {
-        return adapters.values().stream()
-                .map(AirCargoProviderPort::capabilities)
-                .toList();
+        return adapters.values().stream().map(AirCargoProviderPort::capabilities).toList();
     }
 
     public Set<String> codes() {
@@ -114,13 +171,13 @@ public class AirCargoProviderRegistry {
     }
 
     public List<ProviderHealth> health() {
-        String activeCode = active().providerCode();
+        String activeCode = active() == null ? "" : active().providerCode();
         List<ProviderHealth> result = new ArrayList<>();
 
         for (Map.Entry<String, AirCargoProviderPort> entry : adapters.entrySet()) {
             AirCargoProviderPort provider = entry.getValue();
             AirCargoProviderPort.ProviderCapabilities c = provider.capabilities();
-            boolean configured = isConfigured(provider);
+            boolean configured = provider.configured();
             String status;
 
             if (provider.providerCode().equalsIgnoreCase(activeCode)) {
@@ -146,31 +203,23 @@ public class AirCargoProviderRegistry {
                     c.oauth2(),
                     c.apiKey(),
                     c.standards(),
-                    status));
+                    status,
+                    provider.configurationIssues()));
         }
 
         return result;
     }
 
-    private boolean isLiveBookProvider(AirCargoProviderPort provider) {
-        if (provider == null) {
-            return false;
-        }
-        AirCargoProviderPort.ProviderCapabilities c = provider.capabilities();
-        return c.scheduleSearch() && c.booking();
+    private boolean isConfiguredBookProvider(AirCargoProviderPort provider) {
+        return provider != null
+                && provider.configured()
+                && provider.capabilities().scheduleSearch()
+                && provider.capabilities().booking();
     }
 
-    private boolean isConfigured(AirCargoProviderPort provider) {
-        if (provider == null) {
-            return false;
-        }
-        AirCargoProviderPort.ProviderCapabilities c = provider.capabilities();
-        return c.scheduleSearch()
-                || c.liveCapacity()
-                || c.booking()
-                || c.amendment()
-                || c.cancellation()
-                || c.flightStatus()
-                || c.awbSubmission();
+    private boolean isConfiguredSearchProvider(AirCargoProviderPort provider) {
+        return provider != null
+                && provider.configured()
+                && provider.capabilities().scheduleSearch();
     }
 }

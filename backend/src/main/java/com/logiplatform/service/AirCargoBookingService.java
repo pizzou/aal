@@ -21,6 +21,8 @@ import com.logiplatform.security.TenantPrincipal;
 import org.springframework.web.server.ResponseStatusException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.*;
 import static com.logiplatform.dto.AirCargoDtos.*;
 
@@ -330,8 +332,21 @@ public class AirCargoBookingService {
 
     private static String cleanKey(String key) {
         String x = key == null ? "" : key.trim();
-        if (x.isBlank() || x.length() > 255)
+        if (x.isBlank())
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A valid idempotency key is required");
-        return x;
+        // Keep the database/provider idempotency key safely below even legacy
+        // VARCHAR(20) deployments while preserving deterministic retry identity.
+        if (x.length() <= 20)
+            return x;
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(x.getBytes(StandardCharsets.UTF_8));
+            StringBuilder out = new StringBuilder(20);
+            for (int i = 0; i < 10; i++)
+                out.append(String.format("%02x", digest[i]));
+            return out.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to normalize idempotency key", e);
+        }
     }
 }

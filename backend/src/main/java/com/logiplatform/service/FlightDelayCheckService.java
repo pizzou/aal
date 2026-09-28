@@ -1,6 +1,5 @@
 package com.logiplatform.service;
 
-import com.logiplatform.dto.ShipmentDtos;
 import com.logiplatform.integration.AirCargoProviderPort;
 import com.logiplatform.integration.AirCargoProviderRegistry;
 import com.logiplatform.model.Shipment;
@@ -9,9 +8,19 @@ import com.logiplatform.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
-import java.time.LocalDate;
-import java.util.*;
 
+import java.time.LocalDate;
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * Live air-flight status and delay evaluation.
+ *
+ * <p>When an air booking was created through a live provider, the provider
+ * reference is preferred over a flight-number lookup. This matters for
+ * CargoAi because its Track & Trace workflow is keyed by the returned flight
+ * UUID.</p>
+ */
 @Service
 public class FlightDelayCheckService {
     private final FlightStatusPort flightStatusPort;
@@ -21,9 +30,13 @@ public class FlightDelayCheckService {
     private final AirCargoProviderRegistry providers;
     private final com.logiplatform.repository.AirCargoBookingRepository bookings;
 
-    public FlightDelayCheckService(FlightStatusPort flightStatusPort, ShipmentService shipmentService,
-            ShipmentRepository shipmentRepository, ShipmentEtaTrackingService etaTracking,
-            AirCargoProviderRegistry providers, com.logiplatform.repository.AirCargoBookingRepository bookings) {
+    public FlightDelayCheckService(
+            FlightStatusPort flightStatusPort,
+            ShipmentService shipmentService,
+            ShipmentRepository shipmentRepository,
+            ShipmentEtaTrackingService etaTracking,
+            AirCargoProviderRegistry providers,
+            com.logiplatform.repository.AirCargoBookingRepository bookings) {
         this.flightStatusPort = flightStatusPort;
         this.shipmentService = shipmentService;
         this.shipmentRepository = shipmentRepository;
@@ -33,65 +46,123 @@ public class FlightDelayCheckService {
     }
 
     public FlightStatusPort.FlightStatusResult checkAndFlagDelay(UUID shipmentId) {
-        Shipment s = shipmentRepository.findByIdAndTenantId(shipmentId, TenantContext.getTenantId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shipment not found"));
-        String flightNumber = s.getFlightNumber();
-        var latestBooking = bookings.findAllByTenantIdAndShipmentIdOrderByCreatedAtDesc(
-                TenantContext.getTenantId(), shipmentId).stream().findFirst().orElse(null);
-        if ((flightNumber == null || flightNumber.isBlank()) && latestBooking != null)
-            flightNumber = latestBooking.getFlightNumber();
-        if (flightNumber == null || flightNumber.isBlank())
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "This shipment has no flight number or air booking yet");
-        Optional<FlightStatusPort.FlightStatusResult> result = flightStatusPort.getStatus(flightNumber,
-                LocalDate.now().toString());
-        if (result.isEmpty()) {
-            AirCargoProviderPort p = providers.active();
-            if (p.capabilities().flightStatus()) {
-                AirCargoProviderPort.FlightStatus x = p.getFlightStatus(flightNumber, LocalDate.now().toString());
-                etaTracking.apply(shipmentId, x, p.providerCode());
-                return new FlightStatusPort.FlightStatusResult(x.flightStatus(), x.departureDelayMinutes(),
-                        x.arrivalDelayMinutes(), x.departureDelayMinutes() >= 60 || x.arrivalDelayMinutes() >= 60,
-                        x.scheduledDeparture(), x.estimatedDeparture(), x.actualDeparture(), x.scheduledArrival(),
-                        x.estimatedArrival(), x.actualArrival(), x.providerEventId(), x.rawResponse());
-            }
+        Shipment shipment = shipmentRepository.findByIdAndTenantId(
+                        shipmentId,
+                        TenantContext.getTenantId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Shipment not found"));
 
-            // No live provider is configured. Use the shipment's own schedule first,
-            // then a confirmed/requested air booking as the operational baseline.
-            // This keeps ETA visible and auditable without pretending that a local
-            // schedule is a live airline feed.
-            var booking = bookings.findAllByTenantIdAndShipmentIdOrderByCreatedAtDesc(
-                    TenantContext.getTenantId(), shipmentId).stream().findFirst().orElse(null);
-            java.time.Instant scheduledDeparture = s.getEtd();
-            java.time.Instant scheduledArrival = s.getEta();
-            if (booking != null) {
-                if (scheduledDeparture == null)
-                    scheduledDeparture = booking.getDepartureTime();
-                if (scheduledArrival == null)
-                    scheduledArrival = booking.getArrivalTime();
-            }
-            if (scheduledDeparture == null && scheduledArrival == null) {
-                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                        "No live flight-status provider is configured and this shipment has no ETD/ETA schedule");
-            }
-            AirCargoProviderPort.FlightStatus local = new AirCargoProviderPort.FlightStatus(
-                    booking != null ? booking.getStatus() : "SCHEDULED",
-                    scheduledDeparture, scheduledDeparture, s.getActualDeparture(),
-                    scheduledArrival, scheduledArrival, s.getActualArrival(),
-                    0, 0, "LOCAL-" + shipmentId, "{\"source\":\"AAL_SCHEDULE\"}");
-            etaTracking.apply(shipmentId, local, "AAL_SCHEDULE");
-            return new FlightStatusPort.FlightStatusResult(
-                    local.flightStatus(), 0, 0, false, local.scheduledDeparture(), local.estimatedDeparture(),
-                    local.actualDeparture(), local.scheduledArrival(), local.estimatedArrival(),
-                    local.actualArrival(), local.providerEventId(), local.rawResponse());
+        var latestBooking = bookings
+                .findAllByTenantIdAndShipmentIdOrderByCreatedAtDesc(
+                        TenantContext.getTenantId(),
+                        shipmentId)
+                .stream()
+                .findFirst()
+                .orElse(null);
+
+        String flightNumber = shipment.getFlightNumber();
+        if ((flightNumber == null || flightNumber.isBlank()) && latestBooking != null) {
+            flightNumber = latestBooking.getFlightNumber();
         }
-        FlightStatusPort.FlightStatusResult status = result.get();
-        etaTracking.apply(shipmentId,
-                new AirCargoProviderPort.FlightStatus(status.flightStatus(), status.scheduledDeparture(),
-                        status.estimatedDeparture(), status.actualDeparture(), status.scheduledArrival(),
-                        status.estimatedArrival(), status.actualArrival(), status.departureDelayMinutes(),
-                        status.arrivalDelayMinutes(), status.providerEventId(), status.rawResponse()),
-                "FLIGHT_STATUS_PROVIDER");
-        return status;
+
+        if (flightNumber == null || flightNumber.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "This shipment has no flight number or air booking yet");
+        }
+
+        AirCargoProviderPort provider = providers.active();
+
+        // Prefer the concrete provider reference for a live AAL air booking.
+        if (latestBooking != null
+                && latestBooking.getProviderReference() != null
+                && !latestBooking.getProviderReference().isBlank()
+                && provider.capabilities().flightStatus()
+                && !"INTERNAL_CAPACITY".equalsIgnoreCase(latestBooking.getProvider())) {
+            try {
+                AirCargoProviderPort.FlightStatus live = provider
+                        .getFlightStatusByProviderReference(latestBooking.getProviderReference());
+                FlightStatusPort.FlightStatusResult result = applyLiveStatus(
+                        shipmentId,
+                        provider,
+                        live);
+                return result;
+            } catch (UnsupportedOperationException ignored) {
+                // Fall through to another status source.
+            } catch (RuntimeException ignored) {
+                // A transient provider failure must not remove the historical ETA fallback.
+            }
+        }
+
+        Optional<FlightStatusPort.FlightStatusResult> external = flightStatusPort.getStatus(
+                flightNumber,
+                LocalDate.now().toString());
+        if (external.isPresent()) {
+            return external.get();
+        }
+
+        if (provider.capabilities().flightStatus()) {
+            try {
+                AirCargoProviderPort.FlightStatus live = provider.getFlightStatus(
+                        flightNumber,
+                        LocalDate.now().toString());
+                return applyLiveStatus(shipmentId, provider, live);
+            } catch (UnsupportedOperationException ignored) {
+                // Provider requires an offer/reference-specific lookup.
+            }
+        }
+
+        // Auditable local baseline when no live flight-status feed is reachable.
+        java.time.Instant scheduledDeparture = shipment.getEtd();
+        java.time.Instant scheduledArrival = shipment.getEta();
+        if (latestBooking != null) {
+            if (scheduledDeparture == null) {
+                scheduledDeparture = latestBooking.getDepartureTime();
+            }
+            if (scheduledArrival == null) {
+                scheduledArrival = latestBooking.getArrivalTime();
+            }
+        }
+
+        if (scheduledDeparture == null && scheduledArrival == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "No live flight-status provider is configured and this shipment has no schedule baseline");
+        }
+
+        return new FlightStatusPort.FlightStatusResult(
+                "SCHEDULED",
+                0,
+                0,
+                false,
+                scheduledDeparture,
+                null,
+                null,
+                scheduledArrival,
+                null,
+                null,
+                "AAL_SCHEDULE_BASELINE",
+                "Live provider status unavailable; showing the auditable AAL shipment/booking schedule baseline");
+    }
+
+    private FlightStatusPort.FlightStatusResult applyLiveStatus(
+            UUID shipmentId,
+            AirCargoProviderPort provider,
+            AirCargoProviderPort.FlightStatus status) {
+        etaTracking.apply(shipmentId, status, provider.providerCode());
+        return new FlightStatusPort.FlightStatusResult(
+                status.flightStatus(),
+                status.departureDelayMinutes(),
+                status.arrivalDelayMinutes(),
+                status.departureDelayMinutes() >= 60 || status.arrivalDelayMinutes() >= 60,
+                status.scheduledDeparture(),
+                status.estimatedDeparture(),
+                status.actualDeparture(),
+                status.scheduledArrival(),
+                status.estimatedArrival(),
+                status.actualArrival(),
+                status.providerEventId(),
+                status.rawResponse());
     }
 }

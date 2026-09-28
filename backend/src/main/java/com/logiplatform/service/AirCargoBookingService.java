@@ -122,14 +122,28 @@ public class AirCargoBookingService {
         String correlation = correlationId();
         UUID attempt = attempts.start(provider.providerCode(), "BOOK", idem, correlation, r.toString());
         try {
-            AirCargoProviderPort.BookingResult result = provider.book(new AirCargoProviderPort.BookingCommand(idem,
-                    r.shipmentId().toString(), r.carrierCode().trim().toUpperCase(Locale.ROOT), r.carrierName(),
-                    flightNumber, r.departureTime(), r.arrivalTime(), r.originCode().trim().toUpperCase(Locale.ROOT),
-                    r.destinationCode().trim().toUpperCase(Locale.ROOT), r.weightKg(), r.serviceLevel(),
-                    r.providerReference(), extractRateReference(r.providerReference())));
+            String offerReference = extractOfferReference(r.providerReference());
+            String rateReference = extractRateReference(r.providerReference());
+            AirCargoProviderPort.BookingResult result = provider.book(new AirCargoProviderPort.BookingCommand(
+                    idem,
+                    r.shipmentId().toString(),
+                    r.carrierCode().trim().toUpperCase(Locale.ROOT),
+                    r.carrierName(),
+                    flightNumber,
+                    r.departureTime(),
+                    r.arrivalTime(),
+                    r.originCode().trim().toUpperCase(Locale.ROOT),
+                    r.destinationCode().trim().toUpperCase(Locale.ROOT),
+                    r.weightKg(),
+                    r.serviceLevel(),
+                    r.providerReference(),
+                    offerReference,
+                    rateReference));
             attempts.success(attempt, 200, result.rawResponse());
-            String status = result.status() == null ? "PENDING" : result.status().toUpperCase();
-            if ("CONFIRMED".equals(status)) {
+            String status = result.status() == null ? "PENDING" : result.status().toUpperCase(Locale.ROOT);
+            if ("CONFIRMED".equals(status)
+                    || "BOOKED".equals(status)
+                    || "BOOKING_CONFIRMED".equals(status)) {
                 b.confirm(result.confirmedWeightKg() == null ? r.weightKg() : result.confirmedWeightKg(),
                         result.providerReference(), result.confirmationNumber(), result.rawResponse());
                 stateMachine.transition(b, "CONFIRMED", "PROVIDER_CONFIRMED", correlation);
@@ -378,6 +392,15 @@ public class AirCargoBookingService {
         // deployments. The DB migration may be wider, but the booking path remains
         // safe against older production schemas during rolling deployment.
         return x.substring(0, 8) + x.substring(x.length() - 12);
+    }
+
+    private static String extractOfferReference(String providerReference) {
+        if (providerReference == null || providerReference.isBlank())
+            return null;
+        int separator = providerReference.indexOf('|');
+        String offer = separator < 0 ? providerReference.trim()
+                : providerReference.substring(0, separator).trim();
+        return offer.isBlank() ? null : offer;
     }
 
     private static String extractRateReference(String providerReference) {

@@ -8,15 +8,8 @@ import java.util.Map;
 /**
  * Normalized contract between AAL and an airline/cargo provider.
  *
- * <p>The core booking domain depends only on this contract and never on a
- * provider's HTTP/XML/JSON/ONE Record implementation details.</p>
- *
- * <p>Provider references are deliberately separated:</p>
- * <ul>
- *   <li>providerReference - complete provider selection token</li>
- *   <li>offerReference - provider's offer/flight identifier</li>
- *   <li>rateReference - selected rate identifier</li>
- * </ul>
+ * <p>The booking domain depends only on this contract. Provider-specific
+ * HTTP, JSON, XML, Cargo-XML and ONE Record details remain inside adapters.</p>
  */
 public interface AirCargoProviderPort {
 
@@ -42,6 +35,16 @@ public interface AirCargoProviderPort {
     BookingResult cancel(CancellationCommand command);
 
     FlightStatus getFlightStatus(String flightNumber, String flightDate);
+
+    /**
+     * Preferred live status lookup when a provider returns an opaque
+     * selection/reference that is safer than a flight-number lookup.
+     * Existing adapters remain source-compatible through the default method.
+     */
+    default FlightStatus getFlightStatusByProviderReference(String providerReference) {
+        throw new UnsupportedOperationException(
+                "Provider does not expose status lookup by provider reference");
+    }
 
     AwbSubmissionResult submitAwb(
             Map<String, Object> payload,
@@ -77,18 +80,13 @@ public interface AirCargoProviderPort {
     /**
      * Normalized live flight/rate offer.
      *
-     * providerReference:
-     *     Complete provider selection token. For CargoAi this is
-     *     flightUUID|rateId.
+     * providerReference: complete provider selection token. For CargoAi this
+     * is flightUUID|rateId.
      *
-     * offerReference:
-     *     Provider offer/flight identifier. For CargoAi this is flightUUID.
+     * offerReference: provider flight/offer identifier. For CargoAi this is
+     * flightUUID.
      *
-     * rateReference:
-     *     Provider rate identifier. For CargoAi this is rateId.
-     *
-     * rateId:
-     *     Backward-compatible alias retained for existing integrations.
+     * rateReference/rateId: selected provider rate identifier.
      */
     record FlightOffer(
             String carrierCode,
@@ -114,9 +112,6 @@ public interface AirCargoProviderPort {
             boolean bookable,
             String availableReason) {
 
-        /**
-         * Backward-compatible constructor used by existing providers.
-         */
         public FlightOffer(
                 String carrierCode,
                 String carrierName,
@@ -130,7 +125,6 @@ public interface AirCargoProviderPort {
                 String serviceLevel,
                 String status,
                 String providerReference) {
-
             this(
                     carrierCode,
                     carrierName,
@@ -156,10 +150,6 @@ public interface AirCargoProviderPort {
                     null);
         }
 
-        /**
-         * Convenience constructor for providers that have an offer and rate
-         * but do not need separate rate metadata.
-         */
         public FlightOffer(
                 String carrierCode,
                 String carrierName,
@@ -181,7 +171,6 @@ public interface AirCargoProviderPort {
                 BigDecimal unitPrice,
                 String productCode,
                 String availableReason) {
-
             this(
                     carrierCode,
                     carrierName,
@@ -208,13 +197,6 @@ public interface AirCargoProviderPort {
         }
     }
 
-    /**
-     * Booking command passed from the domain into a provider.
-     *
-     * providerReference is the complete selection token.
-     * offerReference and rateReference allow providers to consume their
-     * components independently where required.
-     */
     record BookingCommand(
             String idempotencyKey,
             String shipmentId,
@@ -231,9 +213,6 @@ public interface AirCargoProviderPort {
             String offerReference,
             String rateReference) {
 
-        /**
-         * Backward-compatible 11-argument constructor.
-         */
         public BookingCommand(
                 String idempotencyKey,
                 String shipmentId,
@@ -246,7 +225,6 @@ public interface AirCargoProviderPort {
                 String destinationCode,
                 BigDecimal weightKg,
                 String serviceLevel) {
-
             this(
                     idempotencyKey,
                     shipmentId,
@@ -264,9 +242,6 @@ public interface AirCargoProviderPort {
                     null);
         }
 
-        /**
-         * Backward-compatible 12-argument constructor.
-         */
         public BookingCommand(
                 String idempotencyKey,
                 String shipmentId,
@@ -280,7 +255,6 @@ public interface AirCargoProviderPort {
                 BigDecimal weightKg,
                 String serviceLevel,
                 String providerReference) {
-
             this(
                     idempotencyKey,
                     shipmentId,
@@ -298,12 +272,6 @@ public interface AirCargoProviderPort {
                     null);
         }
 
-        /**
-         * Backward-compatible 13-argument constructor currently used by
-         * AirCargoBookingService.
-         *
-         * The final argument is the provider rate reference.
-         */
         public BookingCommand(
                 String idempotencyKey,
                 String shipmentId,
@@ -318,7 +286,6 @@ public interface AirCargoProviderPort {
                 String serviceLevel,
                 String providerReference,
                 String rateReference) {
-
             this(
                     idempotencyKey,
                     shipmentId,

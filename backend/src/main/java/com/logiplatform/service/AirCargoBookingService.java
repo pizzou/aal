@@ -67,8 +67,12 @@ public class AirCargoBookingService {
         AirCargoProviderPort provider = providers.active();
         // External providers own their live capacity. Only reserve AAL-persisted
         // capacity when operating in internal mode.
-        AirCargoFlight reserved = provider.capabilities().booking() ? null : findAndReserve(tenant, r);
-        String source = provider.capabilities().booking() ? provider.providerCode() : "INTERNAL_CAPACITY";
+        boolean externalBooking = provider.capabilities().booking();
+        boolean planningMode = Boolean.TRUE.equals(r.planningMode());
+        boolean reserveInternalCapacity = !externalBooking && !planningMode;
+        AirCargoFlight reserved = reserveInternalCapacity ? findAndReserve(tenant, r) : null;
+        String source = externalBooking ? provider.providerCode()
+                : (planningMode ? "INTERNAL_PLANNING" : "INTERNAL_CAPACITY");
         AirCargoBooking b = new AirCargoBooking(tenant, r.shipmentId(), r.carrierCode().trim().toUpperCase(),
                 r.carrierName(), r.flightNumber().trim().toUpperCase(), r.departureTime(), r.arrivalTime(),
                 r.originCode().trim().toUpperCase(), r.destinationCode().trim().toUpperCase(), r.weightKg(),
@@ -79,7 +83,7 @@ public class AirCargoBookingService {
             bookings.saveAndFlush(b);
             // Only move into provider-pending when an external provider will actually
             // receive the request, or when AAL has persisted capacity to confirm.
-            if (provider.capabilities().booking() || reserved != null) {
+            if (externalBooking || reserved != null) {
                 stateMachine.transition(b, "PENDING_PROVIDER", "BOOK_REQUESTED", correlationId());
             }
         } catch (DataIntegrityViolationException duplicate) {
@@ -88,12 +92,11 @@ public class AirCargoBookingService {
             TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
             return BookingResponse.from(existing);
         }
-        if (!provider.capabilities().booking()) {
-            // AAL must remain usable when no airline API credentials are configured.
-            // If a persisted flight exists, reserve its real AAL capacity. If it does
-            // not exist, keep the request as an internal planning request instead of
-            // returning a misleading 409. It can later be fulfilled/reconciled when
-            // carrier capacity is ingested or an external provider is enabled.
+        if (!externalBooking) {
+            // AAL remains usable without an external airline integration. In planning
+            // mode the request is intentionally persisted without claiming local capacity.
+            // A real persisted flight is reserved only for a normal internal-capacity
+            // booking.
             if (reserved != null) {
                 String ref = "CAP-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
                 b.confirm(r.weightKg(), ref, ref, "INTERNAL_CAPACITY_RESERVATION");

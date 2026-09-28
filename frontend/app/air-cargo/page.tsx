@@ -245,6 +245,7 @@ export default function AirCargoPage() {
         weightKg: requestedWeight,
         serviceLevel: "STANDARD",
         idempotencyKey: `AAL-AIR-${shipmentId}-${bookingFlight.id}-${requestedWeight}`,
+        planningMode: bookingFlight.source === "AAL_PLANNING",
       });
 
       setBookings((current) => [

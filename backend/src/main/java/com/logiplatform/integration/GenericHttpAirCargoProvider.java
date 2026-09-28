@@ -283,8 +283,24 @@ public class GenericHttpAirCargoProvider implements AirCargoProviderPort {
     private String credential(String type){ if(accountCode.isBlank()) return ""; try{ return credentialService.resolveActiveSecretByCode(accountCode,type).orElse(""); }catch(Exception ignored){ return ""; } }
 
     private JsonNode parse(String body) { try { return mapper.readTree(body == null || body.isBlank() ? "{}" : body); } catch (Exception e) { throw new IllegalStateException("Provider returned invalid JSON", e); } }
-    private Map<String,Object> commandMap(BookingCommand c) { Map<String,Object> m=new LinkedHashMap<>(); m.put("shipmentId",c.shipmentId()); m.put("carrierCode",c.carrierCode()); m.put("carrierName",c.carrierName()); m.put("flightNumber",c.flightNumber()); m.put("departureTime",c.departureTime()); m.put("arrivalTime",c.arrivalTime()); m.put("originCode",c.originCode()); m.put("destinationCode",c.destinationCode()); m.put("weightKg",c.weightKg()); m.put("serviceLevel",c.serviceLevel()); return m; }
-    private Map<String,Object> amendmentMap(AmendmentCommand c) { Map<String,Object> m=new LinkedHashMap<>(); m.put("flightNumber",c.flightNumber()); m.put("departureTime",c.departureTime()); m.put("arrivalTime",c.arrivalTime()); m.put("weightKg",c.weightKg()); m.put("serviceLevel",c.serviceLevel()); return m; }
+    private Map<String,Object> commandMap(BookingCommand c) {
+        Map<String,Object> m=new LinkedHashMap<>();
+        m.put("shipmentId",c.shipmentId());
+        m.put("carrierCode",c.carrierCode());
+        m.put("carrierName",c.carrierName());
+        m.put("flightNumber",c.flightNumber());
+        m.put("departureTime",c.departureTime());
+        m.put("arrivalTime",c.arrivalTime());
+        m.put("originCode",c.originCode());
+        m.put("destinationCode",c.destinationCode());
+        m.put("weightKg",c.weightKg());
+        m.put("serviceLevel",c.serviceLevel());
+        if(c.providerReference()!=null&&!c.providerReference().isBlank())m.put("providerReference",c.providerReference());
+        if(c.offerReference()!=null&&!c.offerReference().isBlank())m.put("offerReference",c.offerReference());
+        if(c.rateReference()!=null&&!c.rateReference().isBlank())m.put("rateReference",c.rateReference());
+        return m;
+    }
+    private Map<String,Object> amendmentMap(AmendmentCommand c) { Map<String,Object> m=new LinkedHashMap<>(); m.put("flightNumber",c.flightNumber()); m.put("departureTime",c.departureTime()); m.put("arrivalTime",c.arrivalTime()); m.put("weightKg",c.weightKg()); m.put("serviceLevel",c.serviceLevel()); if(c.providerReference()!=null&&!c.providerReference().isBlank())m.put("providerReference",c.providerReference()); return m; }
     private void requireConfigured(){ if(!configured()) throw new IllegalStateException("Air cargo provider is not configured"); }
     private static String text(JsonNode n,String k){return text(n,k,"");}
     private static String text(JsonNode n,String k,String d){JsonNode v=n==null?null:n.get(k);return v==null||v.isNull()?d:v.asText(d);}

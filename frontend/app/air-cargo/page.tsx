@@ -58,6 +58,7 @@ export default function AirCargoPage() {
     string,
     unknown
   > | null>(null);
+  const externalConfigured = integrationHealth?.configured === true;
 
   useEffect(() => {
     if (!isLoading && !accessToken) router.push("/login");
@@ -97,7 +98,7 @@ export default function AirCargoPage() {
   // exposing the shipment's own flight as an explicit AAL planning request.
   // It is never presented as live carrier capacity.
   const planningFlight = useMemo<AirCargoFlight | null>(() => {
-    if (!selectedShipment) return null;
+    if (!selectedShipment || externalConfigured) return null;
 
     const carrierName =
       selectedShipment.airlineUsed ||
@@ -113,17 +114,11 @@ export default function AirCargoPage() {
     // A shipment can enter the air desk before an airline flight number has
     // been assigned.  Keep that workflow bookable as an internal planning
     // request instead of disabling the only action on the page.
-    const reference = selectedShipment.referenceCode
+    const generatedFlightNumber = `AAL-PLAN-${selectedShipment.referenceCode
       .replace(/[^A-Z0-9]/gi, "")
-      .slice(-12);
-    const generatedFlightNumber = `AAL-PLAN-${reference}`.slice(0, 20);
-    const suppliedFlightNumber =
-      selectedShipment.flightNumber?.trim().toUpperCase() || "";
-    const flightNumber = suppliedFlightNumber
-      ? suppliedFlightNumber.length <= 20
-        ? suppliedFlightNumber
-        : `${suppliedFlightNumber.slice(0, 8)}${suppliedFlightNumber.slice(-12)}`
-      : generatedFlightNumber;
+      .slice(-12)}`;
+    const flightNumber =
+      selectedShipment.flightNumber?.trim() || generatedFlightNumber;
 
     const scheduledDeparture = selectedShipment.etd
       ? new Date(selectedShipment.etd)
@@ -157,7 +152,7 @@ export default function AirCargoPage() {
       status: "PLANNING",
       source: "AAL_PLANNING",
     };
-  }, [selectedShipment, origin, destination]);
+  }, [selectedShipment, origin, destination, externalConfigured]);
 
   const bookingFlight = selected || planningFlight;
   const displayFlights = flights.length
@@ -251,6 +246,7 @@ export default function AirCargoPage() {
         weightKg: requestedWeight,
         serviceLevel: "STANDARD",
         idempotencyKey: `AAL-AIR-${shipmentId}-${bookingFlight.id}-${requestedWeight}`,
+        providerReference: bookingFlight.providerReference ?? undefined,
       });
 
       setBookings((current) => [
@@ -312,8 +308,9 @@ export default function AirCargoPage() {
           <div className="eyebrow">Air freight intelligence</div>
           <h1 className="page-title">Capacity & booking desk</h1>
           <p className="page-subtitle">
-            Compare persisted carrier capacity, optimize available routes and
-            move into an idempotent shipment-linked booking.
+            Search live airline rates and capacity when CargoAi is connected,
+            then select a bookable option and create the airline booking from
+            AAL.
           </p>
         </div>
         <div className="actions">
@@ -396,16 +393,19 @@ export default function AirCargoPage() {
             <div>
               <h2 className="card-title">Carrier options</h2>
               <div className="card-muted">
-                Live carrier data is used when configured; otherwise
-                shipment-linked AAL planning requests remain available.
+                {externalConfigured
+                  ? `Live ${String(integrationHealth?.provider || "airline")} availability`
+                  : "Live airline provider not connected; AAL planning remains available."}
               </div>
             </div>
             <span
               className={`status ${planningFlight && !flights.length ? "status-neutral" : "status-success"}`}
             >
-              {planningFlight && !flights.length
-                ? "AAL planning mode"
-                : "Capacity protected"}
+              {externalConfigured
+                ? "LIVE AIRLINE"
+                : planningFlight && !flights.length
+                  ? "AAL planning mode"
+                  : "Internal capacity"}
             </span>
           </div>
           <div className="table-wrap">
@@ -441,12 +441,26 @@ export default function AirCargoPage() {
                     <td>
                       {flight.source === "AAL_PLANNING"
                         ? "Request only"
-                        : `${flight.availableCapacityKg.toLocaleString()} / ${flight.totalCapacityKg.toLocaleString()} kg`}
+                        : flight.bookable
+                          ? "Available · bookable"
+                          : flight.availableReason ||
+                            "Available · not API-bookable"}
+                      {flight.totalPrice != null && (
+                        <div className="card-muted">
+                          {flight.currency || ""}{" "}
+                          {flight.totalPrice.toLocaleString()} ·{" "}
+                          {flight.rateName || "rate"}
+                        </div>
+                      )}
                     </td>
                     <td>{flight.source || "—"}</td>
                     <td>
                       <button
                         className={`btn ${selected?.id === flight.id ? "btn-primary" : ""}`}
+                        disabled={
+                          flight.source !== "AAL_PLANNING" &&
+                          flight.bookable === false
+                        }
                         onClick={() => setSelected(flight)}
                       >
                         {selected?.id === flight.id ? "Selected" : "Select"}
@@ -518,14 +532,23 @@ export default function AirCargoPage() {
               <div className="card-muted">
                 {bookingFlight.source === "AAL_PLANNING"
                   ? "AAL planning request — no external airline capacity is being claimed."
-                  : `Available ${bookingFlight.availableCapacityKg.toLocaleString()} kg`}
+                  : bookingFlight.bookable
+                    ? `Live airline option · ${bookingFlight.currency || ""} ${bookingFlight.totalPrice?.toLocaleString() || "price unavailable"}`
+                    : bookingFlight.availableReason ||
+                      "This option is not bookable through the connected provider."}
               </div>
             </div>
           )}
           <button
             className="btn btn-primary"
             style={{ width: "100%", justifyContent: "center", marginTop: 12 }}
-            disabled={!bookingFlight || !shipmentId || booking}
+            disabled={
+              !bookingFlight ||
+              !shipmentId ||
+              booking ||
+              (bookingFlight.source !== "AAL_PLANNING" &&
+                bookingFlight.bookable === false)
+            }
             onClick={book}
           >
             <Icon name="plane" size={15} />{" "}
@@ -584,8 +607,12 @@ export default function AirCargoPage() {
                 to the shipment.
               </div>
             </div>
-            <span className="status status-neutral">
-              {String(integrationHealth?.provider || "LOCAL")}
+            <span
+              className={`status ${externalConfigured ? "status-success" : "status-neutral"}`}
+            >
+              {externalConfigured
+                ? `LIVE · ${String(integrationHealth?.provider || "PROVIDER")}`
+                : "NOT CONNECTED"}
             </span>
           </div>
           <div className="table-wrap">

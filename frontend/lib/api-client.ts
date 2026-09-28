@@ -1157,7 +1157,10 @@ export function awbDownloadUrl(shipmentId: string): string {
 
 export async function downloadAwbPdf(shipmentId: string): Promise<void> {
   const headers = new Headers();
-  applyAuthenticationHeader(headers, `/api/shipments/${shipmentId}/documents/awb`);
+  applyAuthenticationHeader(
+    headers,
+    `/api/shipments/${shipmentId}/documents/awb`,
+  );
   const response = await fetch(awbDownloadUrl(shipmentId), {
     method: "GET",
     credentials: "include",
@@ -1297,6 +1300,13 @@ export type AirCargoFlight = {
   availableCapacityKg: number;
   status: string;
   source: string;
+  providerReference?: string | null;
+  bookable?: boolean;
+  availableReason?: string | null;
+  rateId?: string | null;
+  rateName?: string | null;
+  currency?: string | null;
+  totalPrice?: number | null;
 };
 export type RouteOption = {
   flightId: string;

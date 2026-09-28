@@ -32,8 +32,8 @@ public class AirCargoConnectivityService {
             List<AirCargoFlight> result=new ArrayList<>();
             for(var f:p.searchFlights(o,d,from,to,weightKg)){
                 var existing=repo.findAllByTenantIdAndOriginCodeAndDestinationCodeAndDepartureTimeBetweenOrderByDepartureTimeAsc(t,o,d,f.departure().minusSeconds(1),f.departure().plusSeconds(1)).stream().filter(x->x.getCarrierCode().equalsIgnoreCase(f.carrierCode())&&x.getFlightNumber().equalsIgnoreCase(f.flightNumber())).findFirst().orElse(null);
-                if(existing!=null){existing.refreshCapacity(f.totalCapacityKg(),f.availableCapacityKg(),f.arrival(),p.providerCode());result.add(repo.save(existing));}
-                else result.add(repo.save(new AirCargoFlight(t,f.carrierCode(),f.carrierName(),f.flightNumber(),f.origin(),f.destination(),f.departure(),f.arrival(),f.totalCapacityKg(),f.availableCapacityKg(),p.providerCode())));
+                if(existing!=null){existing.refreshCapacity(f.totalCapacityKg(),f.availableCapacityKg(),f.arrival(),p.providerCode()); existing.setProviderOffer(f.providerReference(),f.rateId(),f.rateName(),f.currency(),f.totalPrice(),f.bookable(),f.availableReason()); result.add(repo.save(existing));}
+                else { var created=new AirCargoFlight(t,f.carrierCode(),f.carrierName(),f.flightNumber(),f.origin(),f.destination(),f.departure(),f.arrival(),f.totalCapacityKg(),f.availableCapacityKg(),p.providerCode()); created.setProviderOffer(f.providerReference(),f.rateId(),f.rateName(),f.currency(),f.totalPrice(),f.bookable(),f.availableReason()); result.add(repo.save(created)); }
             }
             return result;
         }

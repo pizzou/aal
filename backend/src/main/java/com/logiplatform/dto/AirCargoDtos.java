@@ -4,6 +4,7 @@ import com.logiplatform.model.AirCargoBooking;
 import com.logiplatform.model.AirCargoFlight;
 import com.logiplatform.model.AwbRecord;
 import jakarta.validation.constraints.*;
+import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -13,9 +14,9 @@ public final class AirCargoDtos {
     }
 
     public record FlightIngestRequest(@NotBlank String carrierCode, @NotBlank String carrierName,
-            @NotBlank String flightNumber, @NotBlank String originCode, @NotBlank String destinationCode,
-            @NotNull Instant departureTime, Instant arrivalTime, @NotNull @Positive BigDecimal totalCapacityKg,
-            @NotNull @PositiveOrZero BigDecimal availableCapacityKg) {
+            @NotBlank @Size(max = 20) String flightNumber, @NotBlank String originCode,
+            @NotBlank String destinationCode, @NotNull Instant departureTime, Instant arrivalTime,
+            @NotNull @Positive BigDecimal totalCapacityKg, @NotNull @PositiveOrZero BigDecimal availableCapacityKg) {
     }
 
     public record FlightSearchRequest(@NotBlank String origin, @NotBlank String destination, Instant from, Instant to,
@@ -23,9 +24,9 @@ public final class AirCargoDtos {
     }
 
     public record BookRequest(@NotNull UUID shipmentId, @NotBlank String carrierCode, @NotBlank String carrierName,
-            @NotBlank String flightNumber, @NotNull Instant departureTime, Instant arrivalTime,
+            @NotBlank @Size(max = 20) String flightNumber, @NotNull Instant departureTime, Instant arrivalTime,
             @NotBlank String originCode, @NotBlank String destinationCode, @NotNull @Positive BigDecimal weightKg,
-            String serviceLevel, @NotBlank String idempotencyKey, Boolean planningMode) {
+            String serviceLevel, @NotBlank String idempotencyKey) {
     }
 
     public record AmendBookingRequest(@NotBlank String idempotencyKey, String flightNumber, Instant departureTime,

@@ -113,11 +113,17 @@ export default function AirCargoPage() {
     // A shipment can enter the air desk before an airline flight number has
     // been assigned.  Keep that workflow bookable as an internal planning
     // request instead of disabling the only action on the page.
-    const generatedFlightNumber = `AAL-PLAN-${selectedShipment.referenceCode
+    const reference = selectedShipment.referenceCode
       .replace(/[^A-Z0-9]/gi, "")
-      .slice(-12)}`;
-    const flightNumber =
-      selectedShipment.flightNumber?.trim() || generatedFlightNumber;
+      .slice(-12);
+    const generatedFlightNumber = `AAL-PLAN-${reference}`.slice(0, 20);
+    const suppliedFlightNumber =
+      selectedShipment.flightNumber?.trim().toUpperCase() || "";
+    const flightNumber = suppliedFlightNumber
+      ? suppliedFlightNumber.length <= 20
+        ? suppliedFlightNumber
+        : `${suppliedFlightNumber.slice(0, 8)}${suppliedFlightNumber.slice(-12)}`
+      : generatedFlightNumber;
 
     const scheduledDeparture = selectedShipment.etd
       ? new Date(selectedShipment.etd)
@@ -245,7 +251,6 @@ export default function AirCargoPage() {
         weightKg: requestedWeight,
         serviceLevel: "STANDARD",
         idempotencyKey: `AAL-AIR-${shipmentId}-${bookingFlight.id}-${requestedWeight}`,
-        planningMode: bookingFlight.source === "AAL_PLANNING",
       });
 
       setBookings((current) => [

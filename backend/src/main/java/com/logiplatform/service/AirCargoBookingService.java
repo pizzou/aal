@@ -67,14 +67,10 @@ public class AirCargoBookingService {
         AirCargoProviderPort provider = providers.active();
         // External providers own their live capacity. Only reserve AAL-persisted
         // capacity when operating in internal mode.
-        boolean externalBooking = provider.capabilities().booking();
-        boolean planningMode = Boolean.TRUE.equals(r.planningMode());
-        boolean reserveInternalCapacity = !externalBooking && !planningMode;
-        AirCargoFlight reserved = reserveInternalCapacity ? findAndReserve(tenant, r) : null;
-        String source = externalBooking ? provider.providerCode()
-                : (planningMode ? "INTERNAL_PLANNING" : "INTERNAL_CAPACITY");
+        AirCargoFlight reserved = provider.capabilities().booking() ? null : findAndReserve(tenant, r);
+        String source = provider.capabilities().booking() ? provider.providerCode() : "INTERNAL_CAPACITY";
         AirCargoBooking b = new AirCargoBooking(tenant, r.shipmentId(), r.carrierCode().trim().toUpperCase(),
-                r.carrierName(), r.flightNumber().trim().toUpperCase(), r.departureTime(), r.arrivalTime(),
+                r.carrierName(), safeFlightNumber(r.flightNumber()), r.departureTime(), r.arrivalTime(),
                 r.originCode().trim().toUpperCase(), r.destinationCode().trim().toUpperCase(), r.weightKg(),
                 "REQUESTED", source, idem);
         b.setServiceLevel(r.serviceLevel());
@@ -83,7 +79,7 @@ public class AirCargoBookingService {
             bookings.saveAndFlush(b);
             // Only move into provider-pending when an external provider will actually
             // receive the request, or when AAL has persisted capacity to confirm.
-            if (externalBooking || reserved != null) {
+            if (provider.capabilities().booking() || reserved != null) {
                 stateMachine.transition(b, "PENDING_PROVIDER", "BOOK_REQUESTED", correlationId());
             }
         } catch (DataIntegrityViolationException duplicate) {
@@ -92,17 +88,18 @@ public class AirCargoBookingService {
             TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
             return BookingResponse.from(existing);
         }
-        if (!externalBooking) {
-            // AAL remains usable without an external airline integration. In planning
-            // mode the request is intentionally persisted without claiming local capacity.
-            // A real persisted flight is reserved only for a normal internal-capacity
-            // booking.
+        if (!provider.capabilities().booking()) {
+            // AAL must remain usable when no airline API credentials are configured.
+            // If a persisted flight exists, reserve its real AAL capacity. If it does
+            // not exist, keep the request as an internal planning request instead of
+            // returning a misleading 409. It can later be fulfilled/reconciled when
+            // carrier capacity is ingested or an external provider is enabled.
             if (reserved != null) {
                 String ref = "CAP-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
                 b.confirm(r.weightKg(), ref, ref, "INTERNAL_CAPACITY_RESERVATION");
                 stateMachine.transition(b, "CONFIRMED", "INTERNAL_CAPACITY", correlationId());
             }
-            syncShipmentFlightNumber(r.shipmentId(), r.flightNumber());
+            syncShipmentFlightNumber(r.shipmentId(), safeFlightNumber(r.flightNumber()));
             BookingResponse response = BookingResponse.from(bookings.save(b));
             metrics.booking(response.status());
             audit(response.id(), "AIR_BOOKING_CREATED", "CREATE", response.status());
@@ -112,7 +109,8 @@ public class AirCargoBookingService {
         UUID attempt = attempts.start(provider.providerCode(), "BOOK", idem, correlation, r.toString());
         try {
             AirCargoProviderPort.BookingResult result = provider.book(new AirCargoProviderPort.BookingCommand(idem,
-                    r.shipmentId().toString(), r.carrierCode(), r.carrierName(), r.flightNumber(), r.departureTime(),
+                    r.shipmentId().toString(), r.carrierCode(), r.carrierName(), safeFlightNumber(r.flightNumber()),
+                    r.departureTime(),
                     r.arrivalTime(), r.originCode(), r.destinationCode(), r.weightKg(), r.serviceLevel()));
             attempts.success(attempt, 200, result.rawResponse());
             String status = result.status() == null ? "PENDING" : result.status().toUpperCase();
@@ -123,7 +121,7 @@ public class AirCargoBookingService {
             } else {
                 b.pending(result.providerReference(), result.rawResponse());
             }
-            syncShipmentFlightNumber(r.shipmentId(), r.flightNumber());
+            syncShipmentFlightNumber(r.shipmentId(), safeFlightNumber(r.flightNumber()));
             BookingResponse response = BookingResponse.from(bookings.save(b));
             metrics.booking(response.status());
             audit(response.id(), "AIR_BOOKING_CREATED", "CREATE", response.status());
@@ -170,7 +168,8 @@ public class AirCargoBookingService {
                     .amend(new AirCargoProviderPort.AmendmentCommand(key, b.getProviderReference(), r.flightNumber(),
                             r.departureTime(), r.arrivalTime(), r.weightKg(), r.serviceLevel()));
             attempts.success(attempt, 200, result.rawResponse());
-            b.amend(r.weightKg(), r.flightNumber(), r.departureTime(), r.arrivalTime(), r.serviceLevel(),
+            b.amend(r.weightKg(), safeFlightNumber(r.flightNumber()), r.departureTime(), r.arrivalTime(),
+                    r.serviceLevel(),
                     result.providerReference(), result.rawResponse());
             stateMachine.transition(b, "CONFIRMED", "PROVIDER_AMENDMENT_CONFIRMED", attempt.toString());
             BookingResponse response = BookingResponse.from(bookings.save(b));
@@ -309,7 +308,7 @@ public class AirCargoBookingService {
     }
 
     private void syncShipmentFlightNumber(UUID shipmentId, String flightNumber) {
-        String value = flightNumber == null ? "" : flightNumber.trim();
+        String value = safeFlightNumber(flightNumber);
         if (value.isBlank())
             return;
         try {
@@ -331,6 +330,22 @@ public class AirCargoBookingService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Arrival must be after departure");
         if (r.originCode().equalsIgnoreCase(r.destinationCode()))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Origin and destination must differ");
+    }
+
+    /**
+     * Flight numbers are operational identifiers, but older AAL production
+     * databases used VARCHAR(20). Keep the booking write path backward-safe
+     * even when a shipment was created with a longer legacy value.
+     */
+    private static String safeFlightNumber(String value) {
+        String x = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        if (x.isBlank())
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A valid flight number is required");
+        if (x.length() <= 20)
+            return x;
+        // Preserve the identifying suffix while keeping the value compatible
+        // with the oldest production schema.
+        return x.substring(0, 8) + x.substring(x.length() - 12);
     }
 
     private static String cleanKey(String key) {

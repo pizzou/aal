@@ -225,11 +225,52 @@ export default function AalControlTower() {
 
   if (isLoading || !accessToken) return null;
 
-  const currency = data?.financial.currency ?? "USD";
-  const total = data?.operations.totalShipments ?? 0;
-  const inTransit = data?.operations.activeShipments ?? 0;
-  const delivered = data?.operations.deliveredShipments ?? 0;
-  const exceptions = data?.operations.exceptionShipments ?? 0;
+  // The API contract normally supplies every nested dashboard object. Keep the
+  // control tower render-safe when an older backend, a partially populated
+  // response, or a transient cached snapshot omits one of those objects.
+  // Without these guards, `data?.financial.currency` still throws when `data`
+  // exists but `financial` is missing.
+  const operations = data?.operations ?? {
+    totalShipments: 0,
+    activeShipments: 0,
+    deliveredShipments: 0,
+    delayedShipments: 0,
+    exceptionShipments: 0,
+    unassignedShipments: 0,
+    dueToday: 0,
+    onTimeRatePercent: 0,
+    completionRatePercent: 0,
+  };
+  const financial = data?.financial ?? {
+    currency: "USD",
+    mixedCurrencies: false,
+    billed: 0,
+    collected: 0,
+    receivables: 0,
+    operatingCost: 0,
+    grossMargin: 0,
+    grossMarginPercent: 0,
+  };
+  const fleet = data?.fleet ?? {
+    totalVehicles: 0,
+    availableVehicles: 0,
+    onTripVehicles: 0,
+    maintenanceVehicles: 0,
+    vehicleUtilizationPercent: 0,
+    totalDrivers: 0,
+    availableDrivers: 0,
+    onTripDrivers: 0,
+    driverUtilizationPercent: 0,
+  };
+  const modeMix = data?.modeMix ?? [];
+  const trend = data?.trend ?? [];
+  const exceptionsList = data?.exceptions ?? [];
+  const actions = data?.actions ?? [];
+  const currency = financial.currency || "USD";
+  const total = operations.totalShipments;
+  const inTransit = operations.activeShipments;
+  const delivered = operations.deliveredShipments;
+  const exceptions = operations.exceptionShipments;
 
   return (
     <main className="dashboard-page">
@@ -298,7 +339,7 @@ export default function AalControlTower() {
               accent="navy"
               title="Total Shipments"
               value={total.toLocaleString()}
-              meta={`${pct(data.operations.completionRatePercent)} completion`}
+              meta={`${pct(operations.completionRatePercent)} completion`}
               trend="Operations"
               href="/shipments"
             />
@@ -307,7 +348,7 @@ export default function AalControlTower() {
               accent="red"
               title="In Transit"
               value={inTransit.toLocaleString()}
-              meta={`${pct(data.operations.onTimeRatePercent)} on time`}
+              meta={`${pct(operations.onTimeRatePercent)} on time`}
               trend="Live movement"
               href="/track"
             />
@@ -316,7 +357,7 @@ export default function AalControlTower() {
               accent="yellow"
               title="Delivered"
               value={delivered.toLocaleString()}
-              meta={`${data.operations.dueToday.toLocaleString()} due today`}
+              meta={`${operations.dueToday.toLocaleString()} due today`}
               trend="Completed"
               href="/shipments?status=DELIVERED"
             />
@@ -325,7 +366,7 @@ export default function AalControlTower() {
               accent="red"
               title="Exceptions"
               value={exceptions.toLocaleString()}
-              meta={`${data.operations.delayedShipments.toLocaleString()} delayed`}
+              meta={`${operations.delayedShipments.toLocaleString()} delayed`}
               trend="Attention required"
               href="/exceptions"
             />
@@ -333,9 +374,9 @@ export default function AalControlTower() {
               icon="money"
               accent="navy"
               title={`Revenue (${currency})`}
-              value={money(data.financial.billed, "").trim()}
-              meta={`${money(data.financial.collected, currency)} collected`}
-              trend={`${pct(data.financial.grossMarginPercent)} margin`}
+              value={money(financial.billed, "").trim()}
+              meta={`${money(financial.collected, currency)} collected`}
+              trend={`${pct(financial.grossMarginPercent)} margin`}
               href="/billing"
             />
           </section>
@@ -348,7 +389,7 @@ export default function AalControlTower() {
                 href="/reports"
               />
               <div className="chart-legend">
-                {data.modeMix.slice(0, 4).map((item, index) => (
+                {modeMix.slice(0, 4).map((item, index) => (
                   <span key={item.mode}>
                     <i className={`legend-dot dot-${index}`} />
                     {modeLabel(item.mode)}
@@ -379,32 +420,32 @@ export default function AalControlTower() {
                       className="chart-grid-line"
                     />
                   ))}
-                  {data.trend.length > 1 && (
+                  {trend.length > 1 && (
                     <>
                       <polyline
                         className="chart-line chart-line-red"
-                        points={data.trend
+                        points={trend
                           .map(
                             (x, i) =>
-                              `${30 + (i * 710) / Math.max(1, data.trend.length - 1)},${230 - (x.shipments / Math.max(1, total)) * 185}`,
+                              `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.shipments / Math.max(1, total)) * 185}`,
                           )
                           .join(" ")}
                       />
                       <polyline
                         className="chart-line chart-line-blue"
-                        points={data.trend
+                        points={trend
                           .map(
                             (x, i) =>
-                              `${30 + (i * 710) / Math.max(1, data.trend.length - 1)},${230 - (x.revenue / trendMax) * 165}`,
+                              `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.revenue / trendMax) * 165}`,
                           )
                           .join(" ")}
                       />
                       <polyline
                         className="chart-line chart-line-yellow"
-                        points={data.trend
+                        points={trend
                           .map(
                             (x, i) =>
-                              `${30 + (i * 710) / Math.max(1, data.trend.length - 1)},${230 - (x.operatingCost / trendMax) * 145}`,
+                              `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.operatingCost / trendMax) * 145}`,
                           )
                           .join(" ")}
                       />
@@ -413,7 +454,7 @@ export default function AalControlTower() {
                 </svg>
               </div>
               <div className="chart-x-labels">
-                {data.trend.map((x) => (
+                {trend.map((x) => (
                   <span key={x.date}>{x.date.slice(5)}</span>
                 ))}
               </div>
@@ -590,7 +631,7 @@ export default function AalControlTower() {
                 href="/exceptions"
               />
               <div className="activity-feed">
-                {data.actions.slice(0, 5).map((item, index) => (
+                {actions.slice(0, 5).map((item, index) => (
                   <Link
                     href={item.href}
                     className="activity-item"
@@ -617,7 +658,7 @@ export default function AalControlTower() {
                     <span className="activity-arrow">→</span>
                   </Link>
                 ))}
-                {!data.actions.length && (
+                {!actions.length && (
                   <div className="dashboard-empty">
                     No new operational activity.
                   </div>
@@ -646,18 +687,18 @@ export default function AalControlTower() {
               />
               <Readiness
                 label="Vehicles available"
-                value={`${data.fleet.availableVehicles} / ${data.fleet.totalVehicles}`}
-                percent={data.fleet.vehicleUtilizationPercent}
+                value={`${fleet.availableVehicles} / ${fleet.totalVehicles}`}
+                percent={fleet.vehicleUtilizationPercent}
               />
               <Readiness
                 label="Drivers available"
-                value={`${data.fleet.availableDrivers} / ${data.fleet.totalDrivers}`}
-                percent={data.fleet.driverUtilizationPercent}
+                value={`${fleet.availableDrivers} / ${fleet.totalDrivers}`}
+                percent={fleet.driverUtilizationPercent}
               />
               <Readiness
                 label="On-time delivery"
-                value={pct(data.operations.onTimeRatePercent)}
-                percent={data.operations.onTimeRatePercent}
+                value={pct(operations.onTimeRatePercent)}
+                percent={operations.onTimeRatePercent}
               />
             </div>
             <div className="dashboard-card compact-performance">
@@ -668,28 +709,24 @@ export default function AalControlTower() {
               />
               <Readiness
                 label="Receivables"
-                value={money(data.financial.receivables, currency)}
+                value={money(financial.receivables, currency)}
                 percent={Math.min(
                   100,
-                  (data.financial.receivables /
-                    Math.max(1, data.financial.billed)) *
-                    100,
+                  (financial.receivables / Math.max(1, financial.billed)) * 100,
                 )}
               />
               <Readiness
                 label="Collected"
-                value={money(data.financial.collected, currency)}
+                value={money(financial.collected, currency)}
                 percent={Math.min(
                   100,
-                  (data.financial.collected /
-                    Math.max(1, data.financial.billed)) *
-                    100,
+                  (financial.collected / Math.max(1, financial.billed)) * 100,
                 )}
               />
               <Readiness
                 label="Gross margin"
-                value={pct(data.financial.grossMarginPercent)}
-                percent={data.financial.grossMarginPercent}
+                value={pct(financial.grossMarginPercent)}
+                percent={financial.grossMarginPercent}
               />
             </div>
             <div className="dashboard-card compact-performance">
@@ -698,7 +735,7 @@ export default function AalControlTower() {
                 title="Priority attention"
                 href="/exceptions"
               />
-              {data.exceptions.slice(0, 3).map((item) => (
+              {exceptionsList.slice(0, 3).map((item) => (
                 <Link
                   key={`${item.reference}-${item.type}`}
                   href={`/shipments?q=${encodeURIComponent(item.reference)}`}
@@ -717,7 +754,7 @@ export default function AalControlTower() {
                   </span>
                 </Link>
               ))}
-              {!data.exceptions.length && (
+              {!exceptionsList.length && (
                 <div className="dashboard-empty">No open exceptions.</div>
               )}
             </div>
@@ -730,7 +767,7 @@ export default function AalControlTower() {
               </div>
               <span className="dashboard-online">
                 <span />{" "}
-                {operational?.integrations.activeProvider.code ?? "Provider"}
+                {operational?.integrations?.activeProvider?.code ?? "Provider"}
               </span>
             </div>
             <div className="dashboard-kpis" style={{ marginTop: 16 }}>
@@ -795,7 +832,7 @@ export default function AalControlTower() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(operational?.integrations.accounts ?? []).map(
+                  {(operational?.integrations?.accounts ?? []).map(
                     (account, index) => (
                       <tr key={String(account.code ?? index)}>
                         <td>
@@ -810,8 +847,8 @@ export default function AalControlTower() {
                         </td>
                         <td>
                           {String(
-                            operational?.integrations.activeProvider
-                              .circuitBreaker?.state ?? "CLOSED",
+                            operational?.integrations?.activeProvider
+                              ?.circuitBreaker?.state ?? "CLOSED",
                           )}
                         </td>
                         <td>
@@ -824,7 +861,7 @@ export default function AalControlTower() {
                       </tr>
                     ),
                   )}
-                  {(operational?.integrations.accounts ?? []).length === 0 ? (
+                  {(operational?.integrations?.accounts ?? []).length === 0 ? (
                     <tr>
                       <td colSpan={6}>
                         No provider accounts registered. Generic HTTP remains

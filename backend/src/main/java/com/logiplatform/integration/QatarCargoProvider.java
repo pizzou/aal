@@ -20,9 +20,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -336,7 +338,7 @@ public class QatarCargoProvider implements AirCargoProviderPort {
                             firstText(itinerary, "scheduledArrivalTime", "arrivalTime", "scheduledArrival"));
                     if (departure == null || arrival == null || !arrival.isAfter(departure)) continue;
 
-                    String rateId = firstText(rateNode, "rateId", "rateReference", "rateCode", "rateKey");
+                    String rateId = firstText(rateNode, "rateId", "rateReferenceId", "rateReference", "rateCode", "rateKey");
                     String rateName = firstText(rateNode, "rateName", "rateType", "productCode");
                     String currency = firstText(rateNode, "currencyCode", "currency");
                     BigDecimal totalPrice = firstDecimal(rateNode, "totalAmount", "discountedtotalAmount", "discountedTotalAmount", "amount");
@@ -349,8 +351,10 @@ public class QatarCargoProvider implements AirCargoProviderPort {
                     BigDecimal totalCapacity = firstDecimal(
                             itinerary,
                             "totalCapacityKg", "totalCapacity", "capacityKg", "maximumWeight");
-                    String flightStatus = firstText(itinerary, "bookingStatus", "flightBookingStatus", "status");
-                    boolean open = isOpenStatus(flightStatus);
+                    String bookingStatus = firstText(itinerary, "bookingStatus");
+                    String flightBookingStatus = firstText(itinerary, "flightBookingStatus", "availabilityStatus", "status");
+                    boolean open = isOpenStatus(flightBookingStatus);
+                    String flightStatus = flightBookingStatus.isBlank() ? bookingStatus : flightBookingStatus;
 
                     String providerReference = joinRef(
                             requestRef,
@@ -466,20 +470,56 @@ public class QatarCargoProvider implements AirCargoProviderPort {
     }
 
     private static Instant parseProviderTime(String date, String time) {
-        if (date == null || date.isBlank()) return parseInstant(time);
-        if (time == null || time.isBlank()) return parseInstant(date);
-        try {
-            return Instant.parse(date + "T" + time);
-        } catch (DateTimeParseException ignored) {
+        if (time != null && !time.isBlank()) {
+            String candidate = time.trim();
+            String[] fullPatterns = {
+                    "dd-MMM-uuuu HH:mm",
+                    "dd-MMM-uuuu HH:mm:ss",
+                    "dd-MMM-uuuu'T'HH:mm",
+                    "dd-MMM-uuuu'T'HH:mm:ss"
+            };
+            for (String pattern : fullPatterns) {
+                try {
+                    return LocalDateTime.parse(candidate, DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH))
+                            .atZone(QATAR_ZONE).toInstant();
+                } catch (DateTimeParseException ignored) {
+                }
+            }
+            try {
+                return OffsetDateTime.parse(candidate).toInstant();
+            } catch (DateTimeParseException ignored) {
+            }
+            try {
+                return Instant.parse(candidate);
+            } catch (DateTimeParseException ignored) {
+            }
         }
-        try {
-            LocalDate d = LocalDate.parse(date);
-            String cleanTime = time.length() >= 8 ? time.substring(0, 8) : time;
-            LocalTime t = LocalTime.parse(cleanTime);
-            return d.atTime(t).atZone(QATAR_ZONE).toInstant();
-        } catch (DateTimeParseException ignored) {
-            return parseInstant(date);
+
+        if (date == null || date.isBlank()) return null;
+        String cleanDate = date.trim();
+        String[] datePatterns = {"yyyy-MM-dd", "dd-MMM-uuuu", "dd/MM/uuuu"};
+        LocalDate parsedDate = null;
+        for (String pattern : datePatterns) {
+            try {
+                parsedDate = LocalDate.parse(cleanDate, DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH));
+                break;
+            } catch (DateTimeParseException ignored) {
+            }
         }
+        if (parsedDate == null) return parseInstant(cleanDate);
+
+        if (time != null && !time.isBlank()) {
+            String shortTime = time.trim();
+            String[] timePatterns = {"HH:mm", "HH:mm:ss"};
+            for (String pattern : timePatterns) {
+                try {
+                    return parsedDate.atTime(LocalTime.parse(shortTime, DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH)))
+                            .atZone(QATAR_ZONE).toInstant();
+                } catch (DateTimeParseException ignored) {
+                }
+            }
+        }
+        return parsedDate.atStartOfDay(QATAR_ZONE).toInstant();
     }
 
     private static Instant parseInstant(String value) {

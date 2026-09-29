@@ -99,34 +99,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    const storedToken = getAccessToken();
+    const storedContext = readStoredAuthContext();
 
-    async function restoreSession() {
-      const storedToken = getAccessToken();
-      const storedContext = readStoredAuthContext();
+    const clearLocalSession = () => {
+      clearAccessToken();
+      clearStoredAuthContext();
+      currentTenant = null;
+      setTenantId(null);
+      setRole(null);
+      setAccessTokenState(null);
+    };
 
+    /*
+     * Do not hold the entire application behind a remote session round-trip.
+     * On Render, a cold backend can take several seconds to wake. A valid JWT
+     * plus the previously validated tenant/role is enough to render the UI;
+     * protected API calls remain the server-side authorization boundary. The
+     * session endpoint is validated in the background and immediately clears
+     * state when the token is actually rejected.
+     */
+    if (!storedToken || !storedContext) {
+      clearLocalSession();
+      setIsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    currentTenant = storedContext.tenantId;
+    setTenantId(storedContext.tenantId);
+    setRole(storedContext.role);
+    setAccessTokenState(storedToken);
+    setIsLoading(false);
+
+    void (async () => {
       try {
-        if (!storedToken) {
-          clearAccessToken();
-          clearStoredAuthContext();
-
-          currentTenant = null;
-          setTenantId(null);
-          setRole(null);
-          setAccessTokenState(null);
-          return;
-        }
-
-        /*
-         * The server remains the source of truth for authentication and role.
-         * The cached context below is only a continuity fallback when a full
-         * page refresh happens while the API is temporarily unavailable.
-         */
         const session: AuthSessionResponse = await authApi.session();
-
-        if (cancelled) return;
+        if (cancelled || getAccessToken() !== storedToken) return;
 
         if (!session.authenticated || !session.tenantId || !session.role) {
-          throw new Error("Authentication required");
+          clearLocalSession();
+          return;
         }
 
         if (session.role === "CUSTOMER") {
@@ -135,20 +149,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           } catch {
             // Local authentication state must still be cleared.
           }
-
-          clearAccessToken();
-          clearStoredAuthContext();
-
-          currentTenant = null;
-          setTenantId(null);
-          setRole(null);
-          setAccessTokenState(null);
+          clearLocalSession();
           return;
         }
 
         currentTenant = session.tenantId;
         writeStoredAuthContext(session.tenantId, session.role);
-
         setTenantId(session.tenantId);
         setRole(session.role);
         setAccessTokenState(storedToken);
@@ -159,10 +165,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           window.location.pathname !== "/account/security"
         ) {
           window.location.replace("/account/security");
-          return;
         }
       } catch (error) {
-        if (cancelled) return;
+        if (cancelled || getAccessToken() !== storedToken) return;
 
         const isAuthenticationFailure =
           error instanceof Error &&
@@ -171,37 +176,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           );
 
         /*
-         * A refresh can race the backend cold start, network recovery, or a
-         * temporary Render/Supabase delay. Do not throw away a valid local JWT
-         * or render an empty role-filtered sidebar in that situation.
-         *
-         * The cached tenant/role is UI continuity only. Every protected API
-         * request is still authenticated by the backend, so this does not grant
-         * permissions by itself.
+         * Network/cold-start failures intentionally do not clear the locally
+         * restored session. The next protected request will retry and the
+         * normal 401 handling will evict a genuinely expired token.
          */
-        if (storedToken && storedContext && !isAuthenticationFailure) {
-          currentTenant = storedContext.tenantId;
-          setTenantId(storedContext.tenantId);
-          setRole(storedContext.role);
-          setAccessTokenState(storedToken);
-          return;
-        }
-
-        clearAccessToken();
-        clearStoredAuthContext();
-
-        currentTenant = null;
-        setTenantId(null);
-        setRole(null);
-        setAccessTokenState(null);
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
+        if (isAuthenticationFailure) {
+          clearLocalSession();
         }
       }
-    }
-
-    restoreSession();
+    })();
 
     return () => {
       cancelled = true;

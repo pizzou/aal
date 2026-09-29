@@ -202,6 +202,73 @@ function applyAuthenticationHeader(headers: Headers, path: string): void {
   }
 }
 
+const GET_CACHE_TTL_MS = 3_000;
+const GET_STALE_GRACE_MS = 30_000;
+const GET_TIMEOUT_MS = 12_000;
+const AUTH_SESSION_TIMEOUT_MS = 7_000;
+const AIR_CARGO_SEARCH_TIMEOUT_MS = 40_000;
+const getCache = new Map<
+  string,
+  { expiresAt: number; staleUntil: number; value: unknown }
+>();
+const getInflight = new Map<string, Promise<unknown>>();
+
+function requestTimeoutFor(path: string): number {
+  if (path === "/api/auth/session") return AUTH_SESSION_TIMEOUT_MS;
+  return path === "/api/air-cargo/flights/search"
+    ? AIR_CARGO_SEARCH_TIMEOUT_MS
+    : GET_TIMEOUT_MS;
+}
+
+function shouldRetryRequest(method: string, path: string): boolean {
+  // Session is a background validation call. Do not make a backend cold start
+  // cost the user multiple extra round trips before the UI can render.
+  if (path === "/api/auth/session") return false;
+  return (
+    method === "GET" ||
+    method === "HEAD" ||
+    path === "/api/air-cargo/flights/search"
+  );
+}
+
+function retryDelay(attempt: number): number {
+  return Math.min(2_000, 300 * 2 ** attempt) + Math.floor(Math.random() * 120);
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  let timeoutId: number | null = null;
+  const parentSignal = init.signal;
+
+  if (parentSignal?.aborted) {
+    controller.abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentSignal.addEventListener(
+      "abort",
+      () => controller.abort(parentSignal.reason),
+      { once: true },
+    );
+  }
+
+  if (!controller.signal.aborted) {
+    timeoutId = window.setTimeout(
+      () =>
+        controller.abort(new DOMException("Request timed out", "TimeoutError")),
+      timeoutMs,
+    );
+  }
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    if (timeoutId !== null) window.clearTimeout(timeoutId);
+  }
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
@@ -237,14 +304,73 @@ export async function apiFetch<T>(
     headers.set("X-CSRF-Token", await ensureCsrf());
   }
 
-  const request = () =>
-    fetch(`${API_BASE}${path}`, {
-      ...options,
-      credentials: "include",
-      headers,
-    });
+  const cacheKey =
+    method === "GET" ? `${path}|${readStoredAccessToken() ?? "session"}` : "";
+  if (method === "GET") {
+    const cached = getCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value as T;
+    }
+    const pending = getInflight.get(cacheKey);
+    if (pending) {
+      return (await pending) as T;
+    }
+  }
 
-  let response = await request();
+  const doRequest = async (): Promise<Response> => {
+    const maxAttempts = shouldRetryRequest(method, path) ? 3 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await fetchWithTimeout(
+          `${API_BASE}${path}`,
+          { ...options, credentials: "include", headers },
+          requestTimeoutFor(path),
+        );
+        if (
+          response.ok ||
+          ![502, 503, 504].includes(response.status) ||
+          attempt === maxAttempts - 1
+        ) {
+          return response;
+        }
+      } catch (error) {
+        if (!shouldRetryRequest(method, path) || attempt === maxAttempts - 1)
+          throw error;
+      }
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, retryDelay(attempt)),
+      );
+    }
+    throw new Error("Request failed after retries");
+  };
+
+  const requestPromise = doRequest();
+  if (method === "GET") getInflight.set(cacheKey, requestPromise);
+
+  let response: Response;
+  try {
+    response = await requestPromise;
+  } catch (error) {
+    // A transient Render/network wake-up should not blank a page that already
+    // has a recent successful snapshot. Never use stale data for a mutation or
+    // an explicit HTTP response such as 401/403/404. Network/timeout failures
+    // are the safe case for continuity.
+    if (method === "GET") {
+      const stale = getCache.get(cacheKey);
+      const staleAvailable = stale && stale.staleUntil > Date.now();
+      const message = error instanceof Error ? error.message : String(error);
+      const transient =
+        /timeout|network|failed to fetch|abort|econnreset|eai_again/i.test(
+          message,
+        );
+      if (staleAvailable && transient) {
+        return stale.value as T;
+      }
+    }
+    throw error;
+  } finally {
+    if (method === "GET") getInflight.delete(cacheKey);
+  }
 
   if (!response.ok) {
     let message = await extractErrorMessage(
@@ -255,7 +381,11 @@ export async function apiFetch<T>(
     if (mutating && isCsrfFailure(response.status, message)) {
       csrfToken = null;
       headers.set("X-CSRF-Token", await ensureCsrf(true));
-      response = await request();
+      response = await fetchWithTimeout(
+        `${API_BASE}${path}`,
+        { ...options, credentials: "include", headers },
+        requestTimeoutFor(path),
+      );
       if (!response.ok) {
         message = await extractErrorMessage(
           response,
@@ -275,12 +405,26 @@ export async function apiFetch<T>(
     }
   }
 
-  if (response.status === 204) return undefined as T;
+  if (response.status === 204) {
+    if (mutating) getCache.clear();
+    return undefined as T;
+  }
 
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) return undefined as T;
 
-  return (await response.json()) as T;
+  const value = (await response.json()) as T;
+  if (method === "GET") {
+    const now = Date.now();
+    getCache.set(cacheKey, {
+      expiresAt: now + GET_CACHE_TTL_MS,
+      staleUntil: now + GET_CACHE_TTL_MS + GET_STALE_GRACE_MS,
+      value,
+    });
+  } else {
+    getCache.clear();
+  }
+  return value;
 }
 
 export interface AuthLoginResponse {
@@ -1411,6 +1555,31 @@ export const airCargoApi = {
 
   integrationHealth: () =>
     apiFetch<Record<string, unknown>>("/api/air-cargo/integration/health"),
+
+  verifyProvider: (data: {
+    providerCode: string;
+    origin: string;
+    destination: string;
+    weightKg: number;
+    from?: string;
+    to?: string;
+  }) =>
+    apiFetch<Record<string, unknown>>("/api/air-cargo/integration/verify", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  verifyAllProviders: (data: {
+    origin: string;
+    destination: string;
+    weightKg: number;
+    from?: string;
+    to?: string;
+  }) =>
+    apiFetch<Record<string, unknown>>("/api/air-cargo/integration/verify-all", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 
   optimizeRoutes: (data: {
     origin: string;

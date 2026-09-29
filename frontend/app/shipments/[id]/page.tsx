@@ -72,16 +72,19 @@ export default function ShipmentTrackingPage() {
 
   async function refresh() {
     try {
-      setEvents(await shipmentsApi.trackingHistory(params.id));
-      const s = await shipmentsApi.get(params.id);
+      const [s, events, readings, notifications] = await Promise.all([
+        shipmentsApi.get(params.id),
+        shipmentsApi.trackingHistory(params.id),
+        sensorsApi.history(params.id),
+        shipmentsApi.notificationHistory(params.id),
+      ]);
       setShipment(s);
       setWeightKg(s.weightKg != null ? String(s.weightKg) : "");
       setNotificationEmail(s.notificationEmail ?? "");
       setFlightNumber(s.flightNumber ?? "");
-      setReadings((await sensorsApi.history(params.id)).content);
-      setNotifications(
-        (await shipmentsApi.notificationHistory(params.id)).content,
-      );
+      setEvents(events);
+      setReadings(readings.content);
+      setNotifications(notifications.content);
     } catch (err) {
       setError(
         err instanceof ApiError

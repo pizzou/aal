@@ -51,6 +51,17 @@ export default function AirCargoPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
+  const [verifyingProvider, setVerifyingProvider] = useState(false);
+  const [verifyingAllProviders, setVerifyingAllProviders] = useState(false);
+  const [providerVerification, setProviderVerification] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
+  const [providerVerificationAll, setProviderVerificationAll] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
   const [booking, setBooking] = useState(false);
   const [bookings, setBookings] = useState<AirCargoBookingResponse[]>([]);
   const [etaHistory, setEtaHistory] = useState<Record<string, unknown>[]>([]);
@@ -67,15 +78,26 @@ export default function AirCargoPage() {
 
   useEffect(() => {
     if (!accessToken) return;
-    Promise.all([airCargoApi.bookings(), airCargoApi.integrationHealth()])
-      .then(([bookingRows, health]) => {
-        setBookings(bookingRows);
-        setIntegrationHealth(health);
+
+    let active = true;
+    const bookingTimer = window.setTimeout(() => {
+      airCargoApi
+        .bookings()
+        .then((rows) => {
+          if (active) setBookings(rows);
+        })
+        .catch(() => undefined);
+    }, 350);
+
+    airCargoApi
+      .integrationHealth()
+      .then((health) => {
+        if (active) setIntegrationHealth(health);
       })
       .catch(() => undefined);
 
     shipmentsApi
-      .list()
+      .list({ page: 0, size: 25, mode: "AIR" })
       .then((response) =>
         setShipments(
           response.content.filter(
@@ -84,10 +106,16 @@ export default function AirCargoPage() {
         ),
       )
       .catch((e) => {
+        if (!active) return;
         setError(
           e instanceof ApiError ? e.message : "Unable to load shipments",
         );
       });
+
+    return () => {
+      active = false;
+      window.clearTimeout(bookingTimer);
+    };
   }, [accessToken]);
 
   const selectedShipment = useMemo(
@@ -203,16 +231,93 @@ export default function AirCargoPage() {
         weightKg: requestedWeight,
         ...range,
       };
-      // Refresh provider offers first so the local route optimizer scores the
-      // same live snapshot the user sees on this screen.
+      // Search live providers first so the user can see real offers immediately.
+      // Route optimization runs against that persisted snapshot without blocking
+      // the first result render.
       const flightResults = await airCargoApi.searchFlights(request);
       setFlights(flightResults);
-      const routeResults = await airCargoApi.optimizeRoutes(request);
-      setRoutes(routeResults);
+      setRoutes([]);
+      setOptimizing(true);
+      void airCargoApi
+        .optimizeRoutes(request)
+        .then(setRoutes)
+        .catch(() => setRoutes([]))
+        .finally(() => setOptimizing(false));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Air cargo search failed");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function verifyAllProviders() {
+    const requestedWeight = Number(weight);
+    if (!Number.isFinite(requestedWeight) || requestedWeight <= 0) {
+      setError("Chargeable weight must be greater than zero.");
+      return;
+    }
+    setVerifyingAllProviders(true);
+    setProviderVerificationAll(null);
+    setError("");
+    try {
+      const range = dateRange(date);
+      const result = await airCargoApi.verifyAllProviders({
+        origin: origin.trim().toUpperCase(),
+        destination: destination.trim().toUpperCase(),
+        weightKg: requestedWeight,
+        ...range,
+      });
+      setProviderVerificationAll(result);
+      const connected = Number(result.reachableProviderCount ?? 0);
+      const total = Number(result.providerCount ?? 0);
+      setMessage(
+        `Airline connectivity test: ${connected}/${total} configured providers reachable.`,
+      );
+    } catch (e) {
+      setError(
+        e instanceof ApiError ? e.message : "Airline connectivity test failed",
+      );
+    } finally {
+      setVerifyingAllProviders(false);
+    }
+  }
+
+  async function verifyProvider() {
+    const provider = String(
+      integrationHealth?.activeProvider || integrationHealth?.provider || "",
+    ).trim();
+    if (!provider || provider === "NONE") {
+      setError("No configured airline provider is available to verify.");
+      return;
+    }
+    const requestedWeight = Number(weight);
+    const range = dateRange(date);
+    setVerifyingProvider(true);
+    setProviderVerification(null);
+    setError("");
+    try {
+      const result = await airCargoApi.verifyProvider({
+        providerCode: provider,
+        origin: origin.trim().toUpperCase(),
+        destination: destination.trim().toUpperCase(),
+        weightKg: requestedWeight,
+        ...range,
+      });
+      setProviderVerification(result);
+      const status = String(result.status || "");
+      setMessage(
+        status === "CONNECTED"
+          ? `${provider} live connection verified${result.offerCount != null ? ` · ${result.offerCount} offers` : ""}.`
+          : `${provider} verification returned ${status || "an inconclusive result"}.`,
+      );
+    } catch (e) {
+      setError(
+        e instanceof ApiError
+          ? e.message
+          : "Airline provider verification failed",
+      );
+    } finally {
+      setVerifyingProvider(false);
     }
   }
 
@@ -404,15 +509,39 @@ export default function AirCargoPage() {
                   : "Live airline provider not connected; AAL planning remains available."}
               </div>
             </div>
-            <span
-              className={`status ${planningFlight && !flights.length ? "status-neutral" : "status-success"}`}
-            >
-              {liveSearchConfigured
-                ? "LIVE AIRLINE"
-                : planningFlight && !flights.length
-                  ? "AAL planning mode"
-                  : "Internal capacity"}
-            </span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span
+                className={`status ${planningFlight && !flights.length ? "status-neutral" : "status-success"}`}
+              >
+                {providerVerification?.status === "CONNECTED"
+                  ? "AIRLINE VERIFIED"
+                  : liveSearchConfigured
+                    ? "LIVE PROVIDER CONFIGURED"
+                    : planningFlight && !flights.length
+                      ? "AAL planning mode"
+                      : "Internal capacity"}
+              </span>
+              {liveSearchConfigured && (
+                <>
+                  <button
+                    className="btn"
+                    onClick={verifyProvider}
+                    disabled={verifyingProvider || verifyingAllProviders}
+                  >
+                    {verifyingProvider ? "Testing…" : "Test active provider"}
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={verifyAllProviders}
+                    disabled={verifyingProvider || verifyingAllProviders}
+                  >
+                    {verifyingAllProviders
+                      ? "Testing airlines…"
+                      : "Test connected airlines"}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
           <div className="table-wrap">
             <table className="table">
@@ -478,7 +607,7 @@ export default function AirCargoPage() {
                 ))}
                 {!displayFlights.length && (
                   <tr>
-                    <td colSpan={7} className="empty">
+                    <td colSpan={8} className="empty">
                       Search a lane and date, or assign a flight number and
                       schedule to an air shipment.
                     </td>
@@ -487,6 +616,26 @@ export default function AirCargoPage() {
               </tbody>
             </table>
           </div>
+          {Array.isArray(providerVerificationAll?.providers) && (
+            <div className="grid grid-3" style={{ marginTop: 10 }}>
+              {(
+                providerVerificationAll.providers as Array<
+                  Record<string, unknown>
+                >
+              ).map((row) => (
+                <div className="quick" key={String(row.provider)}>
+                  <strong>{String(row.provider)}</strong>
+                  <span>{String(row.status || "UNKNOWN")}</span>
+                  {row.latencyMs != null && (
+                    <div className="card-muted">
+                      {String(row.latencyMs)} ms · {String(row.offerCount ?? 0)}{" "}
+                      offers
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="card">

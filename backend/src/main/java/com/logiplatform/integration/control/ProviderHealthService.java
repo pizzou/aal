@@ -28,7 +28,7 @@ public class ProviderHealthService {
         active.put("code", p.providerCode());
         active.put("capabilities", p.capabilities());
         active.put("circuitBreaker", safeBreaker(p.providerCode()));
-        active.put("configured", p.capabilities().booking() || p.capabilities().flightStatus());
+        active.put("configured", p.configured());
         Map<String,Object> out = new LinkedHashMap<>();
         out.put("generatedAt", Instant.now()); out.put("activeProvider", active); out.put("accounts", accounts);
         return out;

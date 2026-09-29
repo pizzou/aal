@@ -333,7 +333,7 @@ public class AirCargoBookingService {
 
     @Transactional(readOnly = true)
     public List<BookingResponse> list() {
-        return bookings.findAllByTenantIdOrderByCreatedAtDesc(TenantContext.getTenantId()).stream()
+        return bookings.findTop50ByTenantIdOrderByCreatedAtDesc(TenantContext.getTenantId()).stream()
                 .map(BookingResponse::from).toList();
     }
 

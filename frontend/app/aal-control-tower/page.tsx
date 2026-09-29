@@ -78,32 +78,91 @@ export default function AalControlTower() {
   const refreshTimerRef = useRef<number | null>(null);
   const lastLoadRef = useRef(0);
 
-  async function load() {
+  async function loadCore(showSpinner = false) {
     if (!accessToken) return;
-    setRefreshing(true);
+    if (showSpinner) setRefreshing(true);
     setError("");
     try {
-      const [dashboard, recent, health, controlTower] = await Promise.all([
+      const results = await Promise.allSettled([
         commandCenterApi.advanced(asOf),
         shipmentsApi.list({ page: 0, size: 5 }),
-        platformHealthApi.current(),
-        enterpriseControlTowerApi.operational(),
       ]);
-      const fleet = await operationsApi.fleetLive().catch(() => []);
-      setData(dashboard);
-      setShipments(recent.content);
-      setSystemHealth({ healthy: health.healthy, status: health.status });
-      setFleetLive(fleet);
-      setOperational(controlTower);
-    } catch (e) {
-      setError(
-        e instanceof ApiError
-          ? e.message
-          : "Unable to load the operations control tower",
-      );
+
+      let failures = 0;
+      const [dashboardResult, recentResult] = results;
+
+      if (dashboardResult.status === "fulfilled") {
+        setData(dashboardResult.value);
+      } else {
+        failures += 1;
+      }
+
+      if (recentResult.status === "fulfilled") {
+        setShipments(recentResult.value.content);
+      } else {
+        failures += 1;
+      }
+
+      if (failures === results.length) {
+        const firstReason =
+          dashboardResult.status === "rejected"
+            ? dashboardResult.reason
+            : recentResult.status === "rejected"
+              ? recentResult.reason
+              : undefined;
+        setError(
+          firstReason instanceof ApiError
+            ? firstReason.message
+            : "Unable to load the operations control tower",
+        );
+      } else if (failures > 0) {
+        setError(
+          "Some control-tower data is temporarily unavailable; available panels remain visible.",
+        );
+      }
     } finally {
-      setRefreshing(false);
+      if (showSpinner) setRefreshing(false);
     }
+  }
+
+  async function loadAuxiliary() {
+    if (!accessToken) return;
+    const [health, controlTower, fleet] = await Promise.allSettled([
+      platformHealthApi.current(),
+      enterpriseControlTowerApi.operational(),
+      operationsApi.fleetLive(),
+    ]);
+
+    if (health.status === "fulfilled") {
+      setSystemHealth({
+        healthy: health.value.healthy,
+        status: health.value.status,
+      });
+    }
+    if (controlTower.status === "fulfilled") {
+      setOperational(controlTower.value);
+    }
+    if (fleet.status === "fulfilled") {
+      setFleetLive(fleet.value);
+    }
+
+    if (
+      health.status === "rejected" &&
+      controlTower.status === "rejected" &&
+      fleet.status === "rejected"
+    ) {
+      // Auxiliary widgets are deliberately non-blocking; preserve a usable
+      // dashboard when one subsystem is waking up or temporarily unavailable.
+      setSystemHealth(
+        (current) =>
+          current ?? { healthy: false, status: "AUXILIARY_DEGRADED" },
+      );
+    }
+  }
+
+  async function load() {
+    await loadCore(true);
+    void loadAuxiliary();
   }
 
   useEffect(() => {
@@ -123,9 +182,14 @@ export default function AalControlTower() {
       refreshTimerRef.current = window.setTimeout(() => {
         refreshTimerRef.current = null;
         lastLoadRef.current = Date.now();
-        void load();
+        void loadCore();
       }, delay);
     };
+
+    const auxiliaryInterval = window.setInterval(
+      () => void loadAuxiliary(),
+      30_000,
+    );
 
     const close = openOperationsEventStream({
       onEvent: scheduleEventRefresh,
@@ -145,6 +209,7 @@ export default function AalControlTower() {
         window.clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = null;
       }
+      window.clearInterval(auxiliaryInterval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, asOf]);

@@ -19,6 +19,7 @@ public class AirlineDeadLetterService {
         return id;
     }
     public List<Map<String,Object>> list(){return db.queryForList("SELECT id,provider,operation,idempotency_key,correlation_id,error_detail,attempts,status,last_attempt_at,created_at FROM airline_integration_dead_letters WHERE tenant_id=? ORDER BY created_at DESC",TenantContext.getTenantId());}
+    public long countOpen(){return db.queryForObject("SELECT COUNT(*) FROM airline_integration_dead_letters WHERE tenant_id=? AND status IN ('OPEN','RETRYING')", Long.class, TenantContext.getTenantId());}
     @Transactional public void requeue(UUID id){db.update("UPDATE airline_integration_dead_letters SET status='OPEN',attempts=0,last_attempt_at=now(),resolved_at=NULL WHERE tenant_id=? AND id=?",TenantContext.getTenantId(),id);}
     @Transactional public void resolve(UUID id){db.update("UPDATE airline_integration_dead_letters SET status='RESOLVED',resolved_at=now() WHERE tenant_id=? AND id=?",TenantContext.getTenantId(),id);}
 }

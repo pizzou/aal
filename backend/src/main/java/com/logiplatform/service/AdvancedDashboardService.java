@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static com.logiplatform.dto.AdvancedDashboardDtos.*;
 
@@ -22,7 +23,10 @@ import static com.logiplatform.dto.AdvancedDashboardDtos.*;
 @Service
 public class AdvancedDashboardService {
 
+    private static final long CACHE_TTL_MS = 5_000L;
     private final JdbcTemplate jdbc;
+    private final ConcurrentHashMap<CacheKey, CachedResponse> cache = new ConcurrentHashMap<>();
+    private final Object cacheLock = new Object();
 
     public AdvancedDashboardService(
             @Qualifier("reportingJdbcTemplate") JdbcTemplate jdbc) {
@@ -36,21 +40,42 @@ public class AdvancedDashboardService {
             throw new IllegalStateException("Tenant context is not available");
         }
 
-        return new Response(
-                date,
-                operations(tenantId, date),
-                financial(tenantId, date),
-                fleet(tenantId),
-                modeMix(tenantId, date),
-                statusMix(tenantId, date),
-                trend(tenantId, date),
-                topLanes(tenantId, date),
-                exceptions(tenantId, date),
-                actions(tenantId, date),
-                operatingKpis(tenantId, date),
-                monthlyFinancial(tenantId, date),
-                receivablesAging(tenantId, date),
-                quotationStatus(tenantId));
+        CacheKey key = new CacheKey(tenantId, date);
+        long now = System.currentTimeMillis();
+        CachedResponse cached = cache.get(key);
+        if (cached != null && now - cached.createdAtMs() < CACHE_TTL_MS) {
+            return cached.response();
+        }
+
+        synchronized (cacheLock) {
+            final long currentTime = System.currentTimeMillis();
+            cached = cache.get(key);
+            if (cached != null && currentTime - cached.createdAtMs() < CACHE_TTL_MS) {
+                return cached.response();
+            }
+
+            Response response = new Response(
+                    date,
+                    operations(tenantId, date),
+                    financial(tenantId, date),
+                    fleet(tenantId),
+                    modeMix(tenantId, date),
+                    statusMix(tenantId, date),
+                    trend(tenantId, date),
+                    topLanes(tenantId, date),
+                    exceptions(tenantId, date),
+                    actions(tenantId, date),
+                    operatingKpis(tenantId, date),
+                    monthlyFinancial(tenantId, date),
+                    receivablesAging(tenantId, date),
+                    quotationStatus(tenantId));
+            cache.put(key, new CachedResponse(currentTime, response));
+            if (cache.size() > 100) {
+                cache.entrySet().removeIf(entry ->
+                        currentTime - entry.getValue().createdAtMs() >= CACHE_TTL_MS);
+            }
+            return response;
+        }
     }
 
     private OperationsKpi operations(UUID tenantId, LocalDate asOf) {
@@ -638,6 +663,9 @@ public class AdvancedDashboardService {
                 tenantId);
         return value == null || value.isBlank() ? "USD" : value.trim().toUpperCase();
     }
+
+    private record CacheKey(UUID tenantId, LocalDate asOf) {}
+    private record CachedResponse(long createdAtMs, Response response) {}
 
     private static BigDecimal nz(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;

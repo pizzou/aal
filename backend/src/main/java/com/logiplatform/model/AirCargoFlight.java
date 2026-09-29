@@ -33,7 +33,8 @@ import java.util.UUID;
                         "provider_code",
                         "carrier_code",
                         "flight_number",
-                        "departure_time"
+                        "departure_time",
+                        "rate_id"
                 }))
 public class AirCargoFlight {
 

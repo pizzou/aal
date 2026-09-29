@@ -76,7 +76,7 @@ public class LufthansaCargoTrackingProvider implements AirCargoProviderPort {
 
     @Override
     public boolean configured() {
-        return enabled && !baseUrl.isBlank();
+        return enabled && !baseUrl.isBlank() && !apiKey.isBlank();
     }
 
     @Override
@@ -84,6 +84,7 @@ public class LufthansaCargoTrackingProvider implements AirCargoProviderPort {
         List<String> issues = new ArrayList<>();
         if (!enabled) issues.add("AIRCARGO_LH_CARGO_ENABLED is false");
         if (baseUrl.isBlank()) issues.add("AIRCARGO_LH_CARGO_BASE_URL is missing");
+        if (apiKey.isBlank()) issues.add("AIRCARGO_LH_CARGO_API_KEY is missing");
         return issues;
     }
 
@@ -184,20 +185,56 @@ public class LufthansaCargoTrackingProvider implements AirCargoProviderPort {
     }
 
     private FlightStatus mapStatus(JsonNode root, String providerReference) {
-        JsonNode shipment = firstNode(root, "shipment", "shipmentTracking", "data");
+        JsonNode trackingStatus = firstObject(root, "shipmentTrackingStatus", "shipmentTracking", "data");
+        JsonNode shipment = firstObject(trackingStatus, "shipment", "shipmentTracking", "data");
+        if (shipment == null) shipment = trackingStatus == null ? root : trackingStatus;
+
+        JsonNode movement = firstObject(
+                trackingStatus,
+                "flightMovementDetails",
+                "flightMovement",
+                "movement");
+
         String status = firstText(shipment, "statusCode", "status", "eventCode", "handlingStatus");
         status = normalizeStatus(status);
 
-        Instant scheduledDeparture = firstInstant(shipment, "scheduledDeparture", "flightScheduledDeparture", "departureTime");
-        Instant estimatedDeparture = firstInstant(shipment, "estimatedDeparture", "estimatedDepartureTime");
-        Instant actualDeparture = firstInstant(shipment, "actualDeparture", "actualDepartureTime", "departureTimeActual");
-        Instant scheduledArrival = firstInstant(shipment, "scheduledArrival", "flightScheduledArrival", "arrivalTime");
-        Instant estimatedArrival = firstInstant(shipment, "estimatedArrival", "estimatedArrivalTime");
-        Instant actualArrival = firstInstant(shipment, "actualArrival", "actualArrivalTime", "arrivalTimeActual");
+        Instant scheduledDeparture = firstInstant(
+                movement,
+                "scheduledDeparture",
+                "flightScheduledDeparture",
+                "departureTime",
+                "flightDate");
+        Instant estimatedDeparture = firstInstant(movement, "estimatedDeparture", "estimatedDepartureTime");
+        Instant actualDeparture = firstInstant(
+                shipment,
+                "actualDeparture",
+                "actualDepartureTime",
+                "departureTimeActual");
+        Instant scheduledArrival = firstInstant(
+                movement,
+                "scheduledArrival",
+                "flightScheduledArrival",
+                "arrivalTime");
+        Instant estimatedArrival = firstInstant(movement, "estimatedArrival", "estimatedArrivalTime", "etaUTC", "eta");
+        Instant actualArrival = firstInstant(
+                shipment,
+                "actualArrival",
+                "actualArrivalTime",
+                "arrivalTimeActual");
+
+        if (actualDeparture == null || actualArrival == null) {
+            JsonNode latestEvent = latestEvent(trackingStatus);
+            if (actualDeparture == null && isEvent(latestEvent, "DEP")) {
+                actualDeparture = firstInstant(latestEvent, "actualTime", "timestamp", "eventTime");
+            }
+            if (actualArrival == null && isEvent(latestEvent, "ARR")) {
+                actualArrival = firstInstant(latestEvent, "actualTime", "timestamp", "eventTime");
+            }
+        }
 
         int depDelay = delayMinutes(scheduledDeparture, estimatedDeparture, actualDeparture);
         int arrDelay = delayMinutes(scheduledArrival, estimatedArrival, actualArrival);
-        String eventId = firstText(shipment, "eventId", "trackingEventId", "lastEventId");
+        String eventId = firstText(trackingStatus, "eventId", "trackingEventId", "lastEventId");
 
         return new FlightStatus(
                 status,
@@ -211,6 +248,32 @@ public class LufthansaCargoTrackingProvider implements AirCargoProviderPort {
                 arrDelay,
                 eventId.isBlank() ? providerReference : eventId,
                 root.toString());
+    }
+
+    private static JsonNode firstObject(JsonNode node, String... names) {
+        if (node == null || node.isNull() || node.isMissingNode()) return null;
+        for (String name : names) {
+            JsonNode value = node.get(name);
+            if (value != null && !value.isNull()) {
+                if (value.isArray()) return value.size() == 0 ? null : value.get(0);
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static JsonNode latestEvent(JsonNode trackingStatus) {
+        if (trackingStatus == null || trackingStatus.isNull() || trackingStatus.isMissingNode()) return null;
+        JsonNode events = trackingStatus.path("events").path("event");
+        if (events.isArray() && events.size() > 0) return events.get(0);
+        JsonNode statusEvents = trackingStatus.path("shipmentStatusEvents").path("event");
+        if (statusEvents.isArray() && statusEvents.size() > 0) return statusEvents.get(0);
+        return null;
+    }
+
+    private static boolean isEvent(JsonNode event, String code) {
+        return event != null
+                && code.equalsIgnoreCase(firstText(event, "type", "eventType", "code", "status"));
     }
 
     private static String normalizeStatus(String value) {

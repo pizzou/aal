@@ -6,6 +6,7 @@ import com.logiplatform.integration.control.CircuitBreakerService;
 import com.logiplatform.integration.control.ExternalOperationException;
 import com.logiplatform.integration.control.IntegrationMetricsService;
 import com.logiplatform.integration.control.ProviderRateLimiter;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -68,9 +69,10 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
     private final String lastName;
     private final int searchPollAttempts;
     private final long searchPollDelayMs;
+    private final int searchTimeoutSeconds;
 
     public CargoAiAirCargoProvider(
-            RestTemplate rest,
+            @Qualifier("cargoAiRestTemplate") RestTemplate rest,
             ObjectMapper mapper,
             @Value("${aircargo.cargoai.base-url:" + DEFAULT_BASE_URL + "}") String baseUrl,
             @Value("${aircargo.cargoai.search-path:/search}") String searchPath,
@@ -86,7 +88,8 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
             @Value("${aircargo.cargoai.user.first-name:${AIRCARGO_CARGOAI_USER_FIRST_NAME:Operations}}") String firstName,
             @Value("${aircargo.cargoai.user.last-name:${AIRCARGO_CARGOAI_USER_LAST_NAME:AAL}}") String lastName,
             @Value("${aircargo.cargoai.search-poll-attempts:${AIRCARGO_CARGOAI_SEARCH_POLL_ATTEMPTS:4}}") int searchPollAttempts,
-            @Value("${aircargo.cargoai.search-poll-delay-ms:${AIRCARGO_CARGOAI_SEARCH_POLL_DELAY_MS:750}}") long searchPollDelayMs,
+            @Value("${aircargo.cargoai.search-poll-delay-ms:${AIRCARGO_CARGOAI_SEARCH_POLL_DELAY_MS:600}}") long searchPollDelayMs,
+            @Value("${aircargo.cargoai.search-timeout-seconds:${AIRCARGO_CARGOAI_SEARCH_TIMEOUT_SECONDS:15}}") int searchTimeoutSeconds,
             CircuitBreakerService circuitBreaker,
             ProviderRateLimiter rateLimiter,
             IntegrationMetricsService metrics) {
@@ -113,11 +116,23 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         this.lastName = blank(lastName) ? "AAL" : lastName.trim();
         this.searchPollAttempts = Math.max(1, Math.min(8, searchPollAttempts));
         this.searchPollDelayMs = Math.max(150L, Math.min(5000L, searchPollDelayMs));
+        this.searchTimeoutSeconds = Math.max(3, Math.min(25, searchTimeoutSeconds));
     }
 
     public boolean configured() {
+        return searchConfigured();
+    }
+
+    private boolean searchConfigured() {
         return !apiKey.isBlank()
                 && (!email.isBlank() || (!iata.isBlank() && !cass.isBlank()));
+    }
+
+    private boolean bookingConfigured() {
+        return searchConfigured()
+                && !email.isBlank()
+                && !iata.isBlank()
+                && !cass.isBlank();
     }
 
     /**
@@ -131,6 +146,12 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         if (email.isBlank() && (iata.isBlank() || cass.isBlank())) {
             issues.add("CargoAi user email or IATA+CASS credentials are missing");
         }
+        if (email.isBlank()) {
+            issues.add("CargoAi booking requires user email");
+        }
+        if (iata.isBlank() || cass.isBlank()) {
+            issues.add("CargoAi booking requires IATA and CASS credentials");
+        }
         return issues;
     }
 
@@ -141,18 +162,19 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
 
     @Override
     public ProviderCapabilities capabilities() {
-        boolean on = configured();
+        boolean searchOn = searchConfigured();
+        boolean bookingOn = bookingConfigured();
         return new ProviderCapabilities(
-                on,  // schedules/rates
-                on,  // live capacity is exposed through live search/rates
-                on,  // eBooking
+                searchOn,
+                searchOn,
+                bookingOn,
                 false,
-                on,  // cancellation
-                on,  // Track & Trace
+                bookingOn,
+                searchOn,
                 false,
-                on,  // CargoAi callback integration is supported by AAL
+                searchOn,
                 false,
-                on,
+                searchOn,
                 List.of("CARGOCONNECT", "IATA", "CARGO-XML"));
     }
 
@@ -179,7 +201,7 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         body.put("destination", normalizedDestination);
         body.put("departureDate", LocalDate.ofInstant(from, ZoneOffset.UTC).toString());
         body.put("offset", Math.min(5, Math.max(0, (int) Math.ceil(Duration.between(from, to).toHours() / 24d))));
-        body.put("timeout", 25);
+        body.put("timeout", searchTimeoutSeconds);
         body.put("shipment", shipment);
         body.put("user", user);
         body.put("filters", Map.of("withRateOnly", true, "liveRequests", true));
@@ -346,7 +368,7 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
 
     @Override
     public BookingResult book(BookingCommand command) {
-        requireConfigured();
+        requireBookingConfigured();
         validateBooking(command);
 
         String flightUuid = firstNonBlank(command.offerReference(), extractOfferReference(command.providerReference()));
@@ -451,7 +473,7 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
 
     @Override
     public BookingResult cancel(CancellationCommand command) {
-        requireConfigured();
+        requireBookingConfigured();
         String flightUuid = extractFlightUuid(command.providerReference());
         if (blank(flightUuid)) {
             throw new IllegalArgumentException("A CargoAi flight UUID is required for cancellation");
@@ -461,7 +483,7 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         body.put("flightUUID", flightUuid);
         body.put("action", "CANCEL");
         if (!blank(command.reason())) {
-            body.put("cancelledReasons", List.of(command.reason()));
+            body.put("cancelledReasons", command.reason());
         }
 
         JsonNode root = request(
@@ -707,8 +729,8 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
                 boolean retryable = response.getStatusCode().is5xxServerError()
                         || status == 408
                         || status == 429;
-                circuitBreaker.failure(providerCode(), latency, status);
-                metrics.providerFailure(providerCode(), latency, Integer.toString(status));
+                // The ExternalOperationException is handled by the catch block below,
+                // which records the failure once. Avoid double-counting circuit failures.
                 throw new ExternalOperationException(
                         "CargoAi " + operation + " returned HTTP " + status,
                         null,
@@ -767,20 +789,14 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         shipment.put("pieces", 1);
         shipment.put("weight", weight);
         shipment.put("chargeableWeight", weight);
+        // CargoAi requires volume for Quote & Book. When the AAL search UI only
+        // supplies chargeable weight, derive a transparent planning volume from
+        // the standard 1:167 kg/cbm relationship rather than inventing physical
+        // dimensions that could alter airline rating. Dimensions can be supplied
+        // later when the shipment record contains them.
         shipment.put("volume", Math.max(0.001d, weight.doubleValue() / 167d));
         shipment.put("product", "GCR");
         shipment.put("measurementUnit", "METRIC");
-        shipment.put("dimensions", List.of(Map.of(
-                "pieces", 1,
-                "length", 100,
-                "width", 100,
-                "height", 100,
-                "weight", weight,
-                "loadType", "DIMENSIONS",
-                "weightType", "PER_ITEM",
-                "stackable", true,
-                "tiltable", false,
-                "toploadable", false)));
         return shipment;
     }
 
@@ -1070,6 +1086,14 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
 
     private static String strip(String value) {
         return value == null ? "" : value.trim().replaceAll("/+$", "");
+    }
+
+    private void requireBookingConfigured() {
+        if (!bookingConfigured()) {
+            throw new IllegalStateException(
+                    "CargoAi booking is not fully configured: "
+                            + String.join("; ", configurationIssues()));
+        }
     }
 
     private void requireConfigured() {

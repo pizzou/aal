@@ -6,6 +6,7 @@ import com.logiplatform.integration.AirCargoProviderRegistry;
 import com.logiplatform.model.AirCargoFlight;
 import com.logiplatform.repository.AirCargoFlightRepository;
 import com.logiplatform.tenancy.TenantContext;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -16,6 +17,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Synchronizes live airline/provider offers into the auditable AAL snapshot.
@@ -26,12 +29,15 @@ import java.util.UUID;
 public class AirCargoConnectivityService {
     private final AirCargoFlightRepository repo;
     private final AirCargoProviderRegistry providers;
+    private final ExecutorService executor;
 
     public AirCargoConnectivityService(
             AirCargoFlightRepository repo,
-            AirCargoProviderRegistry providers) {
+            AirCargoProviderRegistry providers,
+            @Qualifier("airCargoExecutor") ExecutorService executor) {
         this.repo = repo;
         this.providers = providers;
+        this.executor = executor;
     }
 
     public AirCargoFlight ingest(AirCargoDtos.FlightIngestRequest request) {
@@ -107,29 +113,20 @@ public class AirCargoConnectivityService {
             Map<String, AirCargoFlight> deduped = new LinkedHashMap<>();
             List<String> failures = new ArrayList<>();
 
-            for (AirCargoProviderPort provider : searchProviders) {
-                try {
-                    List<AirCargoProviderPort.FlightOffer> offers = provider.searchFlights(
-                            normalizedOrigin,
-                            normalizedDestination,
-                            from,
-                            to,
-                            weightKg);
-                    if (offers == null) continue;
-                    for (AirCargoProviderPort.FlightOffer offer : offers) {
-                        if (offer == null || offer.departure() == null || offer.arrival() == null) continue;
-                        if (offer.totalCapacityKg() == null || offer.availableCapacityKg() == null) continue;
-                        if (offer.availableCapacityKg().signum() < 0
-                                || offer.totalCapacityKg().signum() < 0
-                                || offer.availableCapacityKg().compareTo(offer.totalCapacityKg()) > 0) continue;
-                        if (offer.availableCapacityKg().compareTo(weightKg) < 0) continue;
+            List<CompletableFuture<ProviderSearchResult>> futures = searchProviders.stream()
+                    .map(provider -> CompletableFuture.supplyAsync(
+                            () -> searchProvider(tenant, provider, normalizedOrigin, normalizedDestination, from, to, weightKg),
+                            executor))
+                    .toList();
 
-                        AirCargoFlight flight = upsertOffer(tenant, provider, offer);
-                        String key = offerKey(provider, offer);
-                        deduped.put(key, flight);
-                    }
-                } catch (Exception ex) {
-                    failures.add(provider.providerCode() + ": " + safeMessage(ex));
+            for (CompletableFuture<ProviderSearchResult> future : futures) {
+                ProviderSearchResult providerResult = future.join();
+                if (providerResult.failure() != null) {
+                    failures.add(providerResult.failure());
+                    continue;
+                }
+                for (Map.Entry<String, AirCargoFlight> entry : providerResult.flights().entrySet()) {
+                    deduped.put(entry.getKey(), entry.getValue());
                 }
             }
 
@@ -207,25 +204,71 @@ public class AirCargoConnectivityService {
                 flight.getSource());
     }
 
+    private ProviderSearchResult searchProvider(
+            UUID tenant,
+            AirCargoProviderPort provider,
+            String origin,
+            String destination,
+            Instant from,
+            Instant to,
+            BigDecimal weightKg) {
+        TenantContext.setTenantId(tenant);
+        try {
+            Map<String, AirCargoFlight> flights = new LinkedHashMap<>();
+            List<AirCargoProviderPort.FlightOffer> offers = provider.searchFlights(
+                    origin, destination, from, to, weightKg);
+            if (offers != null) {
+                for (AirCargoProviderPort.FlightOffer offer : offers) {
+                    if (!validOffer(offer, weightKg)) continue;
+                    AirCargoFlight flight = upsertOffer(tenant, provider, offer);
+                    flights.put(offerKey(provider, offer), flight);
+                }
+            }
+            return new ProviderSearchResult(provider.providerCode(), flights, null);
+        } catch (Exception ex) {
+            return new ProviderSearchResult(
+                    provider.providerCode(),
+                    Map.of(),
+                    provider.providerCode() + ": " + safeMessage(ex));
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    private boolean validOffer(AirCargoProviderPort.FlightOffer offer, BigDecimal weightKg) {
+        return offer != null
+                && offer.departure() != null
+                && offer.arrival() != null
+                && offer.totalCapacityKg() != null
+                && offer.availableCapacityKg() != null
+                && offer.availableCapacityKg().signum() >= 0
+                && offer.totalCapacityKg().signum() >= 0
+                && offer.availableCapacityKg().compareTo(offer.totalCapacityKg()) <= 0
+                && offer.availableCapacityKg().compareTo(weightKg) >= 0;
+    }
+
     private AirCargoFlight upsertOffer(
             UUID tenant,
             AirCargoProviderPort provider,
             AirCargoProviderPort.FlightOffer offer) {
-        List<AirCargoFlight> matches = repo
-                .findAllByTenantIdAndOriginCodeAndDestinationCodeAndDepartureTimeBetweenOrderByDepartureTimeAsc(
-                        tenant,
-                        offer.origin(),
-                        offer.destination(),
-                        offer.departure().minusSeconds(1),
-                        offer.departure().plusSeconds(1));
+        String providerCode = provider.providerCode();
+        String providerReference = offer.providerReference();
+        AirCargoFlight existing = null;
 
-        AirCargoFlight existing = matches.stream()
-                .filter(x -> provider.providerCode().equalsIgnoreCase(x.getProviderCode()))
-                .filter(x -> x.getCarrierCode().equalsIgnoreCase(offer.carrierCode()))
-                .filter(x -> x.getFlightNumber().equalsIgnoreCase(offer.flightNumber()))
-                .filter(x -> safeEquals(x.getProviderReference(), offer.providerReference()))
-                .findFirst()
-                .orElse(null);
+        if (providerReference != null && !providerReference.isBlank()) {
+            existing = repo.findFirstByTenantIdAndProviderCodeAndProviderReference(
+                    tenant, providerCode, providerReference).orElse(null);
+        }
+
+        if (existing == null) {
+            existing = repo.findFirstByTenantIdAndProviderCodeAndCarrierCodeAndFlightNumberAndDepartureTimeAndRateId(
+                    tenant,
+                    providerCode,
+                    offer.carrierCode(),
+                    offer.flightNumber(),
+                    offer.departure(),
+                    offer.rateId()).orElse(null);
+        }
 
         if (existing == null) {
             existing = new AirCargoFlight(
@@ -239,13 +282,15 @@ public class AirCargoConnectivityService {
                     offer.arrival(),
                     offer.totalCapacityKg(),
                     offer.availableCapacityKg(),
+                    "EXTERNAL",
                     provider.providerCode());
         } else {
             existing.refreshCapacity(
                     offer.totalCapacityKg(),
                     offer.availableCapacityKg(),
                     offer.arrival(),
-                    provider.providerCode());
+                    "EXTERNAL");
+            existing.assignProviderCode(provider.providerCode());
         }
 
         existing.setProviderOffer(
@@ -274,6 +319,12 @@ public class AirCargoConnectivityService {
 
     private static String safe(String v) {
         return v == null ? "" : v;
+    }
+
+    private record ProviderSearchResult(
+            String providerCode,
+            Map<String, AirCargoFlight> flights,
+            String failure) {
     }
 
     private static String safeMessage(Exception ex) {

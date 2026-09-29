@@ -1484,6 +1484,10 @@ export type AirCargoBookingResponse = {
   serviceLevel?: string | null;
   cancellationReason?: string | null;
   cancelledAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  workflowStage?: string | null;
+  workflowMessage?: string | null;
 };
 
 export type AirCargoAirline = {

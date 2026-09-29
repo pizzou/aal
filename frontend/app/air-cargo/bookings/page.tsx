@@ -183,6 +183,47 @@ export default function AirCargoBookingsPage() {
       {error && <div className="alert alert-error">{error}</div>}
       {message && <div className="alert alert-success">{message}</div>}
 
+      <section
+        className="card"
+        style={{ marginTop: 14, borderColor: "var(--aal-line)" }}
+      >
+        <div className="page-head" style={{ marginBottom: 8 }}>
+          <div>
+            <div className="eyebrow">WORKFLOW DESTINATION</div>
+            <h2 className="card-title">Every air-booking request lands here</h2>
+            <div className="card-muted">
+              This register is the operational hand-off after an operator
+              requests capacity. A request is not the same as an airline
+              confirmation.
+            </div>
+          </div>
+          <span className="status status-neutral">Shipment-linked</span>
+        </div>
+        <div className="grid grid-3">
+          <div className="quick">
+            <strong>Live provider configured</strong>
+            <span>
+              Request is sent through the selected provider and remains PENDING
+              PROVIDER until confirmation.
+            </span>
+          </div>
+          <div className="quick">
+            <strong>AAL planning mode</strong>
+            <span>
+              Request is stored as REQUESTED for operations follow-up; it is not
+              represented as airline capacity.
+            </span>
+          </div>
+          <div className="quick">
+            <strong>Provider confirmation</strong>
+            <span>
+              CONFIRMED means the provider returned a confirmation/reference
+              that AAL stored against the shipment.
+            </span>
+          </div>
+        </div>
+      </section>
+
       <section className="grid grid-4" style={{ marginTop: 14 }}>
         <div className="card kpi">
           <div className="kpi-label">Total bookings</div>
@@ -411,6 +452,31 @@ export default function AirCargoBookingsPage() {
             <div className="metric-row">
               <span>Provider</span>
               <strong>{selected.provider || "AAL internal"}</strong>
+            </div>
+            <div className="metric-row">
+              <span>Workflow stage</span>
+              <strong>
+                {(
+                  selected.workflowStage ||
+                  selected.status ||
+                  "UNKNOWN"
+                ).replaceAll("_", " ")}
+              </strong>
+            </div>
+            <div className="quick" style={{ marginTop: 12 }}>
+              <strong>What happens next</strong>
+              <span>
+                {selected.workflowMessage ||
+                  "This booking remains in the shipment-linked AAL booking register."}
+              </span>
+            </div>
+            <div className="metric-row">
+              <span>Created</span>
+              <strong>{formatDate(selected.createdAt)}</strong>
+            </div>
+            <div className="metric-row">
+              <span>Last updated</span>
+              <strong>{formatDate(selected.updatedAt)}</strong>
             </div>
             <div className="metric-row">
               <span>Provider reference</span>

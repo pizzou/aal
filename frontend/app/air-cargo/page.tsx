@@ -7,6 +7,8 @@ import {
   airCargoApi,
   AirCargoFlight,
   AirCargoBookingResponse,
+  AirCargoAirline,
+  AirCargoAirlineDirectory,
   ApiError,
   RouteOption,
   Shipment,
@@ -69,6 +71,9 @@ export default function AirCargoPage() {
     string,
     unknown
   > | null>(null);
+  const [airlineDirectory, setAirlineDirectory] =
+    useState<AirCargoAirlineDirectory | null>(null);
+  const [airlineFilter, setAirlineFilter] = useState("");
   const liveSearchConfigured = integrationHealth?.liveSearchConfigured === true;
   const externalConfigured = integrationHealth?.configured === true;
 
@@ -96,6 +101,13 @@ export default function AirCargoPage() {
       })
       .catch(() => undefined);
 
+    airCargoApi
+      .airlines()
+      .then((directory) => {
+        if (active) setAirlineDirectory(directory);
+      })
+      .catch(() => undefined);
+
     shipmentsApi
       .list({ page: 0, size: 25, mode: "AIR" })
       .then((response) =>
@@ -117,6 +129,55 @@ export default function AirCargoPage() {
       window.clearTimeout(bookingTimer);
     };
   }, [accessToken]);
+
+  const liveCarrierCodes = useMemo(
+    () =>
+      new Set(
+        flights
+          .map((flight) => flight.carrierCode?.trim().toUpperCase())
+          .filter((code): code is string => Boolean(code)),
+      ),
+    [flights],
+  );
+
+  const filteredAirlines = useMemo(() => {
+    const query = airlineFilter.trim().toLowerCase();
+    const rows = airlineDirectory?.airlines ?? [];
+    if (!query) return rows;
+    return rows.filter((airline) =>
+      [
+        airline.name,
+        airline.cargoBrand,
+        airline.iataCode,
+        airline.icaoCode,
+        airline.country,
+        airline.region,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [airlineDirectory, airlineFilter]);
+
+  const airlineConnectionLabel = (airline: AirCargoAirline) => {
+    const code = airline.iataCode.toUpperCase();
+    if (liveCarrierCodes.has(code)) return "LIVE ON THIS SEARCH";
+
+    const configured = new Set(
+      (airlineDirectory?.configuredProviders ?? []).map((value) =>
+        value.toUpperCase(),
+      ),
+    );
+    if (configured.has("QATAR") && code === "QR") return "DIRECT SEARCH READY";
+    if (configured.has("LHCARGO") && code === "LH") return "TRACKING READY";
+    if (
+      configured.has("CARGOAI") &&
+      airline.providerPaths.includes("CARGOAI")
+    ) {
+      return "NETWORK PROVIDER READY";
+    }
+    return "CONNECT PROVIDER";
+  };
 
   const selectedShipment = useMemo(
     () => shipments.find((shipment) => shipment.id === shipmentId) ?? null,
@@ -495,6 +556,78 @@ export default function AirCargoPage() {
             <Icon name="search" size={15} />{" "}
             {loading ? "Searching…" : "Search capacity"}
           </button>
+        </div>
+      </section>
+
+      <section className="card" style={{ marginTop: 15 }}>
+        <div className="page-head" style={{ marginBottom: 10 }}>
+          <div>
+            <div className="eyebrow">Airline network</div>
+            <h2 className="card-title">
+              Real carrier directory & connectivity paths
+            </h2>
+            <div className="card-muted">
+              These are real airlines/cargo brands. A carrier is marked live
+              only when its code is returned by an actual provider search; the
+              other labels describe the available integration path, not live
+              capacity.
+            </div>
+          </div>
+          <div className="actions">
+            <span className="status status-neutral">
+              {airlineDirectory?.airlines.length ?? 0} carriers
+            </span>
+            <input
+              aria-label="Search airlines"
+              value={airlineFilter}
+              onChange={(e) => setAirlineFilter(e.target.value)}
+              placeholder="Search airline, code or country"
+              style={{ minWidth: 250 }}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-3">
+          {filteredAirlines.map((airline) => {
+            const status = airlineConnectionLabel(airline);
+            const live = status === "LIVE ON THIS SEARCH";
+            return (
+              <div
+                className="quick"
+                key={airline.iataCode}
+                style={{ minHeight: 125 }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <strong>{airline.name}</strong>
+                  <span
+                    className={`status ${live ? "status-success" : "status-neutral"}`}
+                  >
+                    {status}
+                  </span>
+                </div>
+                <span>
+                  {airline.cargoBrand} · {airline.iataCode} / {airline.icaoCode}
+                </span>
+                <span className="card-muted">
+                  {airline.country} · {airline.region}
+                </span>
+                <span className="card-muted">
+                  {airline.providerPaths.join(" · ")}
+                </span>
+              </div>
+            );
+          })}
+          {!filteredAirlines.length && (
+            <div className="empty" style={{ gridColumn: "1/-1" }}>
+              No airline matches the current search.
+            </div>
+          )}
         </div>
       </section>
 

@@ -1481,6 +1481,28 @@ export type AirCargoBookingResponse = {
   cancelledAt?: string | null;
 };
 
+export type AirCargoAirline = {
+  iataCode: string;
+  icaoCode: string;
+  name: string;
+  cargoBrand: string;
+  country: string;
+  region: string;
+  officialWebsite: string;
+  cargoWebsite: string;
+  providerPaths: string[];
+  capabilities: string[];
+  integrationNote: string;
+};
+
+export type AirCargoAirlineDirectory = {
+  airlines: AirCargoAirline[];
+  configuredProviders: string[];
+  liveSearchProviders: number;
+  liveBookingProviders: number;
+  liveTrackingProviders: number;
+};
+
 export type ShipmentEtaHistory = {
   id: string;
   shipmentId: string;
@@ -1552,6 +1574,8 @@ export const airCargoApi = {
 
   etaHistory: (shipmentId: string) =>
     apiFetch<ShipmentEtaHistory[]>(`/api/shipments/${shipmentId}/eta/history`),
+
+  airlines: () => apiFetch<AirCargoAirlineDirectory>("/api/air-cargo/airlines"),
 
   integrationHealth: () =>
     apiFetch<Record<string, unknown>>("/api/air-cargo/integration/health"),

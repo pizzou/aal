@@ -99,3 +99,27 @@ Before enabling a provider in production, complete:
 A direct Lufthansa Cargo shipment-tracking adapter is included. It accepts an AWB provider reference such as `AWB:020-12345678` and calls the Lufthansa Cargo shipment-tracking API. It is tracking-only because Lufthansa's smartBooking API is a private registered partner API; the public service agreement states that the API key and endpoint are issued after registration.
 
 This gives AAL a concrete direct tracking path for the Lufthansa Cargo network, while live quote/booking remains behind the official partner smartBooking contract rather than an invented payload.
+
+## Airline directory in the AAL air desk
+
+AAL now exposes an authenticated reference directory at:
+
+`GET /api/air-cargo/airlines`
+
+The directory is deliberately separate from live capacity. It contains real carrier identities, IATA/ICAO codes, cargo brand, region, official cargo site, and the provider paths AAL can use. The Air Cargo page shows:
+
+- `LIVE ON THIS SEARCH` only when the carrier code was actually returned by a live provider search;
+- `NETWORK PROVIDER READY` when a configured provider can potentially supply that carrier and the carrier is covered by that provider account;
+- `DIRECT SEARCH READY` for the configured Qatar direct availability path;
+- `TRACKING READY` for the configured Lufthansa Cargo tracking path;
+- `CONNECT PROVIDER` when no corresponding live path is configured.
+
+This prevents the directory from falsely presenting a static carrier catalog as live airline capacity.
+
+### Recommended production connection strategy
+
+1. **CargoAi CargoCONNECT** — primary multi-airline quote/rate/search/booking/tracking integration. CargoAi publicly describes 115+ airlines with live eBooking coverage and 260+ airlines for tracking. AAL already contains the provider adapter; production activation requires AAL's CargoAi credentials and the commercial coverage enabled for the account.
+2. **Qatar Airways Cargo direct** — AAL already contains the documented Availability/Rate adapter. Qatar's developer portal also documents flight schedules and a Stock API used for booking. Do not enable direct booking until Qatar supplies the current booking operation/contract for the AAL account.
+3. **Lufthansa Cargo direct** — AAL already contains direct AWB shipment tracking. Lufthansa's current developer documentation states that smartBooking can provide quoting, capacity, booking, retrieval, update/deletion and AWB auto-assignment after partner registration and issuance of the API key/endpoint.
+4. **WebCargo/Freightos** — a valid enterprise integration target for broad airline eBooking coverage. It should be added as a separate provider adapter only after AAL receives the current API credentials, endpoint and commercial contract; no private API contract is guessed in this codebase.
+5. **IATA ONE Record** — the common data/API/security layer for airline/forwarder data exchange. AAL keeps ONE Record behind its existing integration boundary so carrier-specific APIs can be added without changing the shipment domain.

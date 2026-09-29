@@ -98,7 +98,14 @@ export default function AalControlTower() {
       }
 
       if (recentResult.status === "fulfilled") {
-        setShipments(recentResult.value.content);
+        // API responses can temporarily be incomplete during a backend deploy or
+        // when an older response shape is served. Never put an unknown runtime
+        // value into state that the render path treats as an array.
+        setShipments(
+          Array.isArray(recentResult.value?.content)
+            ? recentResult.value.content
+            : [],
+        );
       } else {
         failures += 1;
       }
@@ -143,7 +150,7 @@ export default function AalControlTower() {
       setOperational(controlTower.value);
     }
     if (fleet.status === "fulfilled") {
-      setFleetLive(fleet.value);
+      setFleetLive(Array.isArray(fleet.value) ? fleet.value : []);
     }
 
     if (
@@ -214,13 +221,20 @@ export default function AalControlTower() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, asOf]);
 
+  const trend = useMemo(
+    () => (Array.isArray(data?.trend) ? data.trend : []),
+    [data],
+  );
+
   const trendMax = useMemo(
     () =>
       Math.max(
         1,
-        ...(data?.trend ?? []).map((x) => Math.max(x.revenue, x.operatingCost)),
+        ...trend.map((x) =>
+          Math.max(Number(x?.revenue ?? 0), Number(x?.operatingCost ?? 0)),
+        ),
       ),
-    [data],
+    [trend],
   );
 
   if (isLoading || !accessToken) return null;
@@ -262,10 +276,9 @@ export default function AalControlTower() {
     onTripDrivers: 0,
     driverUtilizationPercent: 0,
   };
-  const modeMix = data?.modeMix ?? [];
-  const trend = data?.trend ?? [];
-  const exceptionsList = data?.exceptions ?? [];
-  const actions = data?.actions ?? [];
+  const modeMix = Array.isArray(data?.modeMix) ? data.modeMix : [];
+  const exceptionsList = Array.isArray(data?.exceptions) ? data.exceptions : [];
+  const actions = Array.isArray(data?.actions) ? data.actions : [];
   const currency = financial.currency || "USD";
   const total = operations.totalShipments;
   const inTransit = operations.activeShipments;

@@ -13,6 +13,7 @@ import com.logiplatform.integration.control.IntegrationMetricsService;
 import com.logiplatform.integration.security.IntegrationCredentialService;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 import java.math.BigDecimal;
 import java.net.URLEncoder;
@@ -54,7 +55,7 @@ public class GenericHttpAirCargoProvider implements AirCargoProviderPort {
     private volatile Instant tokenExpiresAt;
 
     public GenericHttpAirCargoProvider(
-            RestTemplate rest,
+            @Qualifier("restTemplate") RestTemplate rest,
             ObjectMapper mapper,
             @Value("${aircargo.provider.enabled:false}") boolean enabled,
             @Value("${aircargo.provider.base-url:}") String baseUrl,

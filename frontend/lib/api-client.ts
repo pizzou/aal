@@ -1468,9 +1468,14 @@ export type RouteOption = {
 export type AirCargoBookingResponse = {
   id: string;
   shipmentId: string;
+  carrierCode?: string | null;
+  carrierName?: string | null;
   status: string;
+  provider?: string | null;
   confirmationNumber?: string | null;
   providerReference?: string | null;
+  originCode?: string | null;
+  destinationCode?: string | null;
   flightNumber: string;
   requestedWeightKg: number;
   confirmedWeightKg?: number | null;

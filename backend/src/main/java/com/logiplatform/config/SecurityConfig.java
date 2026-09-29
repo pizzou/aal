@@ -53,396 +53,351 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
 
         http
-            .csrf(csrf -> csrf.disable())
+                .csrf(csrf -> csrf.disable())
 
-            .headers(headers -> headers
-                .contentTypeOptions(org.springframework.security.config.Customizer.withDefaults())
-                .frameOptions(frame -> frame.deny())
-                .referrerPolicy(referrer ->
-                    referrer.policy(
-                        org.springframework.security.web.header.writers
-                            .ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
-                .httpStrictTransportSecurity(hsts ->
-                    hsts.includeSubDomains(true)
-                        .maxAgeInSeconds(31536000))
-            )
+                .headers(headers -> headers
+                        .contentTypeOptions(org.springframework.security.config.Customizer.withDefaults())
+                        .frameOptions(frame -> frame.deny())
+                        .referrerPolicy(referrer -> referrer.policy(
+                                org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
+                        .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true)
+                                .maxAgeInSeconds(31536000)))
 
-            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
 
-            .sessionManagement(session ->
-                session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
-            .exceptionHandling(exceptions -> exceptions
+                .exceptionHandling(exceptions -> exceptions
 
-                .authenticationEntryPoint((request, response, exception) -> {
-                    response.setStatus(401);
-                    response.setContentType("application/json");
-                    response.setCharacterEncoding("UTF-8");
-                    response.setHeader("Cache-Control", "no-store");
-                    response.getWriter().write(
-                        "{\"error\":\"Authentication required\"}"
-                    );
-                })
+                        .authenticationEntryPoint((request, response, exception) -> {
+                            response.setStatus(401);
+                            response.setContentType("application/json");
+                            response.setCharacterEncoding("UTF-8");
+                            response.setHeader("Cache-Control", "no-store");
+                            response.getWriter().write(
+                                    "{\"error\":\"Authentication required\"}");
+                        })
 
-                .accessDeniedHandler((request, response, exception) -> {
-                    response.setStatus(403);
-                    response.setContentType("application/json");
-                    response.setCharacterEncoding("UTF-8");
-                    response.setHeader("Cache-Control", "no-store");
-                    response.getWriter().write(
-                        "{\"error\":\"Access denied for this account\"}"
-                    );
-                })
-            )
+                        .accessDeniedHandler((request, response, exception) -> {
+                            response.setStatus(403);
+                            response.setContentType("application/json");
+                            response.setCharacterEncoding("UTF-8");
+                            response.setHeader("Cache-Control", "no-store");
+                            response.getWriter().write(
+                                    "{\"error\":\"Access denied for this account\"}");
+                        }))
 
-            .authorizeHttpRequests(auth -> auth
+                .authorizeHttpRequests(auth -> auth
 
-                /*
-                 * PUBLIC
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/auth/login"),
-                    new AntPathRequestMatcher("/api/auth/send-login-otp"),
-                    new AntPathRequestMatcher("/api/auth/password/forgot"),
-                    new AntPathRequestMatcher("/api/auth/password/reset"),
-                    new AntPathRequestMatcher("/api/auth/csrf"),
+                        /*
+                         * CORS preflight is transport infrastructure. It must never be
+                         * challenged by JWT, tenant, role, or CSRF authentication.
+                         * Spring Security's CORS filter answers the preflight; this rule
+                         * prevents any later authorization rule from turning OPTIONS into
+                         * a 401/403 when the request reaches the authorization stage.
+                         */
+                        .requestMatchers(HttpMethod.OPTIONS, "/**")
+                        .permitAll()
 
-                    new AntPathRequestMatcher("/api/public/**"),
-                    new AntPathRequestMatcher("/api/public/commercial/**"),
-                    new AntPathRequestMatcher("/api/public/quotes/**"),
-                    new AntPathRequestMatcher("/api/public/tracking/**"),
+                        /*
+                         * PUBLIC
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/auth/login"),
+                                new AntPathRequestMatcher("/api/auth/send-login-otp"),
+                                new AntPathRequestMatcher("/api/auth/password/forgot"),
+                                new AntPathRequestMatcher("/api/auth/password/reset"),
+                                new AntPathRequestMatcher("/api/auth/csrf"),
 
-                    new AntPathRequestMatcher("/actuator/health"),
-                    new AntPathRequestMatcher("/actuator/health/**"),
-                    new AntPathRequestMatcher("/actuator/prometheus"),
-                    new AntPathRequestMatcher("/actuator/info")
-                )
-                .permitAll()
+                                new AntPathRequestMatcher("/api/public/**"),
+                                new AntPathRequestMatcher("/api/public/commercial/**"),
+                                new AntPathRequestMatcher("/api/public/quotes/**"),
+                                new AntPathRequestMatcher("/api/public/tracking/**"),
 
-                /*
-                 * SESSION MUST BE AUTHENTICATED.
-                 *
-                 * This is deliberately NOT public. It validates the
-                 * authenticated staff session after OTP login.
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/auth/session")
-                )
-                .authenticated()
+                                new AntPathRequestMatcher("/actuator/health"),
+                                new AntPathRequestMatcher("/actuator/health/**"),
+                                new AntPathRequestMatcher("/actuator/prometheus"),
+                                new AntPathRequestMatcher("/actuator/info"))
+                        .permitAll()
 
-                /*
-                 * REGISTRATION DISABLED
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/auth/register")
-                )
-                .denyAll()
+                        /*
+                         * SESSION MUST BE AUTHENTICATED.
+                         *
+                         * This is deliberately NOT public. It validates the
+                         * authenticated staff session after OTP login.
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/auth/session"))
+                        .authenticated()
 
-                /*
-                 * CUSTOMER
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/customer/**")
-                )
-                .hasRole("CUSTOMER")
+                        /*
+                         * REGISTRATION DISABLED
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/auth/register"))
+                        .denyAll()
 
-                /*
-                 * PLATFORM / SETTINGS
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/platform/**"),
-                    new AntPathRequestMatcher("/api/settings/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "FINANCE",
-                    "OPERATIONS"
-                )
+                        /*
+                         * CUSTOMER
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/customer/**"))
+                        .hasRole("CUSTOMER")
 
-                /*
-                 * USERS
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/users/**")
-                )
-                .hasRole("ADMIN")
+                        /*
+                         * PLATFORM / SETTINGS
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/platform/**"),
+                                new AntPathRequestMatcher("/api/settings/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "FINANCE",
+                                "OPERATIONS")
 
-                /*
-                 * AUDIT
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/audit/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER"
-                )
+                        /*
+                         * USERS
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/users/**"))
+                        .hasRole("ADMIN")
 
-                /*
-                 * DATA QUALITY
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/data-quality/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "FINANCE"
-                )
+                        /*
+                         * AUDIT
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/audit/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER")
 
-                /*
-                 * REPORTING / FINANCE
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/reports/**"),
-                    new AntPathRequestMatcher("/api/finance/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "FINANCE"
-                )
+                        /*
+                         * DATA QUALITY
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/data-quality/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "FINANCE")
 
-                /*
-                 * BILLING
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/billing/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "FINANCE"
-                )
+                        /*
+                         * REPORTING / FINANCE
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/reports/**"),
+                                new AntPathRequestMatcher("/api/finance/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "FINANCE")
 
-                /*
-                 * COMMERCIAL FINANCE
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/commercial/invoices/**"),
-                    new AntPathRequestMatcher("/api/commercial/expenses/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "FINANCE"
-                )
+                        /*
+                         * BILLING
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/billing/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "FINANCE")
 
-                /*
-                 * COMMERCIAL SALES
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/commercial/quotes/**"),
-                    new AntPathRequestMatcher("/api/commercial/clients/**"),
-                    new AntPathRequestMatcher("/api/commercial/partners/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "SALES"
-                )
+                        /*
+                         * COMMERCIAL FINANCE
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/commercial/invoices/**"),
+                                new AntPathRequestMatcher("/api/commercial/expenses/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "FINANCE")
 
-                /*
-                 * COMMERCIAL TASKS
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/commercial/tasks/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "SALES",
-                    "FINANCE"
-                )
+                        /*
+                         * COMMERCIAL SALES
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/commercial/quotes/**"),
+                                new AntPathRequestMatcher("/api/commercial/clients/**"),
+                                new AntPathRequestMatcher("/api/commercial/partners/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "SALES")
 
-                /*
-                 * COMMAND CENTER IMPORT
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/command-center/import/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS"
-                )
+                        /*
+                         * COMMERCIAL TASKS
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/commercial/tasks/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "SALES",
+                                "FINANCE")
 
-                /*
-                 * COMMAND CENTER
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/command-center/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "SALES",
-                    "FINANCE",
-                    "DISPATCH",
-                    "WAREHOUSE",
-                    "AIR_CARGO"
-                )
+                        /*
+                         * COMMAND CENTER IMPORT
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/command-center/import/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS")
 
-                
+                        /*
+                         * COMMAND CENTER
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/command-center/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "SALES",
+                                "FINANCE",
+                                "DISPATCH",
+                                "WAREHOUSE",
+                                "AIR_CARGO")
 
-                /*
-                 * SHIPMENTS - READ
-                 */
-                .requestMatchers(new AntPathRequestMatcher("/api/shipments/**", HttpMethod.GET.name()))
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "SALES",
-                    "FINANCE"
-                )
+                        /*
+                         * SHIPMENTS - READ
+                         */
+                        .requestMatchers(new AntPathRequestMatcher("/api/shipments/**", HttpMethod.GET.name()))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "SALES",
+                                "FINANCE")
 
-                /*
-                 * SHIPMENTS - CREATE
-                 */
-                .requestMatchers(new AntPathRequestMatcher("/api/shipments/**", HttpMethod.POST.name()))
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "SALES"
-                )
+                        /*
+                         * SHIPMENTS - CREATE
+                         */
+                        .requestMatchers(new AntPathRequestMatcher("/api/shipments/**", HttpMethod.POST.name()))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "SALES")
 
-                /*
-                 * SHIPMENTS - UPDATE
-                 */
-                .requestMatchers(new AntPathRequestMatcher("/api/shipments/**", HttpMethod.PATCH.name()))
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "SALES"
-                )
+                        /*
+                         * SHIPMENTS - UPDATE
+                         */
+                        .requestMatchers(new AntPathRequestMatcher("/api/shipments/**", HttpMethod.PATCH.name()))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "SALES")
 
-                /*
-                 * OPERATIONS
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/operations/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "DISPATCH",
-                    "WAREHOUSE"
-                )
+                        /*
+                         * OPERATIONS
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/operations/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "DISPATCH",
+                                "WAREHOUSE")
 
-                /*
-                 * FLEET
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/vehicles/**"),
-                    new AntPathRequestMatcher("/api/drivers/**"),
-                    new AntPathRequestMatcher("/api/trips/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "DISPATCH"
-                )
+                        /*
+                         * FLEET
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/vehicles/**"),
+                                new AntPathRequestMatcher("/api/drivers/**"),
+                                new AntPathRequestMatcher("/api/trips/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "DISPATCH")
 
-                /*
-                 * WAREHOUSE
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/warehouses/**"),
-                    new AntPathRequestMatcher("/api/inventory/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "WAREHOUSE"
-                )
+                        /*
+                         * WAREHOUSE
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/warehouses/**"),
+                                new AntPathRequestMatcher("/api/inventory/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "WAREHOUSE")
 
-                /*
-                 * MULTIMODAL
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/air-cargo/**"),
-                    new AntPathRequestMatcher("/api/universal/**"),
-                    new AntPathRequestMatcher("/api/ocean/**"),
-                    new AntPathRequestMatcher("/api/road/**"),
-                    new AntPathRequestMatcher("/api/rail/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "AIR_CARGO"
-                )
+                        /*
+                         * MULTIMODAL
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/air-cargo/**"),
+                                new AntPathRequestMatcher("/api/universal/**"),
+                                new AntPathRequestMatcher("/api/ocean/**"),
+                                new AntPathRequestMatcher("/api/road/**"),
+                                new AntPathRequestMatcher("/api/rail/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "AIR_CARGO")
+
+                        /*
+                         * GPS / IOT / EXTERNAL STATUS
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/gps/**"),
+                                new AntPathRequestMatcher("/api/flight-status/**"),
+                                new AntPathRequestMatcher("/api/rating/**"),
+                                new AntPathRequestMatcher("/api/iot/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS")
+
+                        /*
+                         * VERSIONED ENTERPRISE CONTROL PLANE
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/v1/integrations/**"),
+                                new AntPathRequestMatcher("/api/v1/control-tower/**"),
+                                new AntPathRequestMatcher("/api/v1/data-quality/**"))
+                        .hasAnyRole(
+                                "ADMIN",
+                                "MANAGER",
+                                "OPERATIONS",
+                                "FINANCE",
+                                "AIR_CARGO")
+
+                        /*
+                         * EVERYTHING ELSE
+                         */
+                        .anyRequest()
+                        .authenticated())
 
                 /*
-                 * GPS / IOT / EXTERNAL STATUS
+                 * JWT MUST RUN BEFORE AUTHORIZATION.
                  */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/gps/**"),
-                    new AntPathRequestMatcher("/api/flight-status/**"),
-                    new AntPathRequestMatcher("/api/rating/**"),
-                    new AntPathRequestMatcher("/api/iot/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS"
-                )
+                .addFilterBefore(
+                        jwtAuthenticationFilter,
+                        UsernamePasswordAuthenticationFilter.class)
 
-                /*
-                 * VERSIONED ENTERPRISE CONTROL PLANE
-                 */
-                .requestMatchers(
-                    new AntPathRequestMatcher("/api/v1/integrations/**"),
-                    new AntPathRequestMatcher("/api/v1/control-tower/**"),
-                    new AntPathRequestMatcher("/api/v1/data-quality/**")
-                )
-                .hasAnyRole(
-                    "ADMIN",
-                    "MANAGER",
-                    "OPERATIONS",
-                    "FINANCE",
-                    "AIR_CARGO"
-                )
+                .addFilterBefore(
+                        authRateLimitFilter,
+                        JwtAuthenticationFilter.class)
 
-                /*
-                 * EVERYTHING ELSE
-                 */
-                .anyRequest()
-                .authenticated()
-            )
+                .addFilterAfter(
+                        browserCsrfFilter,
+                        JwtAuthenticationFilter.class)
 
-            /*
-             * JWT MUST RUN BEFORE AUTHORIZATION.
-             */
-            .addFilterBefore(
-                jwtAuthenticationFilter,
-                UsernamePasswordAuthenticationFilter.class
-            )
-
-            .addFilterBefore(
-                authRateLimitFilter,
-                JwtAuthenticationFilter.class
-            )
-
-            .addFilterAfter(
-                browserCsrfFilter,
-                JwtAuthenticationFilter.class
-            )
-
-            .addFilterAfter(
-                enterpriseRateLimitFilter,
-                JwtAuthenticationFilter.class
-            );
+                .addFilterAfter(
+                        enterpriseRateLimitFilter,
+                        JwtAuthenticationFilter.class);
 
         return http.build();
     }
@@ -453,55 +408,48 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
 
         List<String> origins = Arrays.stream(allowedOrigins.split(","))
-            .map(String::trim)
-            .filter(origin -> !origin.isBlank())
-            .map(SecurityConfig::normalizeOrigin)
-            .filter(Objects::nonNull)
-            .distinct()
-            .toList();
+                .map(String::trim)
+                .filter(origin -> !origin.isBlank())
+                .map(SecurityConfig::normalizeOrigin)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
 
         config.setAllowedOrigins(origins);
 
         config.setAllowedMethods(
-            List.of(
-                "GET",
-                "POST",
-                "PUT",
-                "DELETE",
-                "PATCH",
-                "OPTIONS"
-            )
-        );
+                List.of(
+                        "GET",
+                        "POST",
+                        "PUT",
+                        "DELETE",
+                        "PATCH",
+                        "OPTIONS"));
 
         config.setAllowedHeaders(
-            List.of(
-                "Authorization",
-                "Content-Type",
-                "Accept",
-                "Origin",
-                "Cache-Control",
-                "Pragma",
-                "X-CSRF-Token",
-                "X-Request-Id",
-                "X-Correlation-Id",
-                "Idempotency-Key"
-            )
-        );
+                List.of(
+                        "Authorization",
+                        "Content-Type",
+                        "Accept",
+                        "Origin",
+                        "Cache-Control",
+                        "Pragma",
+                        "X-CSRF-Token",
+                        "X-Request-Id",
+                        "X-Correlation-Id",
+                        "Idempotency-Key"));
 
         config.setExposedHeaders(
-            List.of("X-Request-Id")
-        );
+                List.of("X-Request-Id"));
 
         config.setMaxAge(3600L);
         config.setAllowCredentials(true);
 
-        UrlBasedCorsConfigurationSource source =
-            new UrlBasedCorsConfigurationSource();
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
 
         source.registerCorsConfiguration(
-            "/**",
-            config
-        );
+                "/**",
+                config);
 
         return source;
     }

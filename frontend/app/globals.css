@@ -970,6 +970,10 @@ button:disabled {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.grid-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .grid-3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -4015,4 +4019,70 @@ select {
 
 @media (max-width: 1100px) {
   .topbar-brand-mini { min-width:0; }.topbar-brand-mini div { display:none; }.topbar-context { gap:12px; }.global-search-wrap { width:min(500px,55vw); }
+}
+
+
+/* =========================================================
+   AIR CARGO — COMPACT CARRIER NETWORK + INTEGRATION CONTROL
+   ========================================================= */
+.airline-network-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 0 12px;
+  border-top: 1px solid var(--aal-line);
+  border-bottom: 1px solid var(--aal-line);
+}
+.airline-network-metrics { display: flex; gap: 22px; flex-wrap: wrap; }
+.airline-network-metrics > div { display: flex; flex-direction: column; gap: 2px; }
+.airline-network-metrics strong { font-size: 16px; }
+.airline-network-metrics span { color: var(--aal-muted); font-size: 10px; font-weight: 700; }
+.airline-network-search { width: 290px; max-width: 100%; }
+.airline-mini-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 12px; }
+.airline-mini { min-width: 0; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--aal-line); border-radius: 10px; background: var(--aal-panel-soft); }
+.airline-mini-code { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: var(--aal-navy-900); color: #fff; font-size: 11px; font-weight: 900; letter-spacing: .4px; }
+.airline-mini-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.airline-mini-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.airline-mini-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--aal-muted); font-size: 9px; }
+.airline-mini .status { font-size: 8px; white-space: nowrap; padding: 4px 6px; }
+.airline-network-footer { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding-top: 10px; color: var(--aal-muted); font-size: 10px; }
+.airline-network-footer a { color: var(--aal-blue); font-weight: 800; text-decoration: none; }
+.airline-network-footer a:hover { text-decoration: underline; }
+.airline-booking-route-note { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; padding: 10px; border-radius: 10px; background: var(--aal-blue-soft); border: 1px solid #cfe2ff; font-size: 10px; line-height: 1.45; }
+.airline-booking-route-note a { color: var(--aal-blue); font-weight: 800; }
+.provider-control-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.provider-control-card { border: 1px solid var(--aal-line); border-radius: 13px; padding: 14px; background: var(--aal-panel-soft); }
+.provider-control-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.provider-control-head h3 { margin: 3px 0 0; font-size: 16px; }
+.provider-capability-list { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; margin: 12px 0; }
+.provider-capability-list > div { display: flex; flex-direction: column; gap: 3px; padding: 8px; border: 1px solid var(--aal-line); border-radius: 8px; background: #fff; }
+.provider-capability-list span { color: var(--aal-muted); font-size: 9px; font-weight: 700; }
+.provider-capability-list strong { font-size: 10px; }
+.integration-issues { display: flex; flex-direction: column; gap: 3px; padding: 9px; border: 1px solid rgba(181,71,8,.2); background: var(--aal-warning-bg); border-radius: 9px; color: var(--aal-warning); font-size: 10px; }
+.integration-issues strong { color: var(--aal-ink); }
+.integration-test-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.integration-test-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 5px 9px; padding: 10px; border: 1px solid var(--aal-line); border-radius: 9px; background: var(--aal-panel-soft); }
+.integration-test-row .card-muted { grid-column: 1 / -1; }
+.integration-steps { display: flex; flex-direction: column; gap: 10px; padding-left: 20px; margin: 14px 0 0; }
+.integration-steps li { padding-left: 4px; }
+.integration-steps strong { display: block; font-size: 11px; }
+.integration-steps span { display: block; color: var(--aal-muted); font-size: 10px; line-height: 1.45; margin-top: 2px; }
+.direct-provider-list { display: flex; flex-direction: column; gap: 9px; margin-top: 13px; }
+.direct-provider-list > div { padding: 10px; border: 1px solid var(--aal-line); border-radius: 9px; background: var(--aal-panel-soft); }
+.direct-provider-list strong { display: block; font-size: 11px; }
+.direct-provider-list span { display: block; margin-top: 3px; color: var(--aal-muted); font-size: 10px; line-height: 1.45; }
+@media (max-width: 1050px) {
+  .grid-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .airline-mini-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .provider-control-grid { grid-template-columns: 1fr; }
+  .provider-capability-list { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .airline-network-toolbar { align-items: stretch; flex-direction: column; }
+  .airline-network-search { width: 100%; }
+  .airline-mini-grid, .integration-test-grid { grid-template-columns: 1fr; }
+  .provider-capability-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .airline-network-footer { align-items: flex-start; flex-direction: column; }
 }

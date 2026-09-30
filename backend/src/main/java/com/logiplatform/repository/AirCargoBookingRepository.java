@@ -21,6 +21,7 @@ public interface AirCargoBookingRepository extends JpaRepository<AirCargoBooking
 
     List<AirCargoBooking> findTop50ByTenantIdOrderByCreatedAtDesc(UUID tenantId);
 
-   
+    List<AirCargoBooking> findTop50ByTenantIdAndStatusOrderByCreatedAtAsc(UUID tenantId, String status);
+
     List<AirCargoBooking> findAllByTenantIdOrderByCreatedAtDesc(UUID tenantId);
 }

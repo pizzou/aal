@@ -76,6 +76,10 @@ public class AirCargoBookingService {
         }
         boolean externalBooking = capabilities.booking();
 
+        // A request that has no live airline provider is an operational queue item,
+        // not an internal-capacity booking. This distinction is persisted so the
+        // booking desk can show exactly where the request is waiting.
+
         // A real external booking must originate from a live provider offer.
         // The providerReference is the selection token returned by the live search
         // (for CargoAi it contains flightUUID|rateId). Never silently turn an
@@ -89,14 +93,16 @@ public class AirCargoBookingService {
         // Only AAL's persisted capacity may be reserved internally. External
         // providers own and validate their own live inventory.
         AirCargoFlight reserved = externalBooking ? null : findAndReserve(tenant, r);
-        String source = externalBooking ? provider.providerCode() : "INTERNAL_CAPACITY";
+        String source = externalBooking
+                ? provider.providerCode()
+                : reserved != null ? "INTERNAL_CAPACITY" : "AAL_OPERATIONS_QUEUE";
         String flightNumber = safeFlightNumber(r.flightNumber());
         AirCargoBooking b = new AirCargoBooking(tenant, r.shipmentId(), r.carrierCode().trim().toUpperCase(Locale.ROOT),
                 r.carrierName(), flightNumber, r.departureTime(), r.arrivalTime(),
                 r.originCode().trim().toUpperCase(), r.destinationCode().trim().toUpperCase(), r.weightKg(),
                 "REQUESTED", source, idem);
         b.setServiceLevel(r.serviceLevel());
-        b.operation(idem, "BOOK");
+        b.operation(idem, externalBooking ? "BOOK" : (reserved != null ? "BOOK" : "AAL_BOOKING_QUEUE"));
         try {
             bookings.saveAndFlush(b);
             // Only move into provider-pending when an external provider will actually
@@ -239,12 +245,28 @@ public class AirCargoBookingService {
         if ("CANCELLED".equals(b.getStatus()))
             return BookingResponse.from(b);
         String key = cleanKey(r.idempotencyKey());
-        AirCargoProviderPort p = resolveProviderForBooking(b);
         if (key.equals(b.getLastOperationKey()) && "CANCEL".equals(b.getLastProviderOperation()))
             return BookingResponse.from(b);
+
+        // A REQUESTED item in the AAL operations queue has not been submitted to
+        // an airline. Cancel it directly; it must never be reported as a carrier
+        // cancellation or sent to a provider.
+        if ("REQUESTED".equalsIgnoreCase(b.getStatus())
+                && "AAL_OPERATIONS_QUEUE".equalsIgnoreCase(b.getProvider())) {
+            b.operation(key, "CANCEL");
+            b.cancel(r.reason(), "AAL_OPERATIONS_QUEUE_CANCELLATION");
+            stateMachine.transition(b, "CANCELLED", "QUEUE_REQUEST_CANCELLED", correlationId());
+            BookingResponse response = BookingResponse.from(bookings.save(b));
+            metrics.booking(response.status());
+            audit(response.id(), "AIR_BOOKING_CANCELLED", "CANCEL", response.status());
+            return response;
+        }
+
+        AirCargoProviderPort p = resolveProviderForBooking(b);
         stateMachine.transition(b, "CANCELLATION_PENDING", "CANCEL_REQUESTED", correlationId());
         b.operation(key, "CANCEL");
-        if (p.capabilities().cancellation() && !"INTERNAL_CAPACITY".equals(b.getProvider())) {
+        if (p.capabilities().cancellation() && !"INTERNAL_CAPACITY".equals(b.getProvider())
+                && !"INTERNAL".equalsIgnoreCase(b.getProvider())) {
             UUID attempt = attempts.start(p.providerCode(), "CANCEL", key, UUID.randomUUID().toString(), r.toString());
             try {
                 AirCargoProviderPort.BookingResult result = p.cancel(
@@ -279,7 +301,6 @@ public class AirCargoBookingService {
         audit(response.id(), "AIR_BOOKING_CANCELLED", "CANCEL", response.status());
         return response;
     }
-
 
     private AirCargoProviderPort resolveProviderForRequest(UUID tenant, BookRequest request) {
         if (request.providerCode() != null && !request.providerCode().isBlank()) {
@@ -321,6 +342,7 @@ public class AirCargoBookingService {
         String code = booking.getProvider();
         if (code != null && !code.isBlank()
                 && !"INTERNAL_CAPACITY".equalsIgnoreCase(code)
+                && !"AAL_OPERATIONS_QUEUE".equalsIgnoreCase(code)
                 && !"INTERNAL".equalsIgnoreCase(code)) {
             try {
                 return providers.resolve(code);
@@ -329,6 +351,15 @@ public class AirCargoBookingService {
             }
         }
         return providers.active();
+    }
+
+    @Transactional(readOnly = true)
+    public List<BookingResponse> queue() {
+        return bookings.findTop50ByTenantIdAndStatusOrderByCreatedAtAsc(
+                TenantContext.getTenantId(), "REQUESTED")
+                .stream()
+                .map(BookingResponse::from)
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -428,7 +459,8 @@ public class AirCargoBookingService {
         if (r.originCode() == null || !r.originCode().trim().matches("[A-Za-z]{3}"))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Origin must be a valid 3-letter airport code");
         if (r.destinationCode() == null || !r.destinationCode().trim().matches("[A-Za-z]{3}"))
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Destination must be a valid 3-letter airport code");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Destination must be a valid 3-letter airport code");
         if (r.originCode().trim().equalsIgnoreCase(r.destinationCode().trim()))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Origin and destination must differ");
         if (r.departureTime() == null)

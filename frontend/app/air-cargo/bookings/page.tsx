@@ -44,6 +44,7 @@ function displayStatus(status?: string | null): string {
 export default function AirCargoBookingsPage() {
   const { accessToken, isLoading } = useAuth();
   const [rows, setRows] = useState<AirCargoBookingResponse[]>([]);
+  const [queueRows, setQueueRows] = useState<AirCargoBookingResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionId, setActionId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -59,8 +60,12 @@ export default function AirCargoBookingsPage() {
     setLoading(true);
     setError("");
     try {
-      const result = await airCargoApi.bookings();
+      const [result, queue] = await Promise.all([
+        airCargoApi.bookings(),
+        airCargoApi.bookingQueue(),
+      ]);
       setRows(result);
+      setQueueRows(Array.isArray(queue) ? queue : []);
     } catch (e) {
       setError(
         e instanceof ApiError
@@ -88,6 +93,8 @@ export default function AirCargoBookingsPage() {
       void airCargoApi
         .bookings()
         .then((result) => setRows(Array.isArray(result) ? result : []))
+        .then(() => airCargoApi.bookingQueue())
+        .then((queue) => setQueueRows(Array.isArray(queue) ? queue : []))
         .catch(() => undefined);
     }, 15000);
     return () => window.clearInterval(timer);
@@ -236,8 +243,20 @@ export default function AirCargoBookingsPage() {
 
       {error && <div className="alert alert-error">{error}</div>}
       {message && <div className="alert alert-success">{message}</div>}
+      <div
+        className="airline-booking-route-note"
+        style={{ marginTop: 12, marginBottom: 4 }}
+      >
+        <strong>How requests move through AAL</strong>
+        <span>
+          <strong>REQUESTED</strong> items without a live provider are stored in
+          the AAL Operations Booking Queue. Once a live provider is configured
+          and a live offer is selected, AAL submits the booking externally and
+          moves the record to provider-pending or confirmed.
+        </span>
+      </div>
 
-      <section className="grid grid-4" style={{ marginTop: 14 }}>
+      <section className="grid grid-5" style={{ marginTop: 14 }}>
         <div className="card kpi">
           <div className="kpi-label">Total bookings</div>
           <div className="kpi-value">{rows.length.toLocaleString()}</div>
@@ -256,6 +275,13 @@ export default function AirCargoBookingsPage() {
             {summary.pending.length.toLocaleString()}
           </div>
           <div className="card-muted">Provider or reconciliation work</div>
+        </div>
+        <div className="card kpi">
+          <div className="kpi-label">AAL booking queue</div>
+          <div className="kpi-value">{queueRows.length.toLocaleString()}</div>
+          <div className="card-muted">
+            Requests waiting for operations or live provider submission
+          </div>
         </div>
         <div className="card kpi">
           <div className="kpi-label">Active</div>

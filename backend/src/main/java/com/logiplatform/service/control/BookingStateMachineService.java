@@ -14,7 +14,7 @@ import java.util.*;
 public class BookingStateMachineService {
     private static final Map<String, Set<String>> ALLOWED = Map.of(
             "DRAFT", Set.of("REQUESTED", "FAILED"),
-            "REQUESTED", Set.of("PENDING_PROVIDER", "FAILED", "UNKNOWN"),
+            "REQUESTED", Set.of("PENDING_PROVIDER", "FAILED", "UNKNOWN", "CANCELLED"),
             "PENDING_PROVIDER", Set.of("CONFIRMED", "FAILED", "UNKNOWN", "AMENDMENT_PENDING", "CANCELLATION_PENDING"),
             "UNKNOWN", Set.of("RECONCILING", "CONFIRMED", "FAILED", "CANCELLED"),
             "RECONCILING", Set.of("CONFIRMED", "FAILED", "UNKNOWN"),

@@ -1559,6 +1559,9 @@ export const airCargoApi = {
   bookings: () =>
     apiFetch<AirCargoBookingResponse[]>("/api/air-cargo/bookings"),
 
+  bookingQueue: () =>
+    apiFetch<AirCargoBookingResponse[]>("/api/air-cargo/bookings/queue"),
+
   booking: (id: string) =>
     apiFetch<AirCargoBookingResponse>(`/api/air-cargo/bookings/${id}`),
 

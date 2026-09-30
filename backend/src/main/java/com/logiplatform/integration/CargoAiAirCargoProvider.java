@@ -33,14 +33,20 @@ import java.util.Map;
  * CargoAi CargoCONNECT adapter for live air cargo search, booking,
  * cancellation and flight/AWB tracking.
  *
- * <p>The adapter keeps the normalized AAL contract independent of CargoAi.
- * The exact selected offer is represented as:</p>
+ * <p>
+ * The adapter keeps the normalized AAL contract independent of CargoAi.
+ * The exact selected offer is represented as:
+ * </p>
  *
- * <pre>providerReference = flightUUID|rateId</pre>
+ * <pre>
+ * providerReference = flightUUID | rateId
+ * </pre>
  *
- * <p>After booking, the providerReference stored on the AAL booking is the
+ * <p>
+ * After booking, the providerReference stored on the AAL booking is the
  * CargoAi flight UUID. This is intentional: it is the stable key used by the
- * Track & Trace endpoint and by cancellation.</p>
+ * Track & Trace endpoint and by cancellation.
+ * </p>
  */
 @Component
 public class CargoAiAirCargoProvider implements AirCargoProviderPort {
@@ -74,7 +80,7 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
     public CargoAiAirCargoProvider(
             @Qualifier("cargoAiRestTemplate") RestTemplate rest,
             ObjectMapper mapper,
-            @Value("${aircargo.cargoai.base-url:" + DEFAULT_BASE_URL + "}") String baseUrl,
+            @Value("${aircargo.cargoai.base-url:}") String baseUrl,
             @Value("${aircargo.cargoai.search-path:/search}") String searchPath,
             @Value("${aircargo.cargoai.booking-path:/book}") String bookingPath,
             @Value("${aircargo.cargoai.track-path:/track}") String trackPath,
@@ -100,7 +106,7 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         this.rateLimiter = rateLimiter;
         this.metrics = metrics;
 
-        this.baseUrl = strip(baseUrl.isBlank() ? DEFAULT_BASE_URL : baseUrl);
+        this.baseUrl = strip(baseUrl);
         this.searchPath = normalizePath(searchPath, "/search");
         this.bookingPath = normalizePath(bookingPath, "/book");
         this.trackPath = normalizePath(trackPath, "/track");
@@ -124,7 +130,8 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
     }
 
     private boolean searchConfigured() {
-        return !apiKey.isBlank()
+        return !baseUrl.isBlank()
+                && !apiKey.isBlank()
                 && (!email.isBlank() || (!iata.isBlank() && !cass.isBlank()));
     }
 
@@ -140,6 +147,10 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
      */
     public List<String> configurationIssues() {
         List<String> issues = new ArrayList<>();
+        if (baseUrl.isBlank()) {
+            issues.add(
+                    "AIRCARGO_CARGOAI_BASE_URL is missing; use the endpoint supplied for the AAL CargoCONNECT account");
+        }
         if (apiKey.isBlank()) {
             issues.add("AIRCARGO_CARGOAI_API_KEY is missing");
         }
@@ -898,8 +909,8 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         return target.equalsIgnoreCase(
                 "CNL".equals(target) ? ("CANCELLED".equals(summary.status()) ? "CNL" : "")
                         : "DLV".equals(target) ? ("DELIVERED".equals(summary.status()) ? "DLV" : "")
-                        : "ARR".equals(target) ? ("ARRIVED".equals(summary.status()) ? "ARR" : "")
-                        : ("DEPARTED".equals(summary.status()) ? "DEP" : ""));
+                                : "ARR".equals(target) ? ("ARRIVED".equals(summary.status()) ? "ARR" : "")
+                                        : ("DEPARTED".equals(summary.status()) ? "DEP" : ""));
     }
 
     private String extractFlightUuid(String providerReference) {

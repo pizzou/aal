@@ -76,6 +76,23 @@ export default function AirCargoBookingsPage() {
     if (!isLoading && accessToken) void load();
   }, [isLoading, accessToken]);
 
+  useEffect(() => {
+    if (!accessToken) return;
+    const hasPending = rows.some((row) =>
+      ["REQUESTED", "PENDING_PROVIDER", "PENDING", "UNKNOWN"].includes(
+        (row.status || "").toUpperCase(),
+      ),
+    );
+    if (!hasPending) return;
+    const timer = window.setInterval(() => {
+      void airCargoApi
+        .bookings()
+        .then((result) => setRows(Array.isArray(result) ? result : []))
+        .catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [accessToken, rows]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
@@ -155,6 +172,43 @@ export default function AirCargoBookingsPage() {
     }
   }
 
+  const workflow = (row: AirCargoBookingResponse) => {
+    const status = (row.status || "UNKNOWN").toUpperCase();
+    if (["CONFIRMED", "BOOKED", "BOOKING_CONFIRMED"].includes(status)) {
+      return {
+        title: "Carrier confirmed",
+        text: "The provider returned a booking confirmation. Continue with AWB and shipment execution.",
+        tone: "status-success",
+      };
+    }
+    if (status === "PENDING_PROVIDER") {
+      return {
+        title: "With provider",
+        text: "AAL submitted the request to the configured provider and is waiting for its response or webhook.",
+        tone: "status-warning",
+      };
+    }
+    if (status === "UNKNOWN") {
+      return {
+        title: "Reconciliation required",
+        text: "The provider outcome was not known. AAL queued the operation for reconciliation; do not submit a duplicate booking.",
+        tone: "status-warning",
+      };
+    }
+    if (status === "REQUESTED") {
+      return {
+        title: "AAL booking register",
+        text: "The request is stored in AAL. It is not an airline confirmation unless a live provider returned a booking result.",
+        tone: "status-warning",
+      };
+    }
+    return {
+      title: "Operational status",
+      text: "Review the provider response before taking another action.",
+      tone: "status-neutral",
+    };
+  };
+
   return (
     <main className="page">
       <div className="page-head">
@@ -182,47 +236,6 @@ export default function AirCargoBookingsPage() {
 
       {error && <div className="alert alert-error">{error}</div>}
       {message && <div className="alert alert-success">{message}</div>}
-
-      <section
-        className="card"
-        style={{ marginTop: 14, borderColor: "var(--aal-line)" }}
-      >
-        <div className="page-head" style={{ marginBottom: 8 }}>
-          <div>
-            <div className="eyebrow">WORKFLOW DESTINATION</div>
-            <h2 className="card-title">Every air-booking request lands here</h2>
-            <div className="card-muted">
-              This register is the operational hand-off after an operator
-              requests capacity. A request is not the same as an airline
-              confirmation.
-            </div>
-          </div>
-          <span className="status status-neutral">Shipment-linked</span>
-        </div>
-        <div className="grid grid-3">
-          <div className="quick">
-            <strong>Live provider configured</strong>
-            <span>
-              Request is sent through the selected provider and remains PENDING
-              PROVIDER until confirmation.
-            </span>
-          </div>
-          <div className="quick">
-            <strong>AAL planning mode</strong>
-            <span>
-              Request is stored as REQUESTED for operations follow-up; it is not
-              represented as airline capacity.
-            </span>
-          </div>
-          <div className="quick">
-            <strong>Provider confirmation</strong>
-            <span>
-              CONFIRMED means the provider returned a confirmation/reference
-              that AAL stored against the shipment.
-            </span>
-          </div>
-        </div>
-      </section>
 
       <section className="grid grid-4" style={{ marginTop: 14 }}>
         <div className="card kpi">
@@ -454,31 +467,6 @@ export default function AirCargoBookingsPage() {
               <strong>{selected.provider || "AAL internal"}</strong>
             </div>
             <div className="metric-row">
-              <span>Workflow stage</span>
-              <strong>
-                {(
-                  selected.workflowStage ||
-                  selected.status ||
-                  "UNKNOWN"
-                ).replaceAll("_", " ")}
-              </strong>
-            </div>
-            <div className="quick" style={{ marginTop: 12 }}>
-              <strong>What happens next</strong>
-              <span>
-                {selected.workflowMessage ||
-                  "This booking remains in the shipment-linked AAL booking register."}
-              </span>
-            </div>
-            <div className="metric-row">
-              <span>Created</span>
-              <strong>{formatDate(selected.createdAt)}</strong>
-            </div>
-            <div className="metric-row">
-              <span>Last updated</span>
-              <strong>{formatDate(selected.updatedAt)}</strong>
-            </div>
-            <div className="metric-row">
               <span>Provider reference</span>
               <strong>{selected.providerReference || "—"}</strong>
             </div>
@@ -489,6 +477,33 @@ export default function AirCargoBookingsPage() {
             <div className="metric-row">
               <span>Shipment</span>
               <strong>{selected.shipmentId}</strong>
+            </div>
+            <div className="metric-row">
+              <span>Created</span>
+              <strong>{formatDate(selected.createdAt)}</strong>
+            </div>
+            <div className="metric-row">
+              <span>Last updated</span>
+              <strong>{formatDate(selected.updatedAt)}</strong>
+            </div>
+
+            <div className="card" style={{ marginTop: 18, padding: 14 }}>
+              <div className="eyebrow">NEXT STEP</div>
+              <strong>{workflow(selected).title}</strong>
+              <div className="card-muted" style={{ marginTop: 5 }}>
+                {workflow(selected).text}
+              </div>
+              <div className="actions" style={{ marginTop: 10 }}>
+                <Link
+                  className="btn"
+                  href={`/shipments/${selected.shipmentId}`}
+                >
+                  Open shipment
+                </Link>
+                <span className={`status ${workflow(selected).tone}`}>
+                  {displayStatus(selected.status)}
+                </span>
+              </div>
             </div>
 
             {selected.cancellationReason && (

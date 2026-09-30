@@ -163,6 +163,8 @@ public final class AirCargoDtos {
                         String provider,
                         String providerReference,
                         String confirmationNumber,
+                        String originCode,
+                        String destinationCode,
                         BigDecimal requestedWeightKg,
                         BigDecimal confirmedWeightKg,
                         Instant departureTime,
@@ -171,35 +173,8 @@ public final class AirCargoDtos {
                         String cancellationReason,
                         Instant cancelledAt,
                         Instant createdAt,
-                        Instant updatedAt,
-                        String workflowStage,
-                        String workflowMessage) {
+                        Instant updatedAt) {
                 public static BookingResponse from(AirCargoBooking b) {
-                        String status = b.getStatus() == null ? "UNKNOWN"
-                                        : b.getStatus().toUpperCase(java.util.Locale.ROOT);
-                        String workflowStage;
-                        String workflowMessage;
-                        if ("CONFIRMED".equals(status)) {
-                                workflowStage = "CONFIRMED";
-                                workflowMessage = "The airline/provider has confirmed this booking.";
-                        } else if ("PENDING_PROVIDER".equals(status) || "UNKNOWN".equals(status)) {
-                                workflowStage = "AWAITING_PROVIDER";
-                                workflowMessage = "The booking was sent to the configured provider and is awaiting confirmation or reconciliation.";
-                        } else if ("REQUESTED".equals(status)
-                                        && "INTERNAL_CAPACITY".equalsIgnoreCase(b.getProvider())) {
-                                workflowStage = "AAL_OPERATIONS_REVIEW";
-                                workflowMessage = "Stored in the AAL Airline Booking Desk. No external airline request was sent because no live booking provider was available for this request.";
-                        } else if ("FAILED".equals(status)) {
-                                workflowStage = "FAILED";
-                                workflowMessage = "The booking request failed and requires integration or operations review.";
-                        } else if ("CANCELLED".equals(status)) {
-                                workflowStage = "CANCELLED";
-                                workflowMessage = "The booking has been cancelled.";
-                        } else {
-                                workflowStage = status;
-                                workflowMessage = "The booking is stored in the AAL booking register.";
-                        }
-
                         return new BookingResponse(
                                         b.getId(),
                                         b.getShipmentId(),
@@ -210,6 +185,8 @@ public final class AirCargoDtos {
                                         b.getProvider(),
                                         b.getProviderReference(),
                                         b.getConfirmationNumber(),
+                                        b.getOriginCode(),
+                                        b.getDestinationCode(),
                                         b.getRequestedWeightKg(),
                                         b.getConfirmedWeightKg(),
                                         b.getDepartureTime(),
@@ -218,9 +195,7 @@ public final class AirCargoDtos {
                                         b.getCancellationReason(),
                                         b.getCancelledAt(),
                                         b.getCreatedAt(),
-                                        b.getUpdatedAt(),
-                                        workflowStage,
-                                        workflowMessage);
+                                        b.getUpdatedAt());
                 }
         }
 

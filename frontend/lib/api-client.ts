@@ -1486,8 +1486,6 @@ export type AirCargoBookingResponse = {
   cancelledAt?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
-  workflowStage?: string | null;
-  workflowMessage?: string | null;
 };
 
 export type AirCargoAirline = {
@@ -1560,6 +1558,9 @@ export const airCargoApi = {
 
   bookings: () =>
     apiFetch<AirCargoBookingResponse[]>("/api/air-cargo/bookings"),
+
+  booking: (id: string) =>
+    apiFetch<AirCargoBookingResponse>(`/api/air-cargo/bookings/${id}`),
 
   amendBooking: (id: string, data: Record<string, unknown>) =>
     apiFetch<AirCargoBookingResponse>(`/api/air-cargo/bookings/${id}`, {

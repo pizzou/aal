@@ -66,6 +66,8 @@ export default function AirCargoPage() {
   > | null>(null);
   const [booking, setBooking] = useState(false);
   const [bookings, setBookings] = useState<AirCargoBookingResponse[]>([]);
+  const [lastBooking, setLastBooking] =
+    useState<AirCargoBookingResponse | null>(null);
   const [etaHistory, setEtaHistory] = useState<Record<string, unknown>[]>([]);
   const [integrationHealth, setIntegrationHealth] = useState<Record<
     string,
@@ -74,10 +76,6 @@ export default function AirCargoPage() {
   const [airlineDirectory, setAirlineDirectory] =
     useState<AirCargoAirlineDirectory | null>(null);
   const [airlineFilter, setAirlineFilter] = useState("");
-  const [selectedAirline, setSelectedAirline] =
-    useState<AirCargoAirline | null>(null);
-  const [lastBooking, setLastBooking] =
-    useState<AirCargoBookingResponse | null>(null);
   const liveSearchConfigured = integrationHealth?.liveSearchConfigured === true;
   const externalConfigured = integrationHealth?.configured === true;
 
@@ -430,14 +428,10 @@ export default function AirCargoPage() {
         ...current.filter((row) => row.id !== result.id),
       ]);
       setLastBooking(result);
-      const providerLabel = result.provider || "AAL internal request";
-      const statusLabel = (result.status || "REQUESTED")
-        .replaceAll("_", " ")
-        .toLowerCase();
       setMessage(
-        result.confirmationNumber
-          ? `Booking confirmed · ${result.confirmationNumber}`
-          : `Booking request created · ${statusLabel} · ${providerLabel}`,
+        `Booking ${result.status.toLowerCase()}${
+          result.confirmationNumber ? ` · ${result.confirmationNumber}` : ""
+        }.`,
       );
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Booking failed");
@@ -498,8 +492,11 @@ export default function AirCargoPage() {
           <Link className="btn" href="/shipments">
             <Icon name="ship" size={15} /> Shipment ledger
           </Link>
-          <Link className="btn" href="/aal-control-tower">
-            <Icon name="file" size={15} /> Commercial
+          <Link className="btn" href="/air-cargo/integrations">
+            <Icon name="globe" size={15} /> Integrations
+          </Link>
+          <Link className="btn" href="/air-cargo/bookings">
+            <Icon name="file" size={15} /> Booking desk
           </Link>
         </div>
       </div>
@@ -514,71 +511,65 @@ export default function AirCargoPage() {
           {message}
         </div>
       )}
+
       {lastBooking && (
         <section
           className="card"
-          style={{ marginBottom: 15, borderColor: "var(--aal-line)" }}
+          style={{
+            marginBottom: 15,
+            border: "1px solid rgba(16, 185, 129, .35)",
+          }}
         >
-          <div className="page-head" style={{ marginBottom: 8 }}>
+          <div className="page-head" style={{ marginBottom: 10 }}>
             <div>
               <div className="eyebrow">BOOKING WORKFLOW</div>
-              <h2 className="card-title">
-                {lastBooking.confirmationNumber
-                  ? "Airline booking confirmed"
-                  : "Booking request recorded"}
-              </h2>
-              <div className="card-muted">
-                {lastBooking.confirmationNumber
-                  ? "The provider returned a confirmation and the booking is stored against the shipment."
-                  : "The request is now in AAL's Airline Booking Desk. It has not been sent to an airline unless a live booking provider is configured."}
-              </div>
+              <h2 className="card-title">Booking request recorded</h2>
+              <p className="card-muted">
+                {lastBooking.status === "PENDING_PROVIDER"
+                  ? "The request was submitted to the configured airline provider and is awaiting its response."
+                  : lastBooking.status === "CONFIRMED"
+                    ? "The provider returned a confirmation. Continue with AWB and shipment execution."
+                    : "The request is stored in the AAL booking register. It is not an airline confirmation unless a live provider returned one."}
+              </p>
             </div>
             <span
-              className={`status ${lastBooking.confirmationNumber ? "status-success" : "status-warning"}`}
+              className={`status ${lastBooking.status === "CONFIRMED" ? "status-success" : "status-warning"}`}
             >
-              {(lastBooking.status || "REQUESTED").replaceAll("_", " ")}
+              {lastBooking.status.replaceAll("_", " ")}
             </span>
           </div>
           <div className="grid grid-4">
-            <div className="quick">
-              <span>Booking ID</span>
-              <strong>{lastBooking.id.slice(0, 12)}…</strong>
+            <div>
+              <span className="card-muted">Booking ID</span>
+              <strong>{lastBooking.id}</strong>
             </div>
-            <div className="quick">
-              <span>Provider</span>
+            <div>
+              <span className="card-muted">Provider</span>
               <strong>{lastBooking.provider || "AAL internal"}</strong>
             </div>
-            <div className="quick">
-              <span>Shipment</span>
-              <strong>{lastBooking.shipmentId.slice(0, 12)}…</strong>
-            </div>
-            <div className="quick">
-              <span>Reference</span>
+            <div>
+              <span className="card-muted">Reference</span>
               <strong>
                 {lastBooking.confirmationNumber ||
                   lastBooking.providerReference ||
-                  "Awaiting provider"}
+                  "Pending"}
               </strong>
             </div>
+            <div>
+              <span className="card-muted">Shipment</span>
+              <strong>{lastBooking.shipmentId}</strong>
+            </div>
           </div>
-          <div className="quick" style={{ marginTop: 10 }}>
-            <strong>
-              {lastBooking.workflowStage
-                ? lastBooking.workflowStage.replaceAll("_", " ")
-                : "WORKFLOW"}
-            </strong>
-            <span>
-              {lastBooking.workflowMessage ||
-                "The booking remains in the shipment-linked AAL booking register."}
-            </span>
-          </div>
-          <div className="actions" style={{ marginTop: 10 }}>
+          <div className="actions" style={{ marginTop: 12 }}>
             <Link className="btn btn-primary" href="/air-cargo/bookings">
-              Open Airline Booking Desk
+              Open booking desk
             </Link>
             <Link className="btn" href={`/shipments/${lastBooking.shipmentId}`}>
               Open shipment
             </Link>
+            <button className="btn" onClick={() => setLastBooking(null)}>
+              Dismiss
+            </button>
           </div>
         </section>
       )}
@@ -639,240 +630,74 @@ export default function AirCargoPage() {
       <section className="card" style={{ marginTop: 15 }}>
         <div className="page-head" style={{ marginBottom: 10 }}>
           <div>
-            <div className="eyebrow">AIRLINE NETWORK</div>
-            <h2 className="card-title">Carrier directory</h2>
+            <div className="eyebrow">Airline network</div>
+            <h2 className="card-title">
+              Real carrier directory & connectivity paths
+            </h2>
             <div className="card-muted">
-              A compact reference catalog. Only carriers returned by a live
-              provider search are shown as live capacity; directory membership
-              does not imply an AAL connection.
+              These are real airlines/cargo brands. A carrier is marked live
+              only when its code is returned by an actual provider search; the
+              other labels describe the available integration path, not live
+              capacity.
             </div>
           </div>
           <div className="actions">
             <span className="status status-neutral">
-              {airlineDirectory?.airlines.length ?? 0} airlines
-            </span>
-            <span
-              className={`status ${(airlineDirectory?.liveSearchProviders ?? 0) > 0 ? "status-success" : "status-warning"}`}
-            >
-              {airlineDirectory?.liveSearchProviders ?? 0} live search provider
-              {(airlineDirectory?.liveSearchProviders ?? 0) === 1 ? "" : "s"}
+              {airlineDirectory?.airlines.length ?? 0} carriers
             </span>
             <input
               aria-label="Search airlines"
               value={airlineFilter}
               onChange={(e) => setAirlineFilter(e.target.value)}
-              placeholder="Airline, code, country…"
-              style={{ minWidth: 220 }}
+              placeholder="Search airline, code or country"
+              style={{ minWidth: 250 }}
             />
           </div>
         </div>
 
-        <div className="grid grid-4" style={{ marginBottom: 12 }}>
-          <div className="quick">
-            <span>Live search</span>
-            <strong>{airlineDirectory?.liveSearchProviders ?? 0}</strong>
-            <span className="card-muted">provider connections</span>
-          </div>
-          <div className="quick">
-            <span>Live booking</span>
-            <strong>{airlineDirectory?.liveBookingProviders ?? 0}</strong>
-            <span className="card-muted">transactional providers</span>
-          </div>
-          <div className="quick">
-            <span>Live tracking</span>
-            <strong>{airlineDirectory?.liveTrackingProviders ?? 0}</strong>
-            <span className="card-muted">flight-status providers</span>
-          </div>
-          <div className="quick">
-            <span>Configured</span>
-            <strong>
-              {airlineDirectory?.configuredProviders?.length ?? 0}
-            </strong>
-            <span className="card-muted">provider adapters</span>
-          </div>
-        </div>
-
-        <div
-          className="table-wrap"
-          style={{ maxHeight: 430, overflowY: "auto" }}
-        >
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Airline</th>
-                <th>Codes</th>
-                <th>Region</th>
-                <th>Capabilities</th>
-                <th>Connectivity</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {filteredAirlines.map((airline) => {
-                const status = airlineConnectionLabel(airline);
-                const live = status === "LIVE ON THIS SEARCH";
-                return (
-                  <tr key={airline.iataCode}>
-                    <td>
-                      <strong>{airline.name}</strong>
-                      <div className="card-muted">{airline.cargoBrand}</div>
-                    </td>
-                    <td>
-                      <strong>{airline.iataCode}</strong>
-                      <div className="card-muted">{airline.icaoCode}</div>
-                    </td>
-                    <td>
-                      {airline.country}
-                      <div className="card-muted">{airline.region}</div>
-                    </td>
-                    <td>
-                      <div
-                        style={{ display: "flex", flexWrap: "wrap", gap: 4 }}
-                      >
-                        {airline.capabilities.slice(0, 4).map((cap) => (
-                          <span className="status status-neutral" key={cap}>
-                            {cap}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td>
-                      <span
-                        className={`status ${live ? "status-success" : "status-neutral"}`}
-                      >
-                        {status}
-                      </span>
-                    </td>
-                    <td>
-                      <button
-                        className="btn"
-                        onClick={() => setSelectedAirline(airline)}
-                      >
-                        Details
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {!filteredAirlines.length && (
-                <tr>
-                  <td colSpan={6} className="empty">
-                    No airline matches the current search.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="card-muted" style={{ marginTop: 9 }}>
-          Live = returned by the current provider search. Direct-ready = AAL has
-          an adapter path. Connect provider = the airline is catalogued but no
-          live AAL credential/contract is currently active.
+        <div className="grid grid-3">
+          {filteredAirlines.map((airline) => {
+            const status = airlineConnectionLabel(airline);
+            const live = status === "LIVE ON THIS SEARCH";
+            return (
+              <div
+                className="quick"
+                key={airline.iataCode}
+                style={{ minHeight: 125 }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <strong>{airline.name}</strong>
+                  <span
+                    className={`status ${live ? "status-success" : "status-neutral"}`}
+                  >
+                    {status}
+                  </span>
+                </div>
+                <span>
+                  {airline.cargoBrand} · {airline.iataCode} / {airline.icaoCode}
+                </span>
+                <span className="card-muted">
+                  {airline.country} · {airline.region}
+                </span>
+                <span className="card-muted">
+                  {airline.providerPaths.join(" · ")}
+                </span>
+              </div>
+            );
+          })}
+          {!filteredAirlines.length && (
+            <div className="empty" style={{ gridColumn: "1/-1" }}>
+              No airline matches the current search.
+            </div>
+          )}
         </div>
       </section>
-
-      {selectedAirline && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Airline details"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 1000,
-            background: "rgba(3,10,24,.58)",
-            display: "flex",
-            justifyContent: "flex-end",
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setSelectedAirline(null);
-          }}
-        >
-          <aside
-            style={{
-              width: "min(480px, 100%)",
-              height: "100%",
-              overflowY: "auto",
-              background: "var(--surface, #fff)",
-              padding: 28,
-              boxShadow: "-20px 0 60px rgba(0,0,0,.18)",
-            }}
-          >
-            <div className="page-head" style={{ marginBottom: 20 }}>
-              <div>
-                <div className="eyebrow">CARRIER PROFILE</div>
-                <h2 className="card-title">{selectedAirline.name}</h2>
-                <div className="card-muted">
-                  {selectedAirline.cargoBrand} · {selectedAirline.iataCode} /{" "}
-                  {selectedAirline.icaoCode}
-                </div>
-              </div>
-              <button className="btn" onClick={() => setSelectedAirline(null)}>
-                Close
-              </button>
-            </div>
-            <div className="metric-row">
-              <span>Country</span>
-              <strong>{selectedAirline.country}</strong>
-            </div>
-            <div className="metric-row">
-              <span>Region</span>
-              <strong>{selectedAirline.region}</strong>
-            </div>
-            <div className="metric-row">
-              <span>Connectivity</span>
-              <strong>{airlineConnectionLabel(selectedAirline)}</strong>
-            </div>
-            <div className="quick" style={{ marginTop: 16 }}>
-              <strong>Integration path</strong>
-              <span>{selectedAirline.providerPaths.join(" · ")}</span>
-              <span className="card-muted">
-                {selectedAirline.integrationNote}
-              </span>
-            </div>
-            <div style={{ marginTop: 16 }}>
-              <strong>Supported capabilities</strong>
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 6,
-                  marginTop: 8,
-                }}
-              >
-                {selectedAirline.capabilities.map((cap) => (
-                  <span className="status status-neutral" key={cap}>
-                    {cap}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div className="actions" style={{ marginTop: 22 }}>
-              {selectedAirline.cargoWebsite && (
-                <a
-                  className="btn"
-                  href={selectedAirline.cargoWebsite}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Cargo site
-                </a>
-              )}
-              {selectedAirline.officialWebsite && (
-                <a
-                  className="btn"
-                  href={selectedAirline.officialWebsite}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Airline site
-                </a>
-              )}
-            </div>
-          </aside>
-        </div>
-      )}
 
       <div className="grid grid-3" style={{ marginTop: 15 }}>
         <section className="card" style={{ gridColumn: "span 2" }}>

@@ -1,6 +1,8 @@
 package com.logiplatform.service;
 
 import com.logiplatform.tenancy.TenantContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -23,17 +25,19 @@ import static com.logiplatform.dto.AdvancedDashboardDtos.*;
 @Service
 public class AdvancedDashboardService {
 
-    private static final long CACHE_TTL_MS = 5_000L;
+    private static final Logger log = LoggerFactory.getLogger(AdvancedDashboardService.class);
+    private static final long CACHE_TTL_MS = 15_000L;
     private final JdbcTemplate jdbc;
     private final ConcurrentHashMap<CacheKey, CachedResponse> cache = new ConcurrentHashMap<>();
-    private final Object cacheLock = new Object();
+    private final ConcurrentHashMap<CacheKey, Object> cacheLocks = new ConcurrentHashMap<>();
 
     public AdvancedDashboardService(
-            @Qualifier("reportingJdbcTemplate") JdbcTemplate jdbc) {
+            @Qualifier("dashboardJdbcTemplate") JdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
 
     public Response dashboard(LocalDate asOf) {
+        final long startedAt = System.nanoTime();
         LocalDate date = asOf == null ? LocalDate.now() : asOf;
         UUID tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
@@ -47,34 +51,52 @@ public class AdvancedDashboardService {
             return cached.response();
         }
 
-        synchronized (cacheLock) {
-            final long currentTime = System.currentTimeMillis();
-            cached = cache.get(key);
-            if (cached != null && currentTime - cached.createdAtMs() < CACHE_TTL_MS) {
-                return cached.response();
-            }
+        Object lock = cacheLocks.computeIfAbsent(key, ignored -> new Object());
+        try {
+            synchronized (lock) {
+                final long currentTime = System.currentTimeMillis();
+                cached = cache.get(key);
+                if (cached != null && currentTime - cached.createdAtMs() < CACHE_TTL_MS) {
+                    return cached.response();
+                }
 
-            Response response = new Response(
-                    date,
-                    operations(tenantId, date),
-                    financial(tenantId, date),
-                    fleet(tenantId),
-                    modeMix(tenantId, date),
-                    statusMix(tenantId, date),
-                    trend(tenantId, date),
-                    topLanes(tenantId, date),
-                    exceptions(tenantId, date),
-                    actions(tenantId, date),
-                    operatingKpis(tenantId, date),
-                    monthlyFinancial(tenantId, date),
-                    receivablesAging(tenantId, date),
-                    quotationStatus(tenantId));
-            cache.put(key, new CachedResponse(currentTime, response));
-            if (cache.size() > 100) {
-                cache.entrySet().removeIf(entry ->
-                        currentTime - entry.getValue().createdAtMs() >= CACHE_TTL_MS);
+                // Resolve the reporting currency once for the complete snapshot.
+                // Several former sections independently queried tenant_profiles,
+                // multiplying database latency on every dashboard refresh.
+                String currency = reportingCurrency(tenantId);
+                OperationsKpi operations = operations(tenantId, date);
+
+                Response response = new Response(
+                        date,
+                        operations,
+                        financial(tenantId, date, currency),
+                        fleet(tenantId),
+                        modeMix(tenantId, date),
+                        statusMix(tenantId, date),
+                        trend(tenantId, date, currency),
+                        topLanes(tenantId, date),
+                        exceptions(tenantId, date),
+                        actions(tenantId, date, operations),
+                        operatingKpis(tenantId, date, currency),
+                        monthlyFinancial(tenantId, date, currency),
+                        receivablesAging(tenantId, date, currency),
+                        quotationStatus(tenantId));
+                cache.put(key, new CachedResponse(currentTime, response));
+                if (cache.size() > 100) {
+                    cache.entrySet().removeIf(entry ->
+                            currentTime - entry.getValue().createdAtMs() >= CACHE_TTL_MS);
+                }
+                long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS
+                        .toMillis(System.nanoTime() - startedAt);
+                if (elapsedMs >= 2_000L) {
+                    log.warn("Control-tower dashboard snapshot took {} ms", elapsedMs);
+                } else {
+                    log.debug("Control-tower dashboard snapshot took {} ms", elapsedMs);
+                }
+                return response;
             }
-            return response;
+        } finally {
+            cacheLocks.remove(key, lock);
         }
     }
 
@@ -144,15 +166,7 @@ public class AdvancedDashboardService {
                 asOf, asOf, asOf, tenantId, asOf);
     }
 
-    private FinancialKpi financial(UUID tenantId, LocalDate asOf) {
-        String displayCurrency = jdbc.queryForObject(
-                "SELECT COALESCE((SELECT default_currency FROM tenant_profiles WHERE tenant_id = ?), 'USD')",
-                String.class,
-                tenantId);
-        if (displayCurrency == null || displayCurrency.isBlank()) {
-            displayCurrency = "USD";
-        }
-        displayCurrency = displayCurrency.trim().toUpperCase();
+    private FinancialKpi financial(UUID tenantId, LocalDate asOf, String displayCurrency) {
 
         Integer currencyCount = jdbc.queryForObject(
                 """
@@ -288,7 +302,7 @@ public class AdvancedDashboardService {
                 .toList();
     }
 
-    private List<TrendPoint> trend(UUID tenantId, LocalDate asOf) {
+    private List<TrendPoint> trend(UUID tenantId, LocalDate asOf, String currency) {
         return jdbc.query(
                 """
                         SELECT d::date AS day,
@@ -299,9 +313,7 @@ public class AdvancedDashboardService {
                         LEFT JOIN shipments s
                           ON s.tenant_id = ?
                          AND COALESCE(s.date_opened, s.created_at::date) = d::date
-                         AND COALESCE(NULLIF(UPPER(s.currency),''),
-                                      (SELECT COALESCE(default_currency,'USD') FROM tenant_profiles WHERE tenant_id=?))
-                             = (SELECT COALESCE(default_currency,'USD') FROM tenant_profiles WHERE tenant_id=?)
+                         AND COALESCE(NULLIF(UPPER(s.currency),''), ?) = ?
                         GROUP BY d::date
                         ORDER BY d::date
                         """,
@@ -310,7 +322,7 @@ public class AdvancedDashboardService {
                         rs.getInt("shipments"),
                         nz(rs.getBigDecimal("revenue")),
                         nz(rs.getBigDecimal("operating_cost"))),
-                asOf, asOf, tenantId, tenantId, tenantId);
+                asOf, asOf, tenantId, currency, currency);
     }
 
     private List<LaneMetric> topLanes(UUID tenantId, LocalDate asOf) {
@@ -401,21 +413,14 @@ public class AdvancedDashboardService {
                 tenantId, asOf, tenantId, tenantId);
     }
 
-    private List<DashboardAction> actions(UUID tenantId, LocalDate asOf) {
-        int delayed = scalarInt("""
-                SELECT COUNT(*) FROM shipments
-                WHERE tenant_id=? AND eta IS NOT NULL AND eta < (?::date + INTERVAL '1 day')
-                  AND status NOT IN ('DELIVERED','COMPLETED','CANCELLED')
-                """, tenantId, asOf);
-        int unassigned = scalarInt("""
-                SELECT COUNT(*) FROM shipments s
-                WHERE s.tenant_id=? AND s.status NOT IN ('DELIVERED','COMPLETED','CANCELLED')
-                  AND NOT EXISTS (
-                    SELECT 1 FROM trip_shipments ts JOIN trips t ON t.id=ts.trip_id AND t.tenant_id=ts.tenant_id
-                    WHERE ts.tenant_id=s.tenant_id AND ts.shipment_id=s.id AND t.status IN ('PLANNED','IN_PROGRESS')
-                  )
-                """, tenantId);
-        int openExceptions = scalarInt("SELECT COUNT(*) FROM logistics_exceptions WHERE tenant_id=? AND status='OPEN'",
+    private List<DashboardAction> actions(
+            UUID tenantId,
+            LocalDate asOf,
+            OperationsKpi operations) {
+        int delayed = operations.delayedShipments();
+        int unassigned = operations.unassignedShipments();
+        int openExceptions = scalarInt(
+                "SELECT COUNT(*) FROM logistics_exceptions WHERE tenant_id=? AND status='OPEN'",
                 tenantId);
         int overdueTasks = scalarInt(
                 "SELECT COUNT(*) FROM task_records WHERE tenant_id=? AND UPPER(COALESCE(status,'')) NOT IN ('COMPLETED','CANCELLED') AND due_date < ?::date",
@@ -427,13 +432,13 @@ public class AdvancedDashboardService {
                     delayed + " shipment(s) have passed ETA.", "/shipments"));
         if (openExceptions > 0)
             out.add(new DashboardAction("HIGH", "Clear open exceptions",
-                    openExceptions + " operational exception(s) remain open.", "/shipments"));
+                    openExceptions + " operational exception(s) remain open.", "/exceptions"));
         if (unassigned > 0)
             out.add(new DashboardAction("HIGH", "Assign unplanned jobs",
                     unassigned + " active shipment(s) have no route assignment.", "/trips"));
         if (overdueTasks > 0)
-            out.add(new DashboardAction("MEDIUM", "Review overdue tasks", overdueTasks + " task(s) are overdue.",
-                    "/command-center"));
+            out.add(new DashboardAction("MEDIUM", "Review overdue tasks",
+                    overdueTasks + " task(s) are overdue.", "/commercial"));
         if (out.isEmpty())
             out.add(new DashboardAction("LOW", "Operations stable",
                     "No priority action was detected for the selected date.", "/shipments"));
@@ -451,8 +456,7 @@ public class AdvancedDashboardService {
                 .divide(BigDecimal.valueOf(total), 2, java.math.RoundingMode.HALF_UP);
     }
 
-    private OperatingKpis operatingKpis(UUID tenantId, LocalDate asOf) {
-        String currency = reportingCurrency(tenantId);
+    private OperatingKpis operatingKpis(UUID tenantId, LocalDate asOf, String currency) {
 
         return jdbc.queryForObject(
                 """
@@ -563,8 +567,7 @@ public class AdvancedDashboardService {
                 tenantId);
     }
 
-    private List<MonthlyFinancialPoint> monthlyFinancial(UUID tenantId, LocalDate asOf) {
-        String currency = reportingCurrency(tenantId);
+    private List<MonthlyFinancialPoint> monthlyFinancial(UUID tenantId, LocalDate asOf, String currency) {
         LocalDate firstMonth = asOf.withDayOfMonth(1).minusMonths(11);
 
         return jdbc.query(
@@ -599,8 +602,7 @@ public class AdvancedDashboardService {
                 tenantId);
     }
 
-    private List<AgingMetric> receivablesAging(UUID tenantId, LocalDate asOf) {
-        String currency = reportingCurrency(tenantId);
+    private List<AgingMetric> receivablesAging(UUID tenantId, LocalDate asOf, String currency) {
 
         return jdbc.query(
                 """

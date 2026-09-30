@@ -1,1409 +1,972 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  airCargoApi,
-  AirCargoFlight,
-  AirCargoBookingResponse,
-  AirCargoAirline,
-  AirCargoAirlineDirectory,
+  AdvancedDashboard,
   ApiError,
-  RouteOption,
   Shipment,
+  commandCenterApi,
   shipmentsApi,
+  platformHealthApi,
+  operationsApi,
 } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
-import Icon from "@/components/Icon";
+import { useRouter } from "next/navigation";
+import Icon, { IconName } from "@/components/Icon";
 
-function dateRange(date: string): { from: string; to: string } {
-  const start = new Date(`${date}T00:00:00.000Z`);
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-  return { from: start.toISOString(), to: end.toISOString() };
+const today = () => new Date().toLocaleDateString("en-CA");
+
+function money(value: number | null | undefined, currency: string): string {
+  return `${currency} ${(value ?? 0).toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  })}`;
 }
 
-function text(value: unknown): string {
-  return value == null ? "—" : String(value);
+function pct(value: number | null | undefined): string {
+  return `${(value ?? 0).toFixed(1)}%`;
 }
 
-function airportCode(
-  value: string | null | undefined,
-  fallback: string,
-): string {
-  const candidate = (value || "").trim().toUpperCase();
-  return /^[A-Z]{3}$/.test(candidate)
-    ? candidate
-    : fallback.trim().toUpperCase();
+function statusTone(status: string): string {
+  const value = status.toUpperCase();
+  if (["DELIVERED", "COMPLETED"].includes(value))
+    return "dashboard-status success";
+  if (["ON_HOLD", "CANCELLED", "CUSTOMS"].includes(value))
+    return "dashboard-status danger";
+  if (["DEPARTED", "IN_TRANSIT", "ARRIVED", "OUT_FOR_DELIVERY"].includes(value))
+    return "dashboard-status info";
+  return "dashboard-status warning";
 }
 
-export default function AirCargoPage() {
+function modeLabel(mode: string): string {
+  const map: Record<string, string> = {
+    AIR: "Air",
+    SEA: "Ocean",
+    ROAD: "Road",
+    RAIL: "Rail",
+    INLAND_WATERWAY: "Water",
+    COURIER: "Courier",
+    LAST_MILE: "Last Mile",
+    RORO: "RoRo",
+    PROJECT_CARGO: "Project",
+  };
+  return map[mode] ?? mode.replaceAll("_", " ");
+}
+
+export default function AalControlTower() {
   const { accessToken, isLoading } = useAuth();
   const router = useRouter();
-
-  const [origin, setOrigin] = useState("NBO");
-  const [destination, setDestination] = useState("KGL");
-  const [weight, setWeight] = useState("100");
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [flights, setFlights] = useState<AirCargoFlight[]>([]);
-  const [routes, setRoutes] = useState<RouteOption[]>([]);
+  const [data, setData] = useState<AdvancedDashboard | null>(null);
   const [shipments, setShipments] = useState<Shipment[]>([]);
-  const [shipmentId, setShipmentId] = useState("");
-  const [selected, setSelected] = useState<AirCargoFlight | null>(null);
+  const [fleetLive, setFleetLive] = useState<
+    import("@/lib/api-client").FleetLive[]
+  >([]);
+  const [asOf, setAsOf] = useState(today());
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [optimizing, setOptimizing] = useState(false);
-  const [verifyingProvider, setVerifyingProvider] = useState(false);
-  const [verifyingAllProviders, setVerifyingAllProviders] = useState(false);
-  const [providerVerification, setProviderVerification] = useState<Record<
-    string,
-    unknown
-  > | null>(null);
-  const [providerVerificationAll, setProviderVerificationAll] = useState<Record<
-    string,
-    unknown
-  > | null>(null);
-  const [booking, setBooking] = useState(false);
-  const [bookings, setBookings] = useState<AirCargoBookingResponse[]>([]);
-  const [etaHistory, setEtaHistory] = useState<Record<string, unknown>[]>([]);
-  const [integrationHealth, setIntegrationHealth] = useState<Record<
-    string,
-    unknown
-  > | null>(null);
-  const [airlineDirectory, setAirlineDirectory] =
-    useState<AirCargoAirlineDirectory | null>(null);
-  const [airlineFilter, setAirlineFilter] = useState("");
-  const liveSearchConfigured = integrationHealth?.liveSearchConfigured === true;
-  const externalConfigured = integrationHealth?.configured === true;
+  const [refreshing, setRefreshing] = useState(false);
+  const [systemHealth, setSystemHealth] = useState<{
+    healthy: boolean;
+    status: string;
+  } | null>(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const coreRunRef = useRef(0);
+  const auxiliaryRunRef = useRef(0);
+  const coreAbortRef = useRef<AbortController | null>(null);
+  const auxiliaryAbortRef = useRef<AbortController | null>(null);
+  const coreTimerRef = useRef<number | null>(null);
+  const auxiliaryTimerRef = useRef<number | null>(null);
+  const auxiliaryStartTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+
+  async function loadCore(forceRefresh = false) {
+    if (!accessToken || !mountedRef.current) return;
+
+    const run = ++coreRunRef.current;
+    coreAbortRef.current?.abort();
+    const controller = new AbortController();
+    coreAbortRef.current = controller;
+
+    if (forceRefresh) setRefreshing(true);
+
+    const requestOptions: RequestInit = {
+      signal: controller.signal,
+      ...(forceRefresh ? { cache: "no-store" as RequestCache } : {}),
+    };
+
+    const dashboardPromise = commandCenterApi.advanced(asOf, requestOptions);
+    const recentPromise = shipmentsApi.list(
+      { page: 0, size: 5 },
+      requestOptions,
+    );
+
+    void recentPromise
+      .then((result) => {
+        if (!mountedRef.current || run !== coreRunRef.current) return;
+        setShipments(Array.isArray(result?.content) ? result.content : []);
+      })
+      .catch((reason) => {
+        if (
+          controller.signal.aborted ||
+          !mountedRef.current ||
+          run !== coreRunRef.current
+        )
+          return;
+        setError(
+          (current) =>
+            current ||
+            (reason instanceof ApiError
+              ? reason.message
+              : "Recent shipment activity is temporarily unavailable."),
+        );
+      });
+
+    try {
+      const dashboard = await dashboardPromise;
+
+      if (!mountedRef.current || run !== coreRunRef.current) return;
+
+      setData(dashboard);
+      setLastUpdatedAt(new Date().toISOString());
+      setError("");
+    } catch (reason) {
+      if (
+        controller.signal.aborted ||
+        !mountedRef.current ||
+        run !== coreRunRef.current
+      )
+        return;
+
+      setError(
+        reason instanceof ApiError
+          ? reason.message
+          : "Unable to load the operations control tower. Please retry.",
+      );
+    } finally {
+      if (mountedRef.current && run === coreRunRef.current) {
+        if (forceRefresh) setRefreshing(false);
+        if (coreAbortRef.current === controller) {
+          coreAbortRef.current = null;
+        }
+      }
+    }
+  }
+
+  async function loadAuxiliary(forceRefresh = false) {
+    if (!accessToken || !mountedRef.current) return;
+
+    const run = ++auxiliaryRunRef.current;
+    auxiliaryAbortRef.current?.abort();
+    const controller = new AbortController();
+    auxiliaryAbortRef.current = controller;
+
+    const requestOptions: RequestInit = {
+      signal: controller.signal,
+      ...(forceRefresh ? { cache: "no-store" as RequestCache } : {}),
+    };
+
+    try {
+      const [health, fleet] = await Promise.allSettled([
+        platformHealthApi.current(requestOptions),
+        operationsApi.fleetLive(requestOptions),
+      ]);
+
+      if (
+        !mountedRef.current ||
+        run !== auxiliaryRunRef.current ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+
+      if (health.status === "fulfilled") {
+        setSystemHealth({
+          healthy: health.value.healthy,
+          status: health.value.status,
+        });
+      } else {
+        setSystemHealth(
+          (current) =>
+            current ?? { healthy: false, status: "AUXILIARY_DEGRADED" },
+        );
+      }
+
+      if (fleet.status === "fulfilled") {
+        setFleetLive(Array.isArray(fleet.value) ? fleet.value : []);
+      }
+    } finally {
+      if (auxiliaryAbortRef.current === controller) {
+        auxiliaryAbortRef.current = null;
+      }
+    }
+  }
+
+  function scheduleAuxiliary() {
+    if (auxiliaryStartTimerRef.current !== null) {
+      window.clearTimeout(auxiliaryStartTimerRef.current);
+    }
+    auxiliaryStartTimerRef.current = window.setTimeout(() => {
+      auxiliaryStartTimerRef.current = null;
+      void loadAuxiliary(false);
+    }, 1_500);
+  }
+
+  function scheduleCoreRefresh() {
+    if (coreTimerRef.current !== null) {
+      window.clearTimeout(coreTimerRef.current);
+    }
+    coreTimerRef.current = window.setTimeout(() => {
+      coreTimerRef.current = null;
+      void loadCore(false);
+    }, 60_000);
+  }
+
+  function scheduleAuxiliaryRefresh() {
+    if (auxiliaryTimerRef.current !== null) {
+      window.clearTimeout(auxiliaryTimerRef.current);
+    }
+    auxiliaryTimerRef.current = window.setTimeout(() => {
+      auxiliaryTimerRef.current = null;
+      void loadAuxiliary(false);
+    }, 90_000);
+  }
+
+  async function load() {
+    if (!accessToken || !mountedRef.current) return;
+
+    setRefreshing(true);
+    setError("");
+
+    // The dashboard request controls the user-visible refresh state. Recent
+    // shipments continue independently and auxiliary widgets are deliberately
+    // deferred so a slow subsystem can never block the main control tower.
+    await loadCore(true);
+
+    if (!mountedRef.current || !accessToken) return;
+
+    scheduleAuxiliary();
+    scheduleCoreRefresh();
+    scheduleAuxiliaryRefresh();
+  }
 
   useEffect(() => {
-    if (!isLoading && !accessToken) router.push("/login");
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      coreAbortRef.current?.abort();
+      auxiliaryAbortRef.current?.abort();
+      coreAbortRef.current = null;
+      auxiliaryAbortRef.current = null;
+      if (coreTimerRef.current !== null) {
+        window.clearTimeout(coreTimerRef.current);
+      }
+      if (auxiliaryTimerRef.current !== null) {
+        window.clearTimeout(auxiliaryTimerRef.current);
+      }
+      if (auxiliaryStartTimerRef.current !== null) {
+        window.clearTimeout(auxiliaryStartTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isLoading && !accessToken) router.replace("/login");
   }, [isLoading, accessToken, router]);
 
   useEffect(() => {
     if (!accessToken) return;
 
-    let active = true;
-    const bookingTimer = window.setTimeout(() => {
-      airCargoApi
-        .bookings()
-        .then((rows) => {
-          if (active) setBookings(rows);
-        })
-        .catch(() => undefined);
-    }, 350);
+    void load();
 
-    airCargoApi
-      .integrationHealth()
-      .then((health) => {
-        if (active) setIntegrationHealth(health);
-      })
-      .catch(() => undefined);
-
-    airCargoApi
-      .airlines()
-      .then((directory) => {
-        if (active) setAirlineDirectory(directory);
-      })
-      .catch(() => undefined);
-
-    shipmentsApi
-      .list({ page: 0, size: 25, mode: "AIR" })
-      .then((response) =>
-        setShipments(
-          response.content.filter(
-            (shipment) => shipment.transportMode === "AIR",
-          ),
-        ),
-      )
-      .catch((e) => {
-        if (!active) return;
-        setError(
-          e instanceof ApiError ? e.message : "Unable to load shipments",
-        );
-      });
-
+    // Poll instead of holding an always-open SSE connection. The control tower
+    // remains usable even when proxy/provider streams are unavailable.
     return () => {
-      active = false;
-      window.clearTimeout(bookingTimer);
+      if (coreTimerRef.current !== null) {
+        window.clearTimeout(coreTimerRef.current);
+        coreTimerRef.current = null;
+      }
+      if (auxiliaryTimerRef.current !== null) {
+        window.clearTimeout(auxiliaryTimerRef.current);
+        auxiliaryTimerRef.current = null;
+      }
+      if (auxiliaryStartTimerRef.current !== null) {
+        window.clearTimeout(auxiliaryStartTimerRef.current);
+        auxiliaryStartTimerRef.current = null;
+      }
     };
-  }, [accessToken]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, asOf]);
 
-  const liveCarrierCodes = useMemo(
+  const trend = useMemo(
+    () => (Array.isArray(data?.trend) ? data.trend : []),
+    [data],
+  );
+
+  const trendMax = useMemo(
     () =>
-      new Set(
-        flights
-          .map((flight) => flight.carrierCode?.trim().toUpperCase())
-          .filter((code): code is string => Boolean(code)),
+      Math.max(
+        1,
+        ...trend.map((x) =>
+          Math.max(Number(x?.revenue ?? 0), Number(x?.operatingCost ?? 0)),
+        ),
       ),
-    [flights],
+    [trend],
   );
-
-  const filteredAirlines = useMemo(() => {
-    const query = airlineFilter.trim().toLowerCase();
-    const rows = airlineDirectory?.airlines ?? [];
-    if (!query) return rows;
-    return rows.filter((airline) =>
-      [
-        airline.name,
-        airline.cargoBrand,
-        airline.iataCode,
-        airline.icaoCode,
-        airline.country,
-        airline.region,
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(query),
-    );
-  }, [airlineDirectory, airlineFilter]);
-
-  const airlineConnectionLabel = (airline: AirCargoAirline) => {
-    const code = airline.iataCode.toUpperCase();
-    if (liveCarrierCodes.has(code)) return "LIVE ON THIS SEARCH";
-
-    const configured = new Set(
-      (airlineDirectory?.configuredProviders ?? []).map((value) =>
-        value.toUpperCase(),
-      ),
-    );
-    if (configured.has("QATAR") && code === "QR") return "DIRECT SEARCH READY";
-    if (configured.has("LHCARGO") && code === "LH") return "TRACKING READY";
-    if (
-      configured.has("CARGOAI") &&
-      airline.providerPaths.includes("CARGOAI")
-    ) {
-      return "NETWORK PROVIDER READY";
-    }
-    return "CONNECT PROVIDER";
-  };
-
-  const providerHealth = useMemo(() => {
-    const rows = integrationHealth?.providers;
-    return Array.isArray(rows)
-      ? (rows as Array<Record<string, unknown>>).filter(Boolean)
-      : [];
-  }, [integrationHealth]);
-
-  const configuredProviderCount = providerHealth.filter(
-    (provider) => provider.configured === true,
-  ).length;
-
-  const liveBookingProviderCount = providerHealth.filter(
-    (provider) =>
-      provider.configured === true &&
-      provider.scheduleSearch === true &&
-      provider.booking === true,
-  ).length;
-
-  const liveTrackingProviderCount = providerHealth.filter(
-    (provider) =>
-      provider.configured === true && provider.flightStatus === true,
-  ).length;
-
-  const airlinePathLabel = (airline: AirCargoAirline) => {
-    const configured = new Set(
-      providerHealth
-        .filter((provider) => provider.configured === true)
-        .map((provider) => String(provider.code || "").toUpperCase()),
-    );
-    const paths = airline.providerPaths.map((path) => path.toUpperCase());
-    if (configured.has("CARGOAI") && paths.includes("CARGOAI")) {
-      return "NETWORK PROVIDER";
-    }
-    if (configured.has("QATAR") && airline.iataCode === "QR") {
-      return "DIRECT ADAPTER";
-    }
-    if (configured.has("LHCARGO") && airline.iataCode === "LH") {
-      return "DIRECT TRACKING";
-    }
-    return "CONNECTION REQUIRED";
-  };
-
-  const selectedShipment = useMemo(
-    () => shipments.find((shipment) => shipment.id === shipmentId) ?? null,
-    [shipments, shipmentId],
-  );
-
-  // When no live airline schedule is configured, keep the air desk usable by
-  // exposing the shipment's own flight as an explicit AAL planning request.
-  // It is never presented as live carrier capacity.
-  const planningFlight = useMemo<AirCargoFlight | null>(() => {
-    if (!selectedShipment || liveSearchConfigured) return null;
-
-    const carrierName =
-      selectedShipment.airlineUsed ||
-      selectedShipment.carrierName ||
-      "AAL Planning";
-    const carrierCode =
-      carrierName
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z]/g, "")
-        .slice(0, 3) || "AAL";
-
-    // A shipment can enter the air desk before an airline flight number has
-    // been assigned.  Keep that workflow bookable as an internal planning
-    // request instead of disabling the only action on the page.
-    const generatedFlightNumber = `AAL-PLAN-${selectedShipment.referenceCode
-      .replace(/[^A-Z0-9]/gi, "")
-      .slice(-12)}`;
-    const flightNumber =
-      selectedShipment.flightNumber?.trim() || generatedFlightNumber;
-
-    const scheduledDeparture = selectedShipment.etd
-      ? new Date(selectedShipment.etd)
-      : new Date(Date.now() + 2 * 60 * 60 * 1000);
-    const departure =
-      scheduledDeparture.getTime() > Date.now() + 60_000
-        ? scheduledDeparture
-        : new Date(Date.now() + 2 * 60 * 60 * 1000);
-    const scheduledArrival = selectedShipment.eta
-      ? new Date(selectedShipment.eta)
-      : new Date(departure.getTime() + 2 * 60 * 60 * 1000);
-    const arrival =
-      scheduledArrival.getTime() > departure.getTime()
-        ? scheduledArrival
-        : new Date(departure.getTime() + 2 * 60 * 60 * 1000);
-
-    return {
-      id: `planning-${selectedShipment.id}`,
-      carrierCode,
-      carrierName,
-      flightNumber,
-      origin: airportCode(selectedShipment.originCityPort, origin),
-      destination: airportCode(
-        selectedShipment.destinationCityPort,
-        destination,
-      ),
-      departure: departure.toISOString(),
-      arrival: arrival.toISOString(),
-      totalCapacityKg: 0,
-      availableCapacityKg: 0,
-      status: "PLANNING",
-      source: "AAL_PLANNING",
-    };
-  }, [selectedShipment, origin, destination, externalConfigured]);
-
-  const bookingFlight = selected || planningFlight;
-  const displayFlights = flights.length
-    ? flights
-    : planningFlight
-      ? [planningFlight]
-      : [];
-
-  useEffect(() => {
-    if (!shipmentId && shipments.length === 1) {
-      setShipmentId(shipments[0].id);
-    }
-  }, [shipmentId, shipments]);
 
   if (isLoading || !accessToken) return null;
 
-  async function search() {
-    const requestedWeight = Number(weight);
-    const from = origin.trim().toUpperCase();
-    const to = destination.trim().toUpperCase();
-
-    if (!/^[A-Z]{3}$/.test(from) || !/^[A-Z]{3}$/.test(to)) {
-      setError(
-        "Origin and destination must be valid three-letter airport codes.",
-      );
-      return;
-    }
-    if (from === to) {
-      setError("Origin and destination must be different.");
-      return;
-    }
-    if (!Number.isFinite(requestedWeight) || requestedWeight <= 0) {
-      setError("Chargeable weight must be greater than zero.");
-      return;
-    }
-
-    setLoading(true);
-    setError("");
-    setMessage("");
-    setSelected(null);
-
-    try {
-      const range = dateRange(date);
-      const request = {
-        origin: from,
-        destination: to,
-        weightKg: requestedWeight,
-        ...range,
-      };
-      // Search live providers first so the user can see real offers immediately.
-      // Route optimization runs against that persisted snapshot without blocking
-      // the first result render.
-      const flightResults = await airCargoApi.searchFlights(request);
-      setFlights(flightResults);
-      setRoutes([]);
-      setOptimizing(true);
-      void airCargoApi
-        .optimizeRoutes(request)
-        .then(setRoutes)
-        .catch(() => setRoutes([]))
-        .finally(() => setOptimizing(false));
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Air cargo search failed");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function verifyAllProviders() {
-    const requestedWeight = Number(weight);
-    if (!Number.isFinite(requestedWeight) || requestedWeight <= 0) {
-      setError("Chargeable weight must be greater than zero.");
-      return;
-    }
-    setVerifyingAllProviders(true);
-    setProviderVerificationAll(null);
-    setError("");
-    try {
-      const range = dateRange(date);
-      const result = await airCargoApi.verifyAllProviders({
-        origin: origin.trim().toUpperCase(),
-        destination: destination.trim().toUpperCase(),
-        weightKg: requestedWeight,
-        ...range,
-      });
-      setProviderVerificationAll(result);
-      const connected = Number(result.reachableProviderCount ?? 0);
-      const total = Number(result.providerCount ?? 0);
-      setMessage(
-        `Airline connectivity test: ${connected}/${total} configured providers reachable.`,
-      );
-    } catch (e) {
-      setError(
-        e instanceof ApiError ? e.message : "Airline connectivity test failed",
-      );
-    } finally {
-      setVerifyingAllProviders(false);
-    }
-  }
-
-  async function verifyProvider() {
-    const provider = String(
-      integrationHealth?.activeProvider || integrationHealth?.provider || "",
-    ).trim();
-    if (!provider || provider === "NONE") {
-      setError("No configured airline provider is available to verify.");
-      return;
-    }
-    const requestedWeight = Number(weight);
-    const range = dateRange(date);
-    setVerifyingProvider(true);
-    setProviderVerification(null);
-    setError("");
-    try {
-      const result = await airCargoApi.verifyProvider({
-        providerCode: provider,
-        origin: origin.trim().toUpperCase(),
-        destination: destination.trim().toUpperCase(),
-        weightKg: requestedWeight,
-        ...range,
-      });
-      setProviderVerification(result);
-      const status = String(result.status || "");
-      setMessage(
-        status === "CONNECTED"
-          ? `${provider} live connection verified${result.offerCount != null ? ` · ${result.offerCount} offers` : ""}.`
-          : `${provider} verification returned ${status || "an inconclusive result"}.`,
-      );
-    } catch (e) {
-      setError(
-        e instanceof ApiError
-          ? e.message
-          : "Airline provider verification failed",
-      );
-    } finally {
-      setVerifyingProvider(false);
-    }
-  }
-
-  async function book() {
-    if (!bookingFlight || !shipmentId) {
-      setError(
-        "Select an air shipment with a flight number before requesting a booking.",
-      );
-      return;
-    }
-
-    const requestedWeight = Number(weight);
-    if (!Number.isFinite(requestedWeight) || requestedWeight <= 0) {
-      setError("Chargeable weight must be greater than zero.");
-      return;
-    }
-
-    setBooking(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const result = await airCargoApi.book({
-        shipmentId,
-        carrierCode: bookingFlight.carrierCode,
-        carrierName: bookingFlight.carrierName,
-        flightNumber: bookingFlight.flightNumber,
-        departureTime: bookingFlight.departure,
-        arrivalTime: bookingFlight.arrival ?? undefined,
-        originCode: bookingFlight.origin,
-        destinationCode: bookingFlight.destination,
-        weightKg: requestedWeight,
-        serviceLevel: "STANDARD",
-        idempotencyKey: `AAL-AIR-${shipmentId}-${bookingFlight.id}-${requestedWeight}`,
-        providerReference: bookingFlight.providerReference ?? undefined,
-        providerCode:
-          bookingFlight.providerCode ??
-          (bookingFlight.source !== "AAL_PLANNING"
-            ? bookingFlight.source
-            : undefined),
-      });
-
-      setBookings((current) => [
-        result,
-        ...current.filter((row) => row.id !== result.id),
-      ]);
-      setMessage(
-        `Booking ${result.status.toLowerCase()}${
-          result.confirmationNumber ? ` · ${result.confirmationNumber}` : ""
-        }.`,
-      );
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Booking failed");
-    } finally {
-      setBooking(false);
-    }
-  }
-
-  async function cancelBooking(row: AirCargoBookingResponse) {
-    if (
-      !window.confirm(
-        `Cancel booking ${row.confirmationNumber || row.providerReference || row.id}?`,
-      )
-    )
-      return;
-    try {
-      const result = await airCargoApi.cancelBooking(row.id, {
-        reason: "Operational amendment",
-        idempotencyKey: `AAL-CANCEL-${row.id}`,
-      });
-      setBookings((current) =>
-        current.map((item) => (item.id === result.id ? result : item)),
-      );
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Cancellation failed");
-    }
-  }
-
-  async function refreshShipmentEta() {
-    if (!shipmentId) {
-      setError("Select a shipment before refreshing ETA.");
-      return;
-    }
-    try {
-      await airCargoApi.refreshEta(shipmentId);
-      const history = await airCargoApi.etaHistory(shipmentId);
-      setEtaHistory(history as Record<string, unknown>[]);
-      setMessage("Flight status and ETA refreshed.");
-    } catch (e) {
-      const message = e instanceof ApiError ? e.message : "ETA refresh failed";
-      setError(message);
-    }
-  }
+  // The API contract normally supplies every nested dashboard object. Keep the
+  // control tower render-safe when an older backend, a partially populated
+  // response, or a transient cached snapshot omits one of those objects.
+  // Without these guards, `data?.financial.currency` still throws when `data`
+  // exists but `financial` is missing.
+  const operations = data?.operations ?? {
+    totalShipments: 0,
+    activeShipments: 0,
+    deliveredShipments: 0,
+    delayedShipments: 0,
+    exceptionShipments: 0,
+    unassignedShipments: 0,
+    dueToday: 0,
+    onTimeRatePercent: 0,
+    completionRatePercent: 0,
+  };
+  const financial = data?.financial ?? {
+    currency: "USD",
+    mixedCurrencies: false,
+    billed: 0,
+    collected: 0,
+    receivables: 0,
+    operatingCost: 0,
+    grossMargin: 0,
+    grossMarginPercent: 0,
+  };
+  const fleet = data?.fleet ?? {
+    totalVehicles: 0,
+    availableVehicles: 0,
+    onTripVehicles: 0,
+    maintenanceVehicles: 0,
+    vehicleUtilizationPercent: 0,
+    totalDrivers: 0,
+    availableDrivers: 0,
+    onTripDrivers: 0,
+    driverUtilizationPercent: 0,
+  };
+  const modeMix = Array.isArray(data?.modeMix) ? data.modeMix : [];
+  const exceptionsList = Array.isArray(data?.exceptions) ? data.exceptions : [];
+  const actions = Array.isArray(data?.actions) ? data.actions : [];
+  const currency = financial.currency || "USD";
+  const total = operations.totalShipments;
+  const inTransit = operations.activeShipments;
+  const delivered = operations.deliveredShipments;
+  const exceptions = operations.exceptionShipments;
 
   return (
-    <main className="page">
-      <div className="page-head">
+    <main className="dashboard-page">
+      <section className="dashboard-heading">
         <div>
-          <div className="eyebrow">Air freight intelligence</div>
-          <h1 className="page-title">Capacity & booking desk</h1>
-          <p className="page-subtitle">
-            Search live airline rates and capacity across every connected
-            airline/provider, then select a bookable option and create the
-            airline booking from AAL.
-          </p>
+          <div className="eyebrow">
+            AVIATION AFRICA LOGISTICS · CONTROL TOWER
+          </div>
+          <h1>Command Center</h1>
+          <p>Real-time visibility. Smarter decisions. Faster deliveries.</p>
         </div>
-        <div className="actions">
-          <Link className="btn" href="/shipments">
-            <Icon name="ship" size={15} /> Shipment ledger
-          </Link>
-          <Link className="btn" href="/aal-control-tower">
-            <Icon name="file" size={15} /> Commercial
-          </Link>
+        <div className="dashboard-heading-actions">
+          <div className="dashboard-date">
+            <Icon name="calendar" size={15} />
+            <input
+              aria-label="As of date"
+              type="date"
+              value={asOf}
+              onChange={(e) => setAsOf(e.target.value)}
+            />
+          </div>
+          <span
+            className={`dashboard-online ${systemHealth?.healthy === false ? "dashboard-online-danger" : ""}`}
+          >
+            <span />{" "}
+            {systemHealth?.healthy === false
+              ? "System Degraded"
+              : systemHealth?.healthy === true
+                ? "System Operational"
+                : "Checking system"}
+            {lastUpdatedAt ? (
+              <small>
+                {" "}
+                · updated {new Date(lastUpdatedAt).toLocaleTimeString()}
+              </small>
+            ) : null}
+          </span>
+          <button
+            className="btn"
+            onClick={() => void load()}
+            disabled={refreshing}
+          >
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
         </div>
-      </div>
+      </section>
 
       {error && (
-        <div className="alert alert-error" style={{ marginBottom: 12 }}>
-          {error}
-        </div>
-      )}
-      {message && (
-        <div className="alert alert-success" style={{ marginBottom: 12 }}>
-          {message}
-        </div>
+        <div className="alert alert-error dashboard-alert">{error}</div>
       )}
 
-      <section className="card" style={{ padding: 20 }}>
-        <div className="grid grid-4">
-          <div className="field">
-            <label>Origin airport</label>
-            <input
-              value={origin}
-              onChange={(e) => setOrigin(e.target.value.toUpperCase())}
-              maxLength={3}
-              placeholder="KGL"
+      {!data ? (
+        <section className="dashboard-loading card">
+          <img
+            src="/branding/aal-logo.jpg"
+            alt="Aviation Africa Logistics Ltd"
+          />
+          <strong>Loading live control-tower data…</strong>
+          <span>Connecting to shipments, finance and operations services.</span>
+        </section>
+      ) : (
+        <>
+          <section className="dashboard-kpis">
+            <DashboardKpi
+              icon="ship"
+              accent="navy"
+              title="Total Shipments"
+              value={total.toLocaleString()}
+              meta={`${pct(operations.completionRatePercent)} completion`}
+              trend="Operations"
+              href="/shipments"
             />
-          </div>
-          <div className="field">
-            <label>Destination airport</label>
-            <input
-              value={destination}
-              onChange={(e) => setDestination(e.target.value.toUpperCase())}
-              maxLength={3}
-              placeholder="AMS"
+            <DashboardKpi
+              icon="plane"
+              accent="red"
+              title="In Transit"
+              value={inTransit.toLocaleString()}
+              meta={`${pct(operations.onTimeRatePercent)} on time`}
+              trend="Live movement"
+              href="/track"
             />
-          </div>
-          <div className="field">
-            <label>Chargeable weight (kg)</label>
-            <input
-              type="number"
-              min="0.1"
-              step="0.001"
-              value={weight}
-              onChange={(e) => setWeight(e.target.value)}
+            <DashboardKpi
+              icon="check"
+              accent="yellow"
+              title="Delivered"
+              value={delivered.toLocaleString()}
+              meta={`${operations.dueToday.toLocaleString()} due today`}
+              trend="Completed"
+              href="/shipments?status=DELIVERED"
             />
-          </div>
-          <div className="field">
-            <label>Departure date</label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
+            <DashboardKpi
+              icon="bell"
+              accent="red"
+              title="Exceptions"
+              value={exceptions.toLocaleString()}
+              meta={`${operations.delayedShipments.toLocaleString()} delayed`}
+              trend="Attention required"
+              href="/exceptions"
             />
-          </div>
-        </div>
-        <div
-          style={{ display: "flex", justifyContent: "flex-end", marginTop: 13 }}
-        >
-          <button
-            className="btn btn-primary"
-            onClick={search}
-            disabled={loading}
-          >
-            <Icon name="search" size={15} />{" "}
-            {loading ? "Searching…" : "Search capacity"}
-          </button>
-        </div>
-      </section>
+            <DashboardKpi
+              icon="money"
+              accent="navy"
+              title={`Revenue (${currency})`}
+              value={money(financial.billed, "").trim()}
+              meta={`${money(financial.collected, currency)} collected`}
+              trend={`${pct(financial.grossMarginPercent)} margin`}
+              href="/billing"
+            />
+          </section>
 
-      <section
-        className="card"
-        style={{
-          marginTop: 15,
-          padding: 0,
-          overflow: "hidden",
-          border: "1px solid #dfe7f0",
-          boxShadow: "0 8px 30px rgba(16,24,40,.05)",
-        }}
-      >
-        <div
-          style={{
-            padding: "20px 20px 16px",
-            background:
-              "linear-gradient(135deg, #f7fbff 0%, #ffffff 58%, #f8fbff 100%)",
-            borderBottom: "1px solid #e7edf4",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-              gap: 16,
-              flexWrap: "wrap",
-            }}
-          >
-            <div>
-              <div className="eyebrow">AIRLINE NETWORK</div>
-              <h2 className="card-title" style={{ marginTop: 5 }}>
-                Carrier directory & connectivity
-              </h2>
-              <div
-                className="card-muted"
-                style={{ maxWidth: 720, marginTop: 5, lineHeight: 1.55 }}
-              >
-                A single operational view of the carriers AAL can work with.
-                Live status comes from actual provider responses; a directory
-                entry is never treated as live capacity merely because the
-                airline is listed.
+          <section className="dashboard-main-grid">
+            <div className="dashboard-card dashboard-chart-card">
+              <DashboardCardHeader
+                eyebrow="NETWORK PERFORMANCE"
+                title="Shipment Overview"
+                href="/reports"
+              />
+              <div className="chart-legend">
+                {modeMix.slice(0, 4).map((item, index) => (
+                  <span key={item.mode}>
+                    <i className={`legend-dot dot-${index}`} />
+                    {modeLabel(item.mode)}
+                  </span>
+                ))}
+              </div>
+              <div className="line-chart">
+                <div className="chart-y-labels">
+                  <span>100%</span>
+                  <span>75%</span>
+                  <span>50%</span>
+                  <span>25%</span>
+                  <span>0</span>
+                </div>
+                <svg
+                  viewBox="0 0 760 250"
+                  role="img"
+                  aria-label="Shipment trend chart"
+                  preserveAspectRatio="none"
+                >
+                  {[20, 70, 120, 170, 220].map((y) => (
+                    <line
+                      key={y}
+                      x1="24"
+                      y1={y}
+                      x2="748"
+                      y2={y}
+                      className="chart-grid-line"
+                    />
+                  ))}
+                  {trend.length > 1 && (
+                    <>
+                      <polyline
+                        className="chart-line chart-line-red"
+                        points={trend
+                          .map(
+                            (x, i) =>
+                              `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.shipments / Math.max(1, total)) * 185}`,
+                          )
+                          .join(" ")}
+                      />
+                      <polyline
+                        className="chart-line chart-line-blue"
+                        points={trend
+                          .map(
+                            (x, i) =>
+                              `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.revenue / trendMax) * 165}`,
+                          )
+                          .join(" ")}
+                      />
+                      <polyline
+                        className="chart-line chart-line-yellow"
+                        points={trend
+                          .map(
+                            (x, i) =>
+                              `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.operatingCost / trendMax) * 145}`,
+                          )
+                          .join(" ")}
+                      />
+                    </>
+                  )}
+                </svg>
+              </div>
+              <div className="chart-x-labels">
+                {trend.map((x) => (
+                  <span key={x.date}>{x.date.slice(5)}</span>
+                ))}
               </div>
             </div>
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                alignItems: "center",
-                flexWrap: "wrap",
-              }}
-            >
-              <span
-                className={`status ${liveSearchConfigured ? "status-success" : "status-neutral"}`}
+
+            <div className="dashboard-card tracking-card">
+              <DashboardCardHeader
+                eyebrow="LIVE VISIBILITY"
+                title="Global Tracking"
+                href="/track"
+              />
+              <div
+                className="tracking-map"
+                aria-label="Global shipment tracking visualization"
               >
-                {liveSearchConfigured
-                  ? "LIVE SEARCH ENABLED"
-                  : "LIVE SEARCH NOT CONFIGURED"}
-              </span>
-              <input
-                aria-label="Search airlines"
-                value={airlineFilter}
-                onChange={(e) => setAirlineFilter(e.target.value)}
-                placeholder="Search carrier, code or country"
-                style={{ minWidth: 255 }}
+                <div className="map-grid" />
+                {fleetLive
+                  .filter((x) => x.latitude != null && x.longitude != null)
+                  .slice(0, 40)
+                  .map((x) => (
+                    <MapPoint
+                      key={x.vehicleId}
+                      x={`${Math.max(3, Math.min(97, ((Number(x.longitude) + 180) / 360) * 100))}%`}
+                      y={`${Math.max(5, Math.min(95, ((90 - Number(x.latitude)) / 180) * 100))}%`}
+                      label={x.registrationNumber}
+                      tone={
+                        x.vehicleStatus === "ON_TRIP"
+                          ? "red"
+                          : x.vehicleStatus === "MAINTENANCE"
+                            ? "yellow"
+                            : "green"
+                      }
+                    />
+                  ))}
+                {!fleetLive.some(
+                  (x) => x.latitude != null && x.longitude != null,
+                ) && (
+                  <div className="map-empty-state">
+                    No live GPS positions available
+                  </div>
+                )}
+              </div>
+              <div className="tracking-legend">
+                <span>
+                  <i className="legend-dot dot-red" />
+                  In Transit
+                </span>
+                <span>
+                  <i className="legend-dot dot-green" />
+                  Delivered
+                </span>
+                <span>
+                  <i className="legend-dot dot-yellow" />
+                  Exception
+                </span>
+              </div>
+            </div>
+
+            <div className="dashboard-card quick-actions-card">
+              <DashboardCardHeader eyebrow="OPERATIONS" title="Quick Actions" />
+              <QuickAction
+                href="/new-shipment"
+                icon="ship"
+                label="Create Shipment"
+                tone="navy"
+              />
+              <QuickAction
+                href="/air-cargo"
+                icon="plane"
+                label="Book Air Freight"
+                tone="red"
+              />
+              <QuickAction
+                href="/track"
+                icon="search"
+                label="Track Shipment"
+                tone="yellow"
+              />
+              <QuickAction
+                href="/commercial"
+                icon="file"
+                label="Request Quote"
+                tone="navy"
               />
             </div>
-          </div>
+          </section>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-              gap: 9,
-              marginTop: 17,
-            }}
-          >
-            {[
-              [
-                "Carriers",
-                airlineDirectory?.airlines.length ?? 0,
-                "reference network",
-              ],
-              [
-                "Providers connected",
-                configuredProviderCount,
-                "credentials/configuration",
-              ],
-              [
-                "Booking ready",
-                liveBookingProviderCount,
-                "providers with booking",
-              ],
-              [
-                "Tracking ready",
-                liveTrackingProviderCount,
-                "providers with status",
-              ],
-            ].map(([label, value, note]) => (
-              <div
-                key={String(label)}
-                style={{
-                  padding: "11px 12px",
-                  border: "1px solid #e5ebf2",
-                  borderRadius: 10,
-                  background: "rgba(255,255,255,.82)",
-                }}
-              >
-                <div
-                  className="card-muted"
-                  style={{
-                    fontSize: 9,
-                    textTransform: "uppercase",
-                    letterSpacing: ".05em",
-                  }}
-                >
-                  {label}
-                </div>
-                <strong
-                  style={{
-                    display: "block",
-                    fontSize: 20,
-                    letterSpacing: "-.03em",
-                    marginTop: 3,
-                  }}
-                >
-                  {String(value)}
-                </strong>
-                <div
-                  className="card-muted"
-                  style={{ fontSize: 8, marginTop: 2 }}
-                >
-                  {String(note)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {providerHealth.length > 0 && (
-          <div
-            style={{
-              padding: "13px 20px",
-              borderBottom: "1px solid #e7edf4",
-              background: "#fbfcfe",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: 10,
-                marginBottom: 8,
-              }}
-            >
-              <div>
-                <strong style={{ fontSize: 10 }}>Integration control</strong>
-                <div
-                  className="card-muted"
-                  style={{ fontSize: 8, marginTop: 2 }}
-                >
-                  Provider connectivity is credential-based. Configure an
-                  approved provider before AAL sends live requests.
-                </div>
-              </div>
-              <span className="status status-neutral">
-                {providerHealth.length} adapters
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-              {providerHealth.map((provider) => {
-                const configured = provider.configured === true;
-                const active = provider.active === true;
-                const code = String(provider.code || "PROVIDER");
-                return (
-                  <div
-                    key={code}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 7,
-                      padding: "7px 9px",
-                      border: "1px solid #e3e9f0",
-                      borderRadius: 8,
-                      background: "#fff",
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 7,
-                        height: 7,
-                        borderRadius: "50%",
-                        background: configured ? "#16a34a" : "#98a2b3",
-                      }}
-                    />
-                    <strong style={{ fontSize: 8 }}>{code}</strong>
-                    <span className="card-muted" style={{ fontSize: 7 }}>
-                      {active
-                        ? "ACTIVE"
-                        : configured
-                          ? "READY"
-                          : "NOT CONFIGURED"}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <div style={{ padding: 20 }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-              gap: 10,
-            }}
-          >
-            {filteredAirlines.map((airline) => {
-              const status = airlineConnectionLabel(airline);
-              const live = status === "LIVE ON THIS SEARCH";
-              const pathLabel = airlinePathLabel(airline);
-              return (
-                <article
-                  key={airline.iataCode}
-                  style={{
-                    minHeight: 178,
-                    padding: 13,
-                    border: "1px solid #e2e8f0",
-                    borderRadius: 12,
-                    background: "#fff",
-                    boxShadow: "0 2px 10px rgba(16,24,40,.025)",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: 9,
-                      alignItems: "flex-start",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: 9,
-                        alignItems: "center",
-                        minWidth: 0,
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: 42,
-                          height: 42,
-                          flex: "0 0 auto",
-                          display: "grid",
-                          placeItems: "center",
-                          borderRadius: 10,
-                          background: "#eff6ff",
-                          border: "1px solid #d8eaff",
-                          color: "#0b5cad",
-                          fontWeight: 900,
-                          fontSize: 12,
-                          letterSpacing: ".03em",
-                        }}
-                      >
-                        {airline.iataCode}
-                      </div>
-                      <div style={{ minWidth: 0 }}>
-                        <strong
-                          style={{
-                            display: "block",
-                            fontSize: 10,
-                            color: "#101828",
-                          }}
-                        >
-                          {airline.name}
-                        </strong>
-                        <span
-                          className="card-muted"
-                          style={{
-                            display: "block",
-                            fontSize: 8,
-                            marginTop: 2,
-                          }}
-                        >
-                          {airline.cargoBrand}
-                        </span>
-                      </div>
-                    </div>
-                    <span
-                      className={`status ${live ? "status-success" : "status-neutral"}`}
-                      style={{ whiteSpace: "nowrap" }}
-                    >
-                      {live ? "LIVE" : pathLabel}
-                    </span>
-                  </div>
-
-                  <div className="card-muted" style={{ fontSize: 8 }}>
-                    {airline.country} · {airline.region} · {airline.iataCode}/
-                    {airline.icaoCode}
-                  </div>
-
-                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                    {airline.capabilities.slice(0, 5).map((capability) => (
-                      <span
-                        key={capability}
-                        style={{
-                          padding: "3px 6px",
-                          borderRadius: 5,
-                          background: "#f5f7fa",
-                          border: "1px solid #e8edf2",
-                          color: "#475467",
-                          fontSize: 7,
-                          fontWeight: 800,
-                        }}
-                      >
-                        {capability}
-                      </span>
+          <section className="dashboard-lower-grid">
+            <div className="dashboard-card recent-card">
+              <DashboardCardHeader
+                eyebrow="EXECUTION"
+                title="Recent Shipments"
+                href="/shipments"
+              />
+              <div className="dashboard-table-wrap">
+                <table className="dashboard-table">
+                  <thead>
+                    <tr>
+                      <th>Tracking No.</th>
+                      <th>Origin → Destination</th>
+                      <th>Mode</th>
+                      <th>Status</th>
+                      <th>ETA</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shipments.map((shipment) => (
+                      <tr key={shipment.id}>
+                        <td>
+                          <Link
+                            href={`/shipments/${shipment.id}`}
+                            className="dashboard-link"
+                          >
+                            {shipment.referenceCode}
+                          </Link>
+                        </td>
+                        <td>
+                          {shipment.originCityPort ||
+                            shipment.originCountry ||
+                            "—"}{" "}
+                          →{" "}
+                          {shipment.destinationCityPort ||
+                            shipment.destinationCountry ||
+                            "—"}
+                        </td>
+                        <td>
+                          <span className="mode-cell">
+                            <Icon
+                              name={
+                                shipment.transportMode === "AIR"
+                                  ? "plane"
+                                  : shipment.transportMode === "SEA"
+                                    ? "ship"
+                                    : shipment.transportMode === "RAIL"
+                                      ? "train"
+                                      : "truck"
+                              }
+                              size={14}
+                            />{" "}
+                            {modeLabel(shipment.transportMode)}
+                          </span>
+                        </td>
+                        <td>
+                          <span className={statusTone(shipment.status)}>
+                            {shipment.status.replaceAll("_", " ")}
+                          </span>
+                        </td>
+                        <td>
+                          {shipment.eta
+                            ? new Date(shipment.eta).toLocaleDateString(
+                                undefined,
+                                { day: "2-digit", month: "short" },
+                              )
+                            : "—"}
+                        </td>
+                      </tr>
                     ))}
-                  </div>
-
-                  <div
-                    style={{
-                      marginTop: "auto",
-                      paddingTop: 7,
-                      borderTop: "1px solid #eef1f5",
-                    }}
-                  >
-                    <div
-                      className="card-muted"
-                      style={{ fontSize: 7, lineHeight: 1.45 }}
-                    >
-                      {airline.integrationNote}
-                    </div>
-                    <div style={{ display: "flex", gap: 10, marginTop: 7 }}>
-                      <a
-                        href={airline.cargoWebsite}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="card-muted"
-                        style={{
-                          fontSize: 7,
-                          textDecoration: "none",
-                          fontWeight: 800,
-                        }}
-                      >
-                        Cargo site ↗
-                      </a>
-                      <a
-                        href={airline.officialWebsite}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="card-muted"
-                        style={{
-                          fontSize: 7,
-                          textDecoration: "none",
-                          fontWeight: 800,
-                        }}
-                      >
-                        Airline ↗
-                      </a>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-          {!filteredAirlines.length && (
-            <div className="empty" style={{ marginTop: 12 }}>
-              No airline matches the current search.
-            </div>
-          )}
-        </div>
-      </section>
-
-      <div className="grid grid-3" style={{ marginTop: 15 }}>
-        <section className="card" style={{ gridColumn: "span 2" }}>
-          <div className="page-head" style={{ marginBottom: 10 }}>
-            <div>
-              <h2 className="card-title">Carrier options</h2>
-              <div className="card-muted">
-                {liveSearchConfigured
-                  ? `Live ${Array.isArray(integrationHealth?.liveSearchProviders) ? integrationHealth.liveSearchProviders.join(" · ") : String(integrationHealth?.provider || "airline")} availability`
-                  : "Live airline provider not connected; AAL planning remains available."}
+                    {!shipments.length && (
+                      <tr>
+                        <td colSpan={5} className="dashboard-empty">
+                          No shipments available.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span
-                className={`status ${planningFlight && !flights.length ? "status-neutral" : "status-success"}`}
-              >
-                {providerVerification?.status === "CONNECTED"
-                  ? "AIRLINE VERIFIED"
-                  : liveSearchConfigured
-                    ? "LIVE PROVIDER CONFIGURED"
-                    : planningFlight && !flights.length
-                      ? "AAL planning mode"
-                      : "Internal capacity"}
-              </span>
-              {liveSearchConfigured && (
-                <>
-                  <button
-                    className="btn"
-                    onClick={verifyProvider}
-                    disabled={verifyingProvider || verifyingAllProviders}
+
+            <div className="dashboard-card activity-card">
+              <DashboardCardHeader
+                eyebrow="OPERATIONS FEED"
+                title="Activity Feed"
+                href="/exceptions"
+              />
+              <div className="activity-feed">
+                {actions.slice(0, 5).map((item, index) => (
+                  <Link
+                    href={item.href}
+                    className="activity-item"
+                    key={`${item.title}-${index}`}
                   >
-                    {verifyingProvider ? "Testing…" : "Test active provider"}
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={verifyAllProviders}
-                    disabled={verifyingProvider || verifyingAllProviders}
-                  >
-                    {verifyingAllProviders
-                      ? "Testing airlines…"
-                      : "Test connected airlines"}
-                  </button>
-                </>
+                    <span className={`activity-icon activity-${index % 4}`}>
+                      <Icon
+                        name={
+                          index === 0
+                            ? "check"
+                            : index === 1
+                              ? "bell"
+                              : index === 2
+                                ? "truck"
+                                : "file"
+                        }
+                        size={14}
+                      />
+                    </span>
+                    <span className="activity-copy">
+                      <strong>{item.title}</strong>
+                      <small>{item.detail}</small>
+                    </span>
+                    <span className="activity-arrow">→</span>
+                  </Link>
+                ))}
+                {!actions.length && (
+                  <div className="dashboard-empty">
+                    No new operational activity.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="dashboard-brand-card">
+              <img
+                src="/branding/aal-brand.png"
+                alt="Aviation Africa Logistics Ltd — Global Reach African Roots"
+              />
+              <div className="dashboard-brand-overlay">
+                <span>SMARTER LOGISTICS</span>
+                <strong>Across Africa &amp; Beyond</strong>
+                <small>Air · Ocean · Road · Rail · Warehousing</small>
+              </div>
+            </div>
+          </section>
+
+          <section className="dashboard-bottom-grid">
+            <div className="dashboard-card compact-performance">
+              <DashboardCardHeader
+                eyebrow="FLEET & CAPACITY"
+                title="Operational readiness"
+              />
+              <Readiness
+                label="Vehicles available"
+                value={`${fleet.availableVehicles} / ${fleet.totalVehicles}`}
+                percent={fleet.vehicleUtilizationPercent}
+              />
+              <Readiness
+                label="Drivers available"
+                value={`${fleet.availableDrivers} / ${fleet.totalDrivers}`}
+                percent={fleet.driverUtilizationPercent}
+              />
+              <Readiness
+                label="On-time delivery"
+                value={pct(operations.onTimeRatePercent)}
+                percent={operations.onTimeRatePercent}
+              />
+            </div>
+            <div className="dashboard-card compact-performance">
+              <DashboardCardHeader
+                eyebrow="FINANCE"
+                title="Cash exposure"
+                href="/billing"
+              />
+              <Readiness
+                label="Receivables"
+                value={money(financial.receivables, currency)}
+                percent={Math.min(
+                  100,
+                  (financial.receivables / Math.max(1, financial.billed)) * 100,
+                )}
+              />
+              <Readiness
+                label="Collected"
+                value={money(financial.collected, currency)}
+                percent={Math.min(
+                  100,
+                  (financial.collected / Math.max(1, financial.billed)) * 100,
+                )}
+              />
+              <Readiness
+                label="Gross margin"
+                value={pct(financial.grossMarginPercent)}
+                percent={financial.grossMarginPercent}
+              />
+            </div>
+            <div className="dashboard-card compact-performance">
+              <DashboardCardHeader
+                eyebrow="EXCEPTIONS"
+                title="Priority attention"
+                href="/exceptions"
+              />
+              {exceptionsList.slice(0, 3).map((item) => (
+                <Link
+                  key={`${item.reference}-${item.type}`}
+                  href={`/shipments?q=${encodeURIComponent(item.reference)}`}
+                  className="priority-row"
+                >
+                  <span
+                    className={
+                      item.severity.toUpperCase() === "CRITICAL"
+                        ? "priority-dot red"
+                        : "priority-dot yellow"
+                    }
+                  />
+                  <span>
+                    <strong>{item.reference}</strong>
+                    <small>{item.message}</small>
+                  </span>
+                </Link>
+              ))}
+              {!exceptionsList.length && (
+                <div className="dashboard-empty">No open exceptions.</div>
               )}
             </div>
-          </div>
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Carrier</th>
-                  <th>Flight</th>
-                  <th>Departure</th>
-                  <th>Arrival</th>
-                  <th>Available</th>
-                  <th>Provider</th>
-                  <th>Source</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {displayFlights.map((flight) => (
-                  <tr
-                    key={flight.id}
-                    style={{
-                      background:
-                        selected?.id === flight.id ? "#f5f9ff" : undefined,
-                    }}
-                  >
-                    <td>
-                      <strong>
-                        {flight.carrierName || flight.carrierCode}
-                      </strong>
-                    </td>
-                    <td>{flight.flightNumber}</td>
-                    <td>{text(flight.departure)}</td>
-                    <td>{text(flight.arrival)}</td>
-                    <td>
-                      {flight.source === "AAL_PLANNING"
-                        ? "Request only"
-                        : flight.bookable
-                          ? "Available · bookable"
-                          : flight.availableReason ||
-                            "Available · not API-bookable"}
-                      {flight.totalPrice != null && (
-                        <div className="card-muted">
-                          {flight.currency || ""}{" "}
-                          {flight.totalPrice.toLocaleString()} ·{" "}
-                          {flight.rateName || "rate"}
-                        </div>
-                      )}
-                    </td>
-                    <td>{flight.providerCode || flight.source || "—"}</td>
-                    <td>{flight.source || "—"}</td>
-                    <td>
-                      <button
-                        className={`btn ${selected?.id === flight.id ? "btn-primary" : ""}`}
-                        disabled={
-                          flight.source !== "AAL_PLANNING" &&
-                          flight.bookable === false
-                        }
-                        onClick={() => setSelected(flight)}
-                      >
-                        {selected?.id === flight.id ? "Selected" : "Select"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {!displayFlights.length && (
-                  <tr>
-                    <td colSpan={8} className="empty">
-                      Search a lane and date, or assign a flight number and
-                      schedule to an air shipment.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          {Array.isArray(providerVerificationAll?.providers) && (
-            <div className="grid grid-3" style={{ marginTop: 10 }}>
-              {(
-                providerVerificationAll.providers as Array<
-                  Record<string, unknown>
-                >
-              ).map((row) => (
-                <div className="quick" key={String(row.provider)}>
-                  <strong>{String(row.provider)}</strong>
-                  <span>{String(row.status || "UNKNOWN")}</span>
-                  {row.latencyMs != null && (
-                    <div className="card-muted">
-                      {String(row.latencyMs)} ms · {String(row.offerCount ?? 0)}{" "}
-                      offers
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="card">
-          <h2 className="card-title">
-            {bookingFlight?.source === "AAL_PLANNING"
-              ? "Create booking request"
-              : "Secure this capacity"}
-          </h2>
-          <div className="card-muted" style={{ margin: "4px 0 12px" }}>
-            {bookingFlight?.source === "AAL_PLANNING"
-              ? "Create an auditable shipment-linked planning request. Live airline capacity is used when an external provider is configured."
-              : "The server reserves capacity transactionally and enforces the idempotency key."}
-          </div>
-          <div className="field">
-            <label>Shipment</label>
-            <select
-              value={shipmentId}
-              onChange={(e) => setShipmentId(e.target.value)}
-            >
-              <option value="">Select shipment</option>
-              {shipments.map((shipment) => (
-                <option value={shipment.id} key={shipment.id}>
-                  {shipment.referenceCode} · {shipment.clientName || "Client"}
-                </option>
-              ))}
-            </select>
-          </div>
-          {selectedShipment && (
-            <div className="quick" style={{ marginTop: 12 }}>
-              <strong>{selectedShipment.referenceCode}</strong>
-              <span>{selectedShipment.clientName || "Client"}</span>
-            </div>
-          )}
-          {bookingFlight && (
-            <div
-              style={{
-                marginTop: 12,
-                padding: 12,
-                borderRadius: 9,
-                background: "#f8fafc",
-                border: "1px solid var(--line)",
-                fontSize: 11,
-              }}
-            >
-              <strong>
-                {bookingFlight.carrierName} {bookingFlight.flightNumber}
-              </strong>
-              <div className="card-muted" style={{ marginTop: 4 }}>
-                {bookingFlight.origin} → {bookingFlight.destination}
-              </div>
-              <div className="card-muted">
-                {bookingFlight.source === "AAL_PLANNING"
-                  ? "AAL planning request — no external airline capacity is being claimed."
-                  : bookingFlight.bookable
-                    ? `Live airline option · ${bookingFlight.currency || ""} ${bookingFlight.totalPrice?.toLocaleString() || "price unavailable"}`
-                    : bookingFlight.availableReason ||
-                      "This option is not bookable through the connected provider."}
-              </div>
-            </div>
-          )}
-          <button
-            className="btn btn-primary"
-            style={{ width: "100%", justifyContent: "center", marginTop: 12 }}
-            disabled={
-              !bookingFlight ||
-              !shipmentId ||
-              booking ||
-              (bookingFlight.source !== "AAL_PLANNING" &&
-                bookingFlight.bookable === false)
-            }
-            onClick={book}
-          >
-            <Icon name="plane" size={15} />{" "}
-            {booking
-              ? "Submitting…"
-              : bookingFlight?.source === "AAL_PLANNING"
-                ? "Create booking request"
-                : "Request booking"}
-          </button>
-        </section>
-      </div>
-
-      <section className="card" style={{ marginTop: 15 }}>
-        <div className="page-head" style={{ marginBottom: 8 }}>
-          <div>
-            <h2 className="card-title">Recommended routes</h2>
-            <div className="card-muted">
-              Direct and one-connection options scored by transit time, capacity
-              scarcity and connection penalty.
-            </div>
-          </div>
-          <span className="status status-neutral">Decision support</span>
-        </div>
-        <div className="grid grid-3">
-          {routes.slice(0, 6).map((route) => (
-            <div
-              className="quick"
-              key={`${route.flightId}-${route.flightNumber}`}
-            >
-              <span>{route.carrierName || route.carrierCode}</span>
-              <strong>{route.flightNumber}</strong>
-              <div className="card-muted" style={{ marginTop: 5 }}>
-                {route.origin} → {route.destination}
-              </div>
-              <div className="card-muted">
-                Score {route.score.toFixed(1)} · Capacity{" "}
-                {route.availableCapacityKg.toLocaleString()} kg
-              </div>
-            </div>
-          ))}
-          {!routes.length && (
-            <div className="empty" style={{ gridColumn: "1/-1" }}>
-              Route recommendations appear after a search.
-            </div>
-          )}
-        </div>
-      </section>
-
-      <div className="grid grid-2" style={{ marginTop: 15 }}>
-        <section className="card">
-          <div className="page-head" style={{ marginBottom: 8 }}>
-            <div>
-              <h2 className="card-title">Airline bookings</h2>
-              <div className="card-muted">
-                Confirmed references, amendments and cancellations remain linked
-                to the shipment.
-              </div>
-            </div>
-            <span
-              className={`status ${externalConfigured ? "status-success" : "status-neutral"}`}
-            >
-              {externalConfigured
-                ? `LIVE · ${String(integrationHealth?.provider || "PROVIDER")}`
-                : "NOT CONNECTED"}
-            </span>
-          </div>
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Flight</th>
-                  <th>Status</th>
-                  <th>Reference</th>
-                  <th>Weight</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {bookings.map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      <strong>{row.flightNumber}</strong>
-                      <div className="card-muted">
-                        {row.serviceLevel || "STANDARD"}
-                      </div>
-                    </td>
-                    <td>{row.status}</td>
-                    <td>
-                      {row.confirmationNumber || row.providerReference || "—"}
-                    </td>
-                    <td>{row.confirmedWeightKg ?? row.requestedWeightKg} kg</td>
-                    <td>
-                      <button
-                        className="btn"
-                        disabled={row.status === "CANCELLED"}
-                        onClick={() => cancelBooking(row)}
-                      >
-                        Cancel
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {!bookings.length && (
-                  <tr>
-                    <td colSpan={5} className="empty">
-                      No airline bookings yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="card">
-          <div className="page-head" style={{ marginBottom: 8 }}>
-            <div>
-              <h2 className="card-title">Real-time ETA</h2>
-              <div className="card-muted">
-                Provider changes are preserved as an auditable timeline.
-              </div>
-            </div>
-            <button className="btn btn-primary" onClick={refreshShipmentEta}>
-              Refresh
-            </button>
-          </div>
-          <div className="metric-row">
-            <span>Provider</span>
-            <strong>
-              {integrationHealth?.mode === "INTERNAL_AAL"
-                ? "AAL internal planning"
-                : String(integrationHealth?.provider || "Not configured")}
-            </strong>
-          </div>
-          <div className="metric-row">
-            <span>
-              {integrationHealth?.mode === "INTERNAL_AAL"
-                ? "External integration"
-                : "Failed integration attempts"}
-            </span>
-            <strong>
-              {integrationHealth?.mode === "INTERNAL_AAL"
-                ? "Not configured"
-                : String(
-                    (
-                      integrationHealth?.attempts as
-                        | Record<string, unknown>
-                        | undefined
-                    )?.failed ?? 0,
-                  )}
-            </strong>
-          </div>
-          <div
-            className="quick"
-            style={{
-              marginTop: 12,
-              borderColor:
-                integrationHealth?.mode === "INTERNAL_AAL"
-                  ? "var(--aal-line)"
-                  : "var(--line)",
-              background: "var(--aal-panel-soft)",
-            }}
-          >
-            <strong>Integration status</strong>
-            <span>
-              {integrationHealth?.mode === "INTERNAL_AAL"
-                ? "AAL internal planning is operational. Configure an airline provider to enable live schedules, capacity, booking and flight-status synchronization."
-                : "External airline integration is connected."}
-            </span>
-          </div>
-          <div style={{ marginTop: 12 }}>
-            {etaHistory.slice(0, 6).map((event, index) => (
-              <div
-                className="quick"
-                key={`${String(event.id)}-${index}`}
-                style={{ marginTop: 7 }}
-              >
-                <strong>
-                  {String(event.reason || event.flightStatus || "UPDATE")}
-                </strong>
-                <span>{String(event.newEta || "No ETA")}</span>
-                <span className="card-muted">
-                  {String(event.source)} · {String(event.observedAt)}
-                </span>
-              </div>
-            ))}
-            {!etaHistory.length && selectedShipment && (
-              <div
-                className="quick"
-                style={{
-                  marginTop: 7,
-                  borderColor: "var(--aal-line)",
-                  background: "var(--aal-panel-soft)",
-                }}
-              >
-                <strong>Scheduled ETA</strong>
-                <span>
-                  {selectedShipment.eta
-                    ? new Date(selectedShipment.eta).toLocaleString()
-                    : "No ETA has been scheduled for this shipment."}
-                </span>
-                <span className="card-muted">
-                  {selectedShipment.flightNumber
-                    ? `Flight ${selectedShipment.flightNumber}`
-                    : "Assign a flight number on the shipment record."}
-                </span>
-              </div>
-            )}
-            {!etaHistory.length && !selectedShipment && (
-              <div className="empty">
-                Select an air shipment to view its scheduled ETA and refresh
-                live status.
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
+          </section>
+        </>
+      )}
     </main>
+  );
+}
+
+function DashboardKpi({
+  icon,
+  accent,
+  title,
+  value,
+  meta,
+  trend,
+  href,
+}: {
+  icon: IconName;
+  accent: string;
+  title: string;
+  value: string;
+  meta: string;
+  trend: string;
+  href: string;
+}) {
+  return (
+    <Link href={href} className={`dashboard-kpi dashboard-kpi-${accent}`}>
+      <span className="dashboard-kpi-icon">
+        <Icon name={icon} size={20} />
+      </span>
+      <span className="dashboard-kpi-copy">
+        <small>{title}</small>
+        <strong>{value}</strong>
+        <em>{trend}</em>
+        <span>{meta}</span>
+      </span>
+    </Link>
+  );
+}
+
+function DashboardCardHeader({
+  eyebrow,
+  title,
+  href,
+}: {
+  eyebrow: string;
+  title: string;
+  href?: string;
+}) {
+  return (
+    <div className="dashboard-card-header">
+      <div>
+        <span className="eyebrow">{eyebrow}</span>
+        <h2>{title}</h2>
+      </div>
+      {href && (
+        <Link href={href}>
+          View all <span>→</span>
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function QuickAction({
+  href,
+  icon,
+  label,
+  tone,
+}: {
+  href: string;
+  icon: IconName;
+  label: string;
+  tone: string;
+}) {
+  return (
+    <Link href={href} className={`quick-action quick-${tone}`}>
+      <Icon name={icon} size={17} />
+      <strong>{label}</strong>
+      <span>→</span>
+    </Link>
+  );
+}
+
+function MapPoint({
+  x,
+  y,
+  label,
+  tone,
+}: {
+  x: string;
+  y: string;
+  label: string;
+  tone: string;
+}) {
+  return (
+    <span className={`map-point map-${tone}`} style={{ left: x, top: y }}>
+      <i />
+      {label}
+    </span>
+  );
+}
+
+function Readiness({
+  label,
+  value,
+  percent,
+}: {
+  label: string;
+  value: string;
+  percent: number;
+}) {
+  return (
+    <div className="readiness-row">
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </div>
+      <div className="readiness-track">
+        <i style={{ width: `${Math.max(0, Math.min(100, percent || 0))}%` }} />
+      </div>
+    </div>
   );
 }

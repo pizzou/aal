@@ -152,3 +152,7 @@ integration:
   webhook:
     secret: ${INTEGRATION_WEBHOOK_SECRET:}
     allowed-hosts: ${INTEGRATION_WEBHOOK_ALLOWED_HOSTS:}
+
+# Control-tower aggregate query guard.
+dashboard:
+  query-timeout-seconds: ${DASHBOARD_QUERY_TIMEOUT_SECONDS:5}

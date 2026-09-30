@@ -11,6 +11,7 @@ import {
 import {
   authApi,
   AuthSessionResponse,
+  COOKIE_SESSION_SENTINEL,
   clearAccessToken,
   getAccessToken,
   setAccessToken,
@@ -101,6 +102,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     const storedToken = getAccessToken();
     const storedContext = readStoredAuthContext();
+    const pathname =
+      typeof window !== "undefined" ? window.location.pathname : "/";
 
     const clearLocalSession = () => {
       clearAccessToken();
@@ -112,14 +115,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     /*
-     * Do not hold the entire application behind a remote session round-trip.
-     * On Render, a cold backend can take several seconds to wake. A valid JWT
-     * plus the previously validated tenant/role is enough to render the UI;
-     * protected API calls remain the server-side authorization boundary. The
-     * session endpoint is validated in the background and immediately clears
-     * state when the token is actually rejected.
+     * A successful OTP login persists both the bearer token and the validated
+     * tenant/role context. Restore both synchronously on browser refresh so a
+     * slow backend can never turn a refresh into an apparent logout.
+     * Server-side APIs remain the source of truth for authorization.
      */
-    if (!storedToken || !storedContext) {
+    if (storedToken && storedContext) {
+      currentTenant = storedContext.tenantId;
+      setTenantId(storedContext.tenantId);
+      setRole(storedContext.role);
+      setAccessTokenState(storedToken);
+      setIsLoading(false);
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const publicPage =
+      pathname === "/" ||
+      pathname === "/login" ||
+      pathname === "/forgot-password" ||
+      pathname === "/reset-password" ||
+      pathname === "/quote" ||
+      pathname === "/book" ||
+      pathname === "/track" ||
+      pathname.startsWith("/track/") ||
+      pathname.startsWith("/quote/view/") ||
+      pathname.startsWith("/quote/results/");
+
+    /*
+     * Public pages must render immediately. In particular /login cannot wait
+     * for Render to wake the API service.
+     */
+    if (publicPage && !storedToken) {
       clearLocalSession();
       setIsLoading(false);
       return () => {
@@ -127,28 +156,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
     }
 
-    currentTenant = storedContext.tenantId;
-    setTenantId(storedContext.tenantId);
-    setRole(storedContext.role);
-    setAccessTokenState(storedToken);
-    setIsLoading(false);
-
+    /*
+     * Recover a cookie-backed session when storage was unavailable/cleared.
+     * This path is only needed for protected pages with no complete local
+     * bearer session. A failed remote lookup is treated as a transient failure,
+     * not as evidence that an existing credential is invalid.
+     */
     void (async () => {
       try {
-        const session: AuthSessionResponse = await authApi.session();
-        if (cancelled || getAccessToken() !== storedToken) return;
+        const session: AuthSessionResponse = await authApi.session({
+          cache: "no-store",
+        });
+
+        if (cancelled) return;
 
         if (!session.authenticated || !session.tenantId || !session.role) {
-          clearLocalSession();
-          return;
-        }
-
-        if (session.role === "CUSTOMER") {
-          try {
-            await authApi.logout();
-          } catch {
-            // Local authentication state must still be cleared.
-          }
           clearLocalSession();
           return;
         }
@@ -157,7 +179,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         writeStoredAuthContext(session.tenantId, session.role);
         setTenantId(session.tenantId);
         setRole(session.role);
-        setAccessTokenState(storedToken);
+
+        if (storedToken) {
+          setAccessTokenState(storedToken);
+        } else {
+          setAccessToken(COOKIE_SESSION_SENTINEL);
+          setAccessTokenState(COOKIE_SESSION_SENTINEL);
+        }
 
         if (
           session.mustChangePassword &&
@@ -165,24 +193,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           window.location.pathname !== "/account/security"
         ) {
           window.location.replace("/account/security");
+          return;
         }
-      } catch (error) {
-        if (cancelled || getAccessToken() !== storedToken) return;
-
-        const isAuthenticationFailure =
-          error instanceof Error &&
-          /401|403|authentication required|invalid or expired token|token revoked/i.test(
-            error.message,
-          );
+      } catch {
+        if (cancelled) return;
 
         /*
-         * Network/cold-start failures intentionally do not clear the locally
-         * restored session. The next protected request will retry and the
-         * normal 401 handling will evict a genuinely expired token.
+         * A timeout/cold-start/network failure is not an authentication failure.
+         * Keep an existing bearer session intact. If no credential exists, the
+         * protected-route shell will redirect once loading has finished.
          */
-        if (isAuthenticationFailure) {
+        if (!storedToken) {
           clearLocalSession();
         }
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
     })();
 

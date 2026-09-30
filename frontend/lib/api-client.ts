@@ -23,14 +23,18 @@ function readStoredAccessToken(): string | null {
 
     // Older builds used the literal string "cookie" as a UI-only marker.
     // It is not a JWT and must never be sent as `Authorization: Bearer cookie`.
-    if (
-      !normalized ||
-      normalized === "cookie" ||
-      normalized === COOKIE_SESSION_SENTINEL
-    ) {
+    if (!normalized || normalized === "cookie") {
       window.sessionStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
       accessToken = null;
       return null;
+    }
+
+    // A real HttpOnly NLS_SESSION can act as a secure browser-session fallback
+    // when the bearer token is unavailable. The sentinel is deliberately never
+    // placed into an Authorization header.
+    if (normalized === COOKIE_SESSION_SENTINEL) {
+      accessToken = COOKIE_SESSION_SENTINEL;
+      return accessToken;
     }
 
     accessToken = normalized;
@@ -77,14 +81,24 @@ async function confirmAuthenticationExpired(): Promise<boolean> {
   if (!token) return true;
 
   try {
-    const response = await fetch(`${API_BASE}/api/auth/session`, {
-      method: "GET",
-      credentials: "include",
-      cache: "no-store",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const headers = new Headers();
+    if (token !== COOKIE_SESSION_SENTINEL) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+
+    const response = await fetchWithTimeout(
+      `${API_BASE}/api/auth/session`,
+      {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers,
+      },
+      3_000,
+    );
     return response.status === 401 || response.status === 403;
   } catch {
+    // A timeout/network failure is not proof that the credentials are invalid.
     return false;
   }
 }
@@ -203,9 +217,10 @@ function applyAuthenticationHeader(headers: Headers, path: string): void {
 }
 
 const GET_CACHE_TTL_MS = 3_000;
-const GET_STALE_GRACE_MS = 30_000;
-const GET_TIMEOUT_MS = 12_000;
-const AUTH_SESSION_TIMEOUT_MS = 7_000;
+const GET_STALE_GRACE_MS = 60_000;
+const GET_TIMEOUT_MS = 8_000;
+const DASHBOARD_TIMEOUT_MS = 15_000;
+const AUTH_SESSION_TIMEOUT_MS = 5_000;
 const AIR_CARGO_SEARCH_TIMEOUT_MS = 40_000;
 const getCache = new Map<
   string,
@@ -215,20 +230,25 @@ const getInflight = new Map<string, Promise<unknown>>();
 
 function requestTimeoutFor(path: string): number {
   if (path === "/api/auth/session") return AUTH_SESSION_TIMEOUT_MS;
+  if (path.startsWith("/api/command-center/advanced"))
+    return DASHBOARD_TIMEOUT_MS;
   return path === "/api/air-cargo/flights/search"
     ? AIR_CARGO_SEARCH_TIMEOUT_MS
     : GET_TIMEOUT_MS;
 }
 
 function shouldRetryRequest(method: string, path: string): boolean {
-  // Session is a background validation call. Do not make a backend cold start
-  // cost the user multiple extra round trips before the UI can render.
+  // Expensive/idempotent reads get at most one retry, and only for gateway
+  // failures. Timeouts are surfaced promptly instead of multiplying the wait.
   if (path === "/api/auth/session") return false;
-  return (
-    method === "GET" ||
-    method === "HEAD" ||
-    path === "/api/air-cargo/flights/search"
-  );
+  return method === "GET" || method === "HEAD";
+}
+
+function maxAttemptsFor(method: string, path: string): number {
+  if (!shouldRetryRequest(method, path)) return 1;
+  if (path.startsWith("/api/command-center/advanced")) return 1;
+  if (path.startsWith("/api/platform/health")) return 1;
+  return 2;
 }
 
 function retryDelay(attempt: number): number {
@@ -304,9 +324,10 @@ export async function apiFetch<T>(
     headers.set("X-CSRF-Token", await ensureCsrf());
   }
 
+  const bypassLocalCache = options.cache === "no-store";
   const cacheKey =
     method === "GET" ? `${path}|${readStoredAccessToken() ?? "session"}` : "";
-  if (method === "GET") {
+  if (method === "GET" && !bypassLocalCache) {
     const cached = getCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value as T;
@@ -318,7 +339,7 @@ export async function apiFetch<T>(
   }
 
   const doRequest = async (): Promise<Response> => {
-    const maxAttempts = shouldRetryRequest(method, path) ? 3 : 1;
+    const maxAttempts = maxAttemptsFor(method, path);
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const response = await fetchWithTimeout(
@@ -334,8 +355,16 @@ export async function apiFetch<T>(
           return response;
         }
       } catch (error) {
-        if (!shouldRetryRequest(method, path) || attempt === maxAttempts - 1)
+        // Never retry an expensive dashboard request after a client-side timeout.
+        // Render cold-start/network failures should surface quickly and can use
+        // a previously cached snapshot where available.
+        if (
+          !shouldRetryRequest(method, path) ||
+          path.startsWith("/api/command-center/advanced") ||
+          attempt === maxAttempts - 1
+        ) {
           throw error;
+        }
       }
       await new Promise((resolve) =>
         window.setTimeout(resolve, retryDelay(attempt)),
@@ -345,7 +374,8 @@ export async function apiFetch<T>(
   };
 
   const requestPromise = doRequest();
-  if (method === "GET") getInflight.set(cacheKey, requestPromise);
+  if (method === "GET" && !bypassLocalCache)
+    getInflight.set(cacheKey, requestPromise);
 
   let response: Response;
   try {
@@ -355,7 +385,7 @@ export async function apiFetch<T>(
     // has a recent successful snapshot. Never use stale data for a mutation or
     // an explicit HTTP response such as 401/403/404. Network/timeout failures
     // are the safe case for continuity.
-    if (method === "GET") {
+    if (method === "GET" && !bypassLocalCache) {
       const stale = getCache.get(cacheKey);
       const staleAvailable = stale && stale.staleUntil > Date.now();
       const message = error instanceof Error ? error.message : String(error);
@@ -369,7 +399,7 @@ export async function apiFetch<T>(
     }
     throw error;
   } finally {
-    if (method === "GET") getInflight.delete(cacheKey);
+    if (method === "GET" && !bypassLocalCache) getInflight.delete(cacheKey);
   }
 
   if (!response.ok) {
@@ -414,7 +444,7 @@ export async function apiFetch<T>(
   if (!contentType.includes("application/json")) return undefined as T;
 
   const value = (await response.json()) as T;
-  if (method === "GET") {
+  if (method === "GET" && !bypassLocalCache) {
     const now = Date.now();
     getCache.set(cacheKey, {
       expiresAt: now + GET_CACHE_TTL_MS,
@@ -467,7 +497,11 @@ export const authApi = {
       body: JSON.stringify({ otpChallengeToken }),
     }),
 
-  session: () => apiFetch<AuthSessionResponse>("/api/auth/session"),
+  session: (options: RequestInit = {}) =>
+    apiFetch<AuthSessionResponse>("/api/auth/session", {
+      cache: "no-store",
+      ...options,
+    }),
 
   logout: () => apiFetch<void>("/api/auth/logout", { method: "POST" }),
   forgotPassword: (email: string) =>
@@ -689,7 +723,7 @@ export const financeAccountsApi = {
 };
 
 export const shipmentsApi = {
-  list: (params: ShipmentListParams = {}) => {
+  list: (params: ShipmentListParams = {}, options: RequestInit = {}) => {
     const query = new URLSearchParams();
 
     if (params.page != null)
@@ -712,6 +746,7 @@ export const shipmentsApi = {
     const encodedQuery = query.toString();
     return apiFetch<Page<Shipment>>(
       `/api/shipments${encodedQuery ? `?${encodedQuery}` : ""}`,
+      options,
     );
   },
 
@@ -945,8 +980,11 @@ export interface OperationalControlTower {
 }
 
 export const enterpriseControlTowerApi = {
-  operational: () =>
-    apiFetch<OperationalControlTower>("/api/v1/control-tower/operational"),
+  operational: (options: RequestInit = {}) =>
+    apiFetch<OperationalControlTower>(
+      "/api/v1/control-tower/operational",
+      options,
+    ),
 };
 
 export const commandCenterApi = {
@@ -963,9 +1001,10 @@ export const commandCenterApi = {
     apiFetch<DailyOperationsResponse>(
       `/api/command-center/daily-operations?date=${encodeURIComponent(date)}`,
     ),
-  advanced: (asOf?: string) =>
+  advanced: (asOf?: string, options: RequestInit = {}) =>
     apiFetch<AdvancedDashboard>(
       `/api/command-center/advanced${asOf ? `?asOf=${encodeURIComponent(asOf)}` : ""}`,
+      options,
     ),
 };
 
@@ -1908,7 +1947,8 @@ export const operationsApi = {
       `/api/operations/tenders/${id}/reject${note ? `?note=${encodeURIComponent(note)}` : ""}`,
       { method: "POST" },
     ),
-  fleetLive: () => apiFetch<FleetLive[]>("/api/operations/fleet/live"),
+  fleetLive: (options: RequestInit = {}) =>
+    apiFetch<FleetLive[]>("/api/operations/fleet/live", options),
 };
 
 export const commercialApi = {
@@ -2003,13 +2043,13 @@ export const commercialApi = {
 };
 
 export const platformHealthApi = {
-  current: () =>
+  current: (options: RequestInit = {}) =>
     apiFetch<{
       status: string;
       healthy: boolean;
       checkedAt: string;
       components: Record<string, unknown>;
-    }>("/api/platform/health"),
+    }>("/api/platform/health", options),
 };
 
 export function openOperationsEventStream(handlers: {

@@ -1,7 +1,14 @@
 import { test, expect } from "@playwright/test";
 
-const email = process.env.E2E_USER_EMAIL;
-const password = process.env.E2E_USER_PASSWORD;
+type PlaywrightRuntimeGlobal = typeof globalThis & {
+  process?: {
+    env?: Record<string, string | undefined>;
+  };
+};
+
+const env = (globalThis as PlaywrightRuntimeGlobal).process?.env ?? {};
+const email = env.E2E_USER_EMAIL;
+const password = env.E2E_USER_PASSWORD;
 
 test.describe("AAL authenticated smoke", () => {
   test.skip(
@@ -17,7 +24,7 @@ test.describe("AAL authenticated smoke", () => {
 
     // If OTP is enabled, the application must present the OTP challenge rather than silently bypassing it.
     if (await page.getByLabel(/otp|verification code/i).count()) {
-      const otp = process.env.E2E_OTP;
+      const otp = env.E2E_OTP;
       test.skip(
         !otp,
         "OTP is enabled; set E2E_OTP to run the full authenticated smoke",

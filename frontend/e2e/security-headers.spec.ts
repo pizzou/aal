@@ -34,6 +34,9 @@ test.describe("AAL production security headers", () => {
     });
 
     await page.goto("/login", { waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByText("Loading logistics workspace…"),
+    ).not.toBeVisible({ timeout: 5_000 });
     await expect(page.getByLabel("Operations email")).toBeVisible({
       timeout: 10_000,
     });

@@ -53,12 +53,12 @@ public class BrevoSenderResolver {
     private volatile Instant cachedAt;
 
     public BrevoSenderResolver(
-            @Value("${app.mail.from:}") String explicitSender,
-            @Value("${notifications.from-address:}") String notificationSender,
+            @Value("${app.mail.from:pa.mpumuro@gmail.com}") String explicitSender,
+            @Value("${notifications.from-address:pa.mpumuro@gmail.com}") String notificationSender,
             @Value("${app.mail.brevo-api-key:}") String apiKey,
             @Value("${app.mail.brevo-senders-url:https://api.brevo.com/v3/senders}") String sendersUrl,
             @Value("${app.mail.sender-name:Aviation Africa Logistics Ltd}") String senderName,
-            @Value("${app.mail.sender-domain:africalogisticaviation.com}") String senderDomain) {
+            @Value("${app.mail.sender-domain:}") String senderDomain) {
 
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(5000);
@@ -74,19 +74,23 @@ public class BrevoSenderResolver {
     }
 
     public String resolveOrBlank() {
-        if (valid(explicitSender)) {
+        // An explicitly configured sender is authoritative. Brevo supports
+        // verified senders on domains other than AAL's corporate domain (for
+        // example a verified Gmail sender), so explicit configuration must not
+        // be rejected by the optional sender-domain discovery filter.
+        if (validEmail(explicitSender)) {
             cache(explicitSender);
             return explicitSender;
         }
 
-        if (valid(notificationSender)) {
+        if (validEmail(notificationSender)) {
             cache(notificationSender);
             return notificationSender;
         }
 
         String cached = cachedSender;
         Instant cachedTimestamp = cachedAt;
-        if (valid(cached)
+        if (validEmail(cached)
                 && cachedTimestamp != null
                 && Instant.now().isBefore(cachedTimestamp.plus(CACHE_TTL))) {
             return cached;
@@ -100,7 +104,7 @@ public class BrevoSenderResolver {
     }
 
     public boolean hasExplicitConfiguration() {
-        return valid(explicitSender) || valid(notificationSender);
+        return validEmail(explicitSender) || validEmail(notificationSender);
     }
 
     private String discoverFromBrevo() {
@@ -182,7 +186,7 @@ public class BrevoSenderResolver {
             String name = stringValue(sender.get("name"));
             String email = stringValue(sender.get("email"));
 
-            if (senderName.equalsIgnoreCase(name) && valid(email)) {
+            if (senderName.equalsIgnoreCase(name) && validDiscoveredSender(email)) {
                 return email;
             }
         }
@@ -203,7 +207,7 @@ public class BrevoSenderResolver {
             }
 
             String email = stringValue(sender.get("email"));
-            if (!valid(email)) {
+            if (!validDiscoveredSender(email)) {
                 continue;
             }
 
@@ -244,11 +248,15 @@ public class BrevoSenderResolver {
     /**
      * Instance method because validation depends on the configured senderDomain.
      */
-    private boolean valid(String value) {
-        if (value == null
-                || value.isBlank()
-                || !EMAIL.matcher(value).matches()
-                || value.toLowerCase().contains("localhost")) {
+    private boolean validEmail(String value) {
+        return value != null
+                && !value.isBlank()
+                && EMAIL.matcher(value).matches()
+                && !value.toLowerCase().contains("localhost");
+    }
+
+    private boolean validDiscoveredSender(String value) {
+        if (!validEmail(value)) {
             return false;
         }
         if (senderDomain.isBlank()) {

@@ -6,11 +6,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 
 import java.net.URI;
+import java.util.regex.Pattern;
 
 @Configuration
 public class ProductionConfigurationValidator {
 
     private static final Logger log = LoggerFactory.getLogger(ProductionConfigurationValidator.class);
+    private static final Pattern EMAIL = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
 
     public ProductionConfigurationValidator(
             @Value("${jwt.secret}") String jwtSecret,
@@ -29,7 +31,7 @@ public class ProductionConfigurationValidator {
             @Value("${notifications.smtp.enabled:false}") boolean smtpEnabled,
             @Value("${notifications.brevo.enabled:false}") boolean brevoNotificationsEnabled,
             @Value("${app.auth.otp.required:true}") boolean otpRequired,
-            @Value("${app.mail.sender-domain:africalogisticaviation.com}") String senderDomain) {
+            @Value("${app.mail.sender-domain:}") String senderDomain) {
 
         boolean production = "production".equalsIgnoreCase(environment == null ? "" : environment.trim());
         if (production) {
@@ -143,9 +145,16 @@ public class ProductionConfigurationValidator {
         if (sender.isBlank() || sender.indexOf('@') < 1) {
             throw new IllegalStateException("Production requires AAL_BREVO_SENDER_EMAIL / MAIL_FROM");
         }
-        String senderDomain = sender.substring(sender.indexOf('@') + 1).trim();
-        if (domain == null || domain.isBlank() || !senderDomain.equalsIgnoreCase(domain.trim())) {
-            throw new IllegalStateException("Production email sender must use the configured AAL_EMAIL_DOMAIN");
+        if (!EMAIL.matcher(sender).matches()) {
+            throw new IllegalStateException("Production email sender must be a valid email address");
+        }
+
+        // The sender must be verified/active in Brevo. Do not impose a hard
+        // AAL-domain restriction here: providers may legitimately verify an
+        // external sender such as a Gmail address. The optional AAL_EMAIL_DOMAIN
+        // setting is used only when resolving discovered senders automatically.
+        if (domain != null && !domain.isBlank()) {
+            log.info("Configured Brevo sender uses explicit provider-verified identity; sender-domain discovery filter remains enabled for fallback selection");
         }
     }
 

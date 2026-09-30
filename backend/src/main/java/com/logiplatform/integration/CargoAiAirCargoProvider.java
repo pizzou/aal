@@ -65,6 +65,8 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
     private final String bookingPath;
     private final String trackPath;
     private final String cancellationPath;
+    private final String awbPath;
+    private final String awbMessageType;
     private final String apiKey;
     private final String email;
     private final String iata;
@@ -85,6 +87,8 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
             @Value("${aircargo.cargoai.booking-path:}") String bookingPath,
             @Value("${aircargo.cargoai.track-path:}") String trackPath,
             @Value("${aircargo.cargoai.cancel-path:}") String cancellationPath,
+            @Value("${aircargo.cargoai.awb-path:}") String awbPath,
+            @Value("${aircargo.cargoai.awb-message-type:${AIRCARGO_CARGOAI_AWB_MESSAGE_TYPE:FWB}}") String awbMessageType,
             @Value("${aircargo.cargoai.api-key:${AIRCARGO_CARGOAI_API_KEY:}}") String apiKey,
             @Value("${aircargo.cargoai.user.email:${AIRCARGO_CARGOAI_USER_EMAIL:}}") String email,
             @Value("${aircargo.cargoai.user.iata:${AIRCARGO_CARGOAI_USER_IATA:}}") String iata,
@@ -111,6 +115,8 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         this.bookingPath = normalizePath(bookingPath, "");
         this.trackPath = normalizePath(trackPath, "");
         this.cancellationPath = normalizePath(cancellationPath, "");
+        this.awbPath = normalizePath(awbPath, "");
+        this.awbMessageType = blank(awbMessageType) ? "FWB" : awbMessageType.trim().toUpperCase(Locale.ROOT);
 
         this.apiKey = trim(apiKey);
         this.email = trim(email);
@@ -198,11 +204,11 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
                 false,
                 bookingOn && !cancellationPath.isBlank(),
                 searchOn && !trackPath.isBlank(),
-                false,
+                bookingOn && !awbPath.isBlank(),
                 searchOn && !trackPath.isBlank(),
                 false,
-                bookingOn && !cancellationPath.isBlank(),
-                List.of("CARGOCONNECT", "IATA", "CARGO-XML"));
+                bookingOn,
+                List.of("CARGOCONNECT", "IATA", "CARGO-XML", "IATA-FWB", "IATA-FHL"));
     }
 
     @Override
@@ -556,8 +562,36 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
     public AwbSubmissionResult submitAwb(
             Map<String, Object> payload,
             String idempotencyKey) {
-        throw new UnsupportedOperationException(
-                "CargoAi FWB/FHL eAWB messaging is a separate provider capability");
+        requireBookingConfigured();
+        if (awbPath.isBlank()) {
+            throw new UnsupportedOperationException(
+                    "CargoAi FWB/FHL eAWB path is not configured for the AAL account");
+        }
+
+        Map<String, Object> requestPayload = new LinkedHashMap<>();
+        if (payload != null) {
+            requestPayload.putAll(payload);
+        }
+        requestPayload.putIfAbsent("messageType", awbMessageType);
+        requestPayload.putIfAbsent("source", "AAL");
+
+        JsonNode root = request(
+                HttpMethod.POST,
+                awbPath,
+                requestPayload,
+                idempotencyKey,
+                "AWB_SUBMIT");
+
+        String status = firstText(root, "status", "submissionStatus", "messageStatus");
+        status = blank(status) ? "SUBMITTED" : status.toUpperCase(Locale.ROOT);
+        String providerReference = firstText(
+                root,
+                "providerReference",
+                "messageId",
+                "reference",
+                "id");
+
+        return new AwbSubmissionResult(status, providerReference, root.toString());
     }
 
     private JsonNode track(String flightUuid) {

@@ -31,6 +31,22 @@ export function middleware(request: NextRequest) {
     "Permissions-Policy",
     "camera=(self), microphone=(), geolocation=(self)",
   );
+  const apiOrigin = (() => {
+    const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+    if (!configured) {
+      return process.env.NODE_ENV === "production"
+        ? "https://aal-ocst.onrender.com"
+        : "http://localhost:8080";
+    }
+    try {
+      return new URL(configured).origin;
+    } catch {
+      return process.env.NODE_ENV === "production"
+        ? "https://aal-ocst.onrender.com"
+        : "http://localhost:8080";
+    }
+  })();
+
   response.headers.set(
     "Content-Security-Policy",
     [
@@ -39,11 +55,16 @@ export function middleware(request: NextRequest) {
       "object-src 'none'",
       "frame-ancestors 'none'",
       "form-action 'self'",
-      "img-src 'self' data: blob: https:",
-      "font-src 'self' data: https:",
+      "img-src 'self' data: blob: https://aal-a.vercel.app",
+      "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
       `script-src 'self' 'nonce-${value}' 'strict-dynamic'`,
-      "connect-src 'self' https: wss:",
+      `connect-src 'self' ${apiOrigin} wss:`,
+      "worker-src 'self' blob:",
+      "manifest-src 'self'",
+      ...(process.env.NODE_ENV === "production"
+        ? ["upgrade-insecure-requests"]
+        : []),
     ].join("; "),
   );
 

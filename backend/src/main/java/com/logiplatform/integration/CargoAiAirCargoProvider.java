@@ -81,10 +81,10 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
             @Qualifier("cargoAiRestTemplate") RestTemplate rest,
             ObjectMapper mapper,
             @Value("${aircargo.cargoai.base-url:}") String baseUrl,
-            @Value("${aircargo.cargoai.search-path:/search}") String searchPath,
-            @Value("${aircargo.cargoai.booking-path:/book}") String bookingPath,
-            @Value("${aircargo.cargoai.track-path:/track}") String trackPath,
-            @Value("${aircargo.cargoai.cancel-path:/bookings}") String cancellationPath,
+            @Value("${aircargo.cargoai.search-path:}") String searchPath,
+            @Value("${aircargo.cargoai.booking-path:}") String bookingPath,
+            @Value("${aircargo.cargoai.track-path:}") String trackPath,
+            @Value("${aircargo.cargoai.cancel-path:}") String cancellationPath,
             @Value("${aircargo.cargoai.api-key:${AIRCARGO_CARGOAI_API_KEY:}}") String apiKey,
             @Value("${aircargo.cargoai.user.email:${AIRCARGO_CARGOAI_USER_EMAIL:}}") String email,
             @Value("${aircargo.cargoai.user.iata:${AIRCARGO_CARGOAI_USER_IATA:}}") String iata,
@@ -107,10 +107,10 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         this.metrics = metrics;
 
         this.baseUrl = strip(baseUrl);
-        this.searchPath = normalizePath(searchPath, "/search");
-        this.bookingPath = normalizePath(bookingPath, "/book");
-        this.trackPath = normalizePath(trackPath, "/track");
-        this.cancellationPath = normalizePath(cancellationPath, "/bookings");
+        this.searchPath = normalizePath(searchPath, "");
+        this.bookingPath = normalizePath(bookingPath, "");
+        this.trackPath = normalizePath(trackPath, "");
+        this.cancellationPath = normalizePath(cancellationPath, "");
 
         this.apiKey = trim(apiKey);
         this.email = trim(email);
@@ -131,12 +131,14 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
 
     private boolean searchConfigured() {
         return !baseUrl.isBlank()
+                && !searchPath.isBlank()
                 && !apiKey.isBlank()
                 && (!email.isBlank() || (!iata.isBlank() && !cass.isBlank()));
     }
 
     private boolean bookingConfigured() {
         return searchConfigured()
+                && !bookingPath.isBlank()
                 && !email.isBlank()
                 && !iata.isBlank()
                 && !cass.isBlank();
@@ -153,6 +155,20 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         }
         if (apiKey.isBlank()) {
             issues.add("AIRCARGO_CARGOAI_API_KEY is missing");
+        }
+        if (searchPath.isBlank()) {
+            issues.add(
+                    "AIRCARGO_CARGOAI_SEARCH_PATH is missing; use the path supplied for the AAL CargoCONNECT account");
+        }
+        if (bookingPath.isBlank()) {
+            issues.add(
+                    "AIRCARGO_CARGOAI_BOOKING_PATH is missing; use the path supplied for the AAL CargoCONNECT account");
+        }
+        if (trackPath.isBlank()) {
+            issues.add("AIRCARGO_CARGOAI_TRACK_PATH is missing; tracking will remain disabled");
+        }
+        if (cancellationPath.isBlank()) {
+            issues.add("AIRCARGO_CARGOAI_CANCEL_PATH is missing; cancellation will remain disabled");
         }
         if (email.isBlank() && (iata.isBlank() || cass.isBlank())) {
             issues.add("CargoAi user email or IATA+CASS credentials are missing");
@@ -180,12 +196,12 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
                 searchOn,
                 bookingOn,
                 false,
-                bookingOn,
-                searchOn,
+                bookingOn && !cancellationPath.isBlank(),
+                searchOn && !trackPath.isBlank(),
                 false,
-                searchOn,
+                searchOn && !trackPath.isBlank(),
                 false,
-                searchOn,
+                bookingOn && !cancellationPath.isBlank(),
                 List.of("CARGOCONNECT", "IATA", "CARGO-XML"));
     }
 

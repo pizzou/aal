@@ -6,6 +6,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_SUPERUSER}
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-aal_app}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      BACKUP_DB_USERNAME: ${BACKUP_DB_USERNAME:-aal_backup}
+      BACKUP_DB_PASSWORD: ${BACKUP_DB_PASSWORD}
     command:
       - postgres
       - -c
@@ -19,6 +23,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - walarchive:/wal-archive
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER} -d ${POSTGRES_DB}"]
@@ -82,19 +87,25 @@ services:
       SECURITY_CORS_ALLOWED_ORIGINS: ${SECURITY_CORS_ALLOWED_ORIGINS}
       APP_ENVIRONMENT: production
       APP_FRONTEND_URL: ${APP_FRONTEND_URL}
+      BACKUP_DB_USERNAME: ${BACKUP_DB_USERNAME:-aal_backup}
+      BACKUP_DB_PASSWORD: ${BACKUP_DB_PASSWORD}
       APP_AUTH_COOKIE_SAME_SITE: ${APP_AUTH_COOKIE_SAME_SITE:None}
       AAL_AUTH_OTP_REQUIRED: ${AAL_AUTH_OTP_REQUIRED:true}
       AAL_MAIL_ENABLED: ${AAL_MAIL_ENABLED:true}
-      AAL_BREVO_SENDER_EMAIL: ${AAL_BREVO_SENDER_EMAIL:pmpumuropizzou@gmail.com}
+      AAL_BREVO_SENDER_EMAIL: ${AAL_BREVO_SENDER_EMAIL:no-reply@africalogisticaviation.com}
       AAL_MAIL_SENDER_NAME: ${AAL_MAIL_SENDER_NAME:-Aviation Africa Logistics Ltd}
       BREVO_API_URL: ${BREVO_API_URL:-https://api.brevo.com/v3/smtp/email}
       BREVO_API_KEY: ${BREVO_API_KEY}
       NOTIFICATIONS_SMTP_ENABLED: ${NOTIFICATIONS_SMTP_ENABLED:false}
-      NOTIFICATIONS_FROM_ADDRESS: ${NOTIFICATIONS_FROM_ADDRESS:pmpumuropizzou@gmail.com}
+      NOTIFICATIONS_BREVO_ENABLED: ${NOTIFICATIONS_BREVO_ENABLED:true}
+      NOTIFICATIONS_FROM_ADDRESS: ${NOTIFICATIONS_FROM_ADDRESS:no-reply@africalogisticaviation.com}
+      AAL_EMAIL_DOMAIN: ${AAL_EMAIL_DOMAIN:africalogisticaviation.com}
       AAL_TENANT_ID: ${AAL_TENANT_ID:-7c7d3b7c-3f20-4d3d-9c11-6f7d8f2a6b01}
       AAL_TENANT_NAME: ${AAL_TENANT_NAME:-Aviation Africa Logistics Ltd}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       AAL_GPS_KAFKA_TOPIC: ${AAL_GPS_KAFKA_TOPIC:-aal.gps.position}
+      AIRCARGO_RECONCILIATION_ENABLED: ${AIRCARGO_RECONCILIATION_ENABLED:true}
+      AIRCARGO_ETA_POLL_ENABLED: ${AIRCARGO_ETA_POLL_ENABLED:true}
     expose: ["8080"]
 
   frontend:

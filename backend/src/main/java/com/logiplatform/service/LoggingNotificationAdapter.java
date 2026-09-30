@@ -6,14 +6,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * Safe default notification sender. It guarantees the notification subsystem has
+ * Safe default notification sender. It guarantees the notification subsystem
+ * has
  * a concrete NotificationSenderPort when SMTP is deliberately disabled.
  */
 @Component
-@ConditionalOnProperty(
-        name = "notifications.smtp.enabled",
-        havingValue = "false",
-        matchIfMissing = true)
+
+@ConditionalOnProperty(name = "notifications.brevo.enabled", havingValue = "false", matchIfMissing = true)
 public final class LoggingNotificationAdapter implements NotificationSenderPort {
 
     private static final Logger log = LoggerFactory.getLogger(LoggingNotificationAdapter.class);

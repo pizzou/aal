@@ -51,6 +51,9 @@ jwt:
 notifications:
   smtp:
     enabled: false
+  brevo:
+    enabled: false
+  from-address: no-reply@africalogisticaviation.com
 
 flightstatus:
   aviationstack:

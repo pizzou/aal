@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
  * Resolution order:
  * 1. Explicit AAL_BREVO_SENDER_EMAIL / NOTIFICATIONS_FROM_ADDRESS.
  * 2. A verified active sender from Brevo whose name matches the configured
- *    AAL sender name.
+ * AAL sender name.
  * 3. The only active Brevo sender when the account has exactly one.
  *
  * The discovery result is cached for a short period so OTP requests do not
@@ -35,14 +35,11 @@ import java.util.regex.Pattern;
 @Service
 public class BrevoSenderResolver {
 
-    private static final Logger log =
-            LoggerFactory.getLogger(BrevoSenderResolver.class);
+    private static final Logger log = LoggerFactory.getLogger(BrevoSenderResolver.class);
 
-    private static final Pattern EMAIL =
-            Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
+    private static final Pattern EMAIL = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
 
-    private static final Duration CACHE_TTL =
-            Duration.ofMinutes(10);
+    private static final Duration CACHE_TTL = Duration.ofMinutes(10);
 
     private final RestTemplate restTemplate;
     private final String explicitSender;
@@ -50,6 +47,7 @@ public class BrevoSenderResolver {
     private final String apiKey;
     private final String sendersUrl;
     private final String senderName;
+    private final String senderDomain;
 
     private volatile String cachedSender;
     private volatile Instant cachedAt;
@@ -59,10 +57,10 @@ public class BrevoSenderResolver {
             @Value("${notifications.from-address:}") String notificationSender,
             @Value("${app.mail.brevo-api-key:}") String apiKey,
             @Value("${app.mail.brevo-senders-url:https://api.brevo.com/v3/senders}") String sendersUrl,
-            @Value("${app.mail.sender-name:Aviation Africa Logistics Ltd}") String senderName) {
+            @Value("${app.mail.sender-name:Aviation Africa Logistics Ltd}") String senderName,
+            @Value("${app.mail.sender-domain:africalogisticaviation.com}") String senderDomain) {
 
-        SimpleClientHttpRequestFactory factory =
-                new SimpleClientHttpRequestFactory();
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(5000);
         factory.setReadTimeout(10000);
 
@@ -72,6 +70,7 @@ public class BrevoSenderResolver {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.sendersUrl = sendersUrl == null ? "" : sendersUrl.trim();
         this.senderName = senderName == null ? "" : senderName.trim();
+        this.senderDomain = normalizeDomain(senderDomain);
     }
 
     public String resolveOrBlank() {
@@ -118,7 +117,8 @@ public class BrevoSenderResolver {
                     sendersUrl,
                     HttpMethod.GET,
                     new HttpEntity<>(headers),
-                    new ParameterizedTypeReference<>() {});
+                    new ParameterizedTypeReference<>() {
+                    });
 
             if (!response.getStatusCode().is2xxSuccessful()
                     || response.getBody() == null) {
@@ -230,11 +230,32 @@ public class BrevoSenderResolver {
         return value == null ? "" : value.trim();
     }
 
-    private static boolean valid(String value) {
-        return value != null
-                && !value.isBlank()
-                && EMAIL.matcher(value).matches()
-                && !value.contains("localhost");
+    private static String normalizeDomain(String value) {
+        if (value == null) {
+            return "";
+        }
+        String domain = value.trim().toLowerCase();
+        while (domain.startsWith("@")) {
+            domain = domain.substring(1);
+        }
+        return domain;
+    }
+
+    /**
+     * Instance method because validation depends on the configured senderDomain.
+     */
+    private boolean valid(String value) {
+        if (value == null
+                || value.isBlank()
+                || !EMAIL.matcher(value).matches()
+                || value.toLowerCase().contains("localhost")) {
+            return false;
+        }
+        if (senderDomain.isBlank()) {
+            return true;
+        }
+        int at = value.lastIndexOf('@');
+        return at > 0 && value.substring(at + 1).equalsIgnoreCase(senderDomain);
     }
 
     private static String mask(String email) {

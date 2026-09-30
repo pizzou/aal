@@ -693,7 +693,7 @@ export default function AirCargoPage() {
         </div>
 
         <div className="airline-mini-grid">
-          {filteredAirlines.slice(0, 9).map((airline) => {
+          {filteredAirlines.slice(0, 6).map((airline) => {
             const status = airlineConnectionLabel(airline);
             const live = status === "LIVE ON THIS SEARCH";
             return (
@@ -728,7 +728,7 @@ export default function AirCargoPage() {
         {filteredAirlines.length > 9 && (
           <div className="airline-network-footer">
             <span>
-              {filteredAirlines.length - 9} more carriers are available in the
+              {filteredAirlines.length - 6} more carriers are available in the
               full directory.
             </span>
             <Link href="/air-cargo/integrations">

@@ -56,11 +56,12 @@ app:
     url: ${APP_FRONTEND_URL:https://aal-a.vercel.app}
   mail:
     enabled: ${AAL_MAIL_ENABLED:true}
-    from: ${AAL_BREVO_SENDER_EMAIL:${NOTIFICATIONS_FROM_ADDRESS:pmpumuropizzou@gmail.com}}
+    from: ${AAL_BREVO_SENDER_EMAIL:${NOTIFICATIONS_FROM_ADDRESS:no-reply@africalogisticaviation.com}}
     sender-name: ${AAL_MAIL_SENDER_NAME:Aviation Africa Logistics Ltd}
     brevo-url: ${BREVO_API_URL:https://api.brevo.com/v3/smtp/email}
     brevo-senders-url: ${BREVO_SENDERS_API_URL:https://api.brevo.com/v3/senders}
     brevo-api-key: ${BREVO_API_KEY:}
+    sender-domain: ${AAL_EMAIL_DOMAIN:africalogisticaviation.com}
   auth:
     otp:
       required: true
@@ -70,7 +71,9 @@ app:
 notifications:
   smtp:
     enabled: ${NOTIFICATIONS_SMTP_ENABLED:false}
-  from-address: ${NOTIFICATIONS_FROM_ADDRESS:${AAL_BREVO_SENDER_EMAIL:pmpumuropizzou@gmail.com}}
+  brevo:
+    enabled: ${NOTIFICATIONS_BREVO_ENABLED:true}
+  from-address: ${NOTIFICATIONS_FROM_ADDRESS:${AAL_BREVO_SENDER_EMAIL:no-reply@africalogisticaviation.com}}
 
 flightstatus:
   aviationstack:
@@ -91,6 +94,14 @@ management:
     enabled: ${MANAGEMENT_TRACING_ENABLED:false}
     sampling:
       probability: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:0.1}
+
+aircargo:
+  reconciliation:
+    enabled: ${AIRCARGO_RECONCILIATION_ENABLED:true}
+    interval-ms: ${AIRCARGO_RECONCILIATION_INTERVAL_MS:300000}
+  eta-poll:
+    enabled: ${AIRCARGO_ETA_POLL_ENABLED:true}
+    interval-ms: ${AIRCARGO_ETA_POLL_INTERVAL_MS:300000}
 
 aal:
   events:

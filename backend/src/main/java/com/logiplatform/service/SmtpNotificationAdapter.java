@@ -10,14 +10,16 @@ import org.springframework.stereotype.Component;
 /**
  * Active only when notifications.smtp.enabled=true — meaning someone has
  * deliberately configured real SMTP settings (spring.mail.host / username /
- * password, typically via environment variables, never committed). Spring Boot's
- * auto-configured JavaMailSender handles the actual SMTP protocol work; this class
+ * password, typically via environment variables, never committed). Spring
+ * Boot's
+ * auto-configured JavaMailSender handles the actual SMTP protocol work; this
+ * class
  * just adapts it to NotificationSenderPort.
  *
- * See NotificationSenderPort's Javadoc for why this is a genuinely complete
- * implementation (SMTP is a universal protocol) rather than another mock — and for
- * the standing caveat that it's never been compiled or tested against a real SMTP
- * server in this sandbox.
+ * Brevo transactional email is handled separately by MailService in the current
+ * AAL architecture, so this adapter must not carry a second
+ * ConditionalOnProperty
+ * annotation for notifications.brevo.enabled.
  */
 @Component
 @ConditionalOnProperty(name = "notifications.smtp.enabled", havingValue = "true")
@@ -26,8 +28,9 @@ public class SmtpNotificationAdapter implements NotificationSenderPort {
     private final JavaMailSender mailSender;
     private final String fromAddress;
 
-    public SmtpNotificationAdapter(JavaMailSender mailSender,
-                                    @Value("${notifications.from-address:no-reply@example.com}") String fromAddress) {
+    public SmtpNotificationAdapter(
+            JavaMailSender mailSender,
+            @Value("${notifications.from-address:no-reply@africalogisticaviation.com}") String fromAddress) {
         this.mailSender = mailSender;
         this.fromAddress = fromAddress;
     }

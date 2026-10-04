@@ -725,6 +725,31 @@ public class Shipment {
                 Instant.now();
     }
 
+    /**
+     * Controlled migration update for collection data coming from the
+     * Command Center invoice register. It intentionally does not expose a
+     * general-purpose setter to normal application code.
+     */
+    public void setImportedCollectionData(
+            BigDecimal amountPaid,
+            String importedPaymentStatus
+    ) {
+        BigDecimal value = amountPaid == null ? BigDecimal.ZERO : amountPaid;
+        validateNonNegative(value, "amountPaidByClient");
+        if (amountBilledToClient != null && value.compareTo(amountBilledToClient) > 0) {
+            throw new IllegalArgumentException("Imported amount paid by client cannot exceed billed revenue");
+        }
+        this.amountPaidByClient = value;
+        if (importedPaymentStatus != null && !importedPaymentStatus.isBlank()) {
+            this.paymentStatus = importedPaymentStatus.trim();
+        } else if (amountBilledToClient != null) {
+            this.paymentStatus = amountBilledToClient.subtract(value).signum() == 0
+                    ? "Paid"
+                    : "Outstanding";
+        }
+        this.updatedAt = Instant.now();
+    }
+
     private static void validateNonNegative(
             BigDecimal value,
             String name

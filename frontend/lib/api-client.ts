@@ -987,6 +987,31 @@ export const enterpriseControlTowerApi = {
     ),
 };
 
+export interface AalExcelImportResult {
+  shipments: number;
+  quotations: number;
+  invoices: number;
+  clients: number;
+  partners: number;
+  tasks: number;
+  expenses: number;
+}
+
+export const aalExcelImportApi = {
+  importWorkbooks: (files: File[]) => {
+    const body = new FormData();
+    files.forEach((file) => body.append("files", file));
+    return apiFetch<AalExcelImportResult>(
+      "/api/command-center/import/excel/batch",
+      {
+        method: "POST",
+        body,
+        // Do not set Content-Type manually. The browser must add the multipart boundary.
+      },
+    );
+  },
+};
+
 export const commandCenterApi = {
   updateShipment: (id: string, data: Record<string, unknown>) =>
     apiFetch<Shipment>(`/api/shipments/${id}/command-center`, {

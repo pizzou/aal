@@ -35,20 +35,6 @@ import java.util.*;
 @Service
 public class AalExcelImportService {
 
-        private static final Set<String> MONTHS = Set.of(
-                        "January",
-                        "February",
-                        "March",
-                        "April",
-                        "May",
-                        "June",
-                        "July",
-                        "August",
-                        "September",
-                        "October",
-                        "November",
-                        "December");
-
         private static final List<DateTimeFormatter> DATE_FORMATS = List.of(
                         DateTimeFormatter.ofPattern("M/d/yyyy"),
                         DateTimeFormatter.ofPattern("M/d/yy"),
@@ -109,13 +95,47 @@ public class AalExcelImportService {
          */
         @Transactional
         public ImportResult importWorkbook(MultipartFile file) {
-                validateWorkbook(file);
+                return importWorkbooks(List.of(file));
+        }
+
+        /**
+         * Imports one or more AAL workbooks as one migration operation.
+         *
+         * The importer deliberately does not depend on workbook filenames or
+         * worksheet names.  It identifies each worksheet from its column
+         * headers, so the client can upload the MOTHERSHIP and Command Center
+         * workbooks in any order and future copies of those workbooks can use
+         * different sheet names without changing the application.
+         */
+        @Transactional
+        public ImportResult importWorkbooks(List<MultipartFile> files) {
+                if (files == null || files.isEmpty()) {
+                        throw new IllegalArgumentException("At least one Excel workbook is required");
+                }
 
                 UUID tenant = TenantContext.getTenantId();
                 if (tenant == null) {
                         throw new IllegalStateException("No tenant context is available");
                 }
 
+                int shipments = 0, quotes = 0, invoices = 0, clients = 0, partners = 0, tasks = 0, expenses = 0;
+
+                for (MultipartFile file : files) {
+                        validateWorkbook(file);
+                        ImportResult result = importSingleWorkbook(file, tenant);
+                        shipments += result.shipments();
+                        quotes += result.quotations();
+                        invoices += result.invoices();
+                        clients += result.clients();
+                        partners += result.partners();
+                        tasks += result.tasks();
+                        expenses += result.expenses();
+                }
+
+                return new ImportResult(shipments, quotes, invoices, clients, partners, tasks, expenses);
+        }
+
+        private ImportResult importSingleWorkbook(MultipartFile file, UUID tenant) {
                 final byte[] bytes;
                 try {
                         bytes = file.getBytes();
@@ -136,31 +156,37 @@ public class AalExcelImportService {
                 try (InputStream input = new java.io.ByteArrayInputStream(bytes);
                      Workbook workbook = WorkbookFactory.create(input)) {
 
-                        // Two-pass import is intentional. Shipments must exist before invoices
-                        // are linked, regardless of workbook sheet ordering.
-                        List<Sheet> shipmentSheets = new ArrayList<>();
-                        List<Sheet> commercialSheets = new ArrayList<>();
-                        List<Sheet> supportingSheets = new ArrayList<>();
+                        int shipments = 0, quotes = 0, invoices = 0, clients = 0, partners = 0, tasks = 0, expenses = 0;
+
+                        // Keep the original two-pass safety guarantee: shipments are
+                        // materialized before invoices/quotes attempt to link to them,
+                        // regardless of worksheet ordering.
+                        List<SheetAndDescriptor> detected = new ArrayList<>();
                         for (Sheet sheet : workbook) {
-                                String name = sheet.getSheetName().trim();
-                                if (name.equalsIgnoreCase("Shipments") || MONTHS.contains(name)) shipmentSheets.add(sheet);
-                                else if (name.equalsIgnoreCase("Quotations") || name.equalsIgnoreCase("Invoices")) commercialSheets.add(sheet);
-                                else if (name.equalsIgnoreCase("Clients") || name.equalsIgnoreCase("Partners") || name.equalsIgnoreCase("Tasks") || name.equalsIgnoreCase("Expenses")) supportingSheets.add(sheet);
+                                SheetDescriptor descriptor = classifySheet(sheet);
+                                if (descriptor != null) {
+                                        detected.add(new SheetAndDescriptor(sheet, descriptor));
+                                }
                         }
 
-                        int shipments = 0, quotes = 0, invoices = 0, clients = 0, partners = 0, tasks = 0, expenses = 0;
-                        for (Sheet sheet : shipmentSheets) shipments += importShipments(sheet, tenant);
-                        for (Sheet sheet : supportingSheets) {
-                                String name = sheet.getSheetName().trim();
-                                if (name.equalsIgnoreCase("Clients")) clients += importClients(sheet, tenant);
-                                else if (name.equalsIgnoreCase("Partners")) partners += importPartners(sheet, tenant);
-                                else if (name.equalsIgnoreCase("Tasks")) tasks += importTasks(sheet, tenant);
-                                else if (name.equalsIgnoreCase("Expenses")) expenses += importExpenses(sheet, tenant);
+                        for (SheetAndDescriptor item : detected) {
+                                if (item.descriptor().kind() == SheetKind.SHIPMENT_MOTHERSHIP) {
+                                        shipments += importShipments(item.sheet(), tenant, item.descriptor().headerRow(), true);
+                                } else if (item.descriptor().kind() == SheetKind.SHIPMENT_COMMAND_CENTER) {
+                                        shipments += importShipments(item.sheet(), tenant, item.descriptor().headerRow(), false);
+                                }
                         }
-                        for (Sheet sheet : commercialSheets) {
-                                String name = sheet.getSheetName().trim();
-                                if (name.equalsIgnoreCase("Quotations")) quotes += importQuotes(sheet, tenant);
-                                else if (name.equalsIgnoreCase("Invoices")) invoices += importInvoices(sheet, tenant);
+
+                        for (SheetAndDescriptor item : detected) {
+                                switch (item.descriptor().kind()) {
+                                        case QUOTATION -> quotes += importQuotes(item.sheet(), tenant, item.descriptor().headerRow());
+                                        case INVOICE -> invoices += importInvoices(item.sheet(), tenant, item.descriptor().headerRow());
+                                        case CLIENT -> clients += importClients(item.sheet(), tenant, item.descriptor().headerRow());
+                                        case PARTNER -> partners += importPartners(item.sheet(), tenant, item.descriptor().headerRow());
+                                        case TASK -> tasks += importTasks(item.sheet(), tenant, item.descriptor().headerRow());
+                                        case EXPENSE -> expenses += importExpenses(item.sheet(), tenant, item.descriptor().headerRow());
+                                        default -> { }
+                                }
                         }
 
                         AalImportBatch.AalImportCounts counts = new AalImportBatch.AalImportCounts(
@@ -173,6 +199,64 @@ public class AalExcelImportService {
                         importBatches.save(batch);
                         throw new IllegalArgumentException("Unable to import AAL workbook: " + rootMessage(e), e);
                 }
+        }
+
+        private enum SheetKind {
+                SHIPMENT_MOTHERSHIP, SHIPMENT_COMMAND_CENTER, QUOTATION, INVOICE, CLIENT, PARTNER, TASK, EXPENSE
+        }
+
+        private record SheetDescriptor(SheetKind kind, int headerRow) {}
+
+        private record SheetAndDescriptor(Sheet sheet, SheetDescriptor descriptor) {}
+
+        private static SheetDescriptor classifySheet(Sheet sheet) {
+                if (sheet == null || sheet.getLastRowNum() < 0) return null;
+
+                SheetDescriptor best = null;
+                int maxRowsToInspect = Math.min(sheet.getLastRowNum(), 20);
+                for (int rowIndex = 0; rowIndex <= maxRowsToInspect; rowIndex++) {
+                        Map<String, Integer> h = headers(sheet.getRow(rowIndex));
+                        SheetKind kind = classifyHeaders(h);
+                        if (kind != null) {
+                                best = new SheetDescriptor(kind, rowIndex);
+                                break;
+                        }
+                }
+                return best;
+        }
+
+        private static SheetKind classifyHeaders(Map<String, Integer> h) {
+                if (has(h, "AWB NO", "NAME OF CLIENT", "DESTINATION", "AMOUNT BILLED TO CLIENT")) {
+                        return SheetKind.SHIPMENT_MOTHERSHIP;
+                }
+                if (has(h, "Shipment ID", "Client", "Destination City / Port", "Client Revenue (USD)")) {
+                        return SheetKind.SHIPMENT_COMMAND_CENTER;
+                }
+                if (has(h, "Quote ID", "Client", "Quoted Amount (USD)")) return SheetKind.QUOTATION;
+                if (has(h, "Invoice No.", "Client", "Invoice Amount")) return SheetKind.INVOICE;
+                if (has(h, "Client ID", "Client / Company", "Contact Person")) return SheetKind.CLIENT;
+                if (has(h, "Partner ID", "Company", "Contact Person")) return SheetKind.PARTNER;
+                if (has(h, "Task ID", "Task", "Due Date", "Status")) return SheetKind.TASK;
+                if (has(h, "Expense ID", "Date", "Original Amount")) return SheetKind.EXPENSE;
+                return null;
+        }
+
+        private static boolean has(Map<String, Integer> h, String... required) {
+                for (String value : required) {
+                        if (!h.containsKey(normalizeHeader(value))) return false;
+                }
+                return true;
+        }
+
+        private static String normalizeHeader(String value) {
+                return value == null ? "" : value.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
+        }
+
+        private static int findHeaderRow(Sheet sheet, String... required) {
+                for (int i = 0; i <= Math.min(sheet.getLastRowNum(), 20); i++) {
+                        if (has(headers(sheet.getRow(i)), required)) return i;
+                }
+                return -1;
         }
 
         private static void validateWorkbook(MultipartFile file) {
@@ -200,18 +284,11 @@ public class AalExcelImportService {
 
         private int importShipments(
                         Sheet sheet,
-                        UUID tenant) {
+                        UUID tenant,
+                        int headerRow,
+                        boolean monthly) {
 
-                boolean monthly = MONTHS.contains(
-                                sheet.getSheetName().trim());
-
-                int headerRow = monthly
-                                ? 0
-                                : 2;
-
-                int firstDataRow = monthly
-                                ? 1
-                                : 3;
+                int firstDataRow = headerRow + 1;
 
                 if (sheet.getLastRowNum() < firstDataRow) {
                         return 0;
@@ -273,7 +350,8 @@ public class AalExcelImportService {
                                                         reference)
                                         .orElse(null);
 
-                        if (shipment == null) {
+                        boolean created = shipment == null;
+                        if (created) {
 
                                 shipment = new Shipment(
                                                 tenant,
@@ -465,7 +543,7 @@ public class AalExcelImportService {
 
                                         monthly
                                                         ? paid
-                                                        : BigDecimal.ZERO,
+                                                        : decimal(row, headerMap, "Amount Paid"),
 
                                         supplierPaid,
 
@@ -570,7 +648,9 @@ public class AalExcelImportService {
                                                 saved.getReferenceCode());
                         }
 
-                        count++;
+                        if (created) {
+                                count++;
+                        }
                 }
 
                 return count;
@@ -578,14 +658,15 @@ public class AalExcelImportService {
 
         private int importQuotes(
                         Sheet sheet,
-                        UUID tenant) {
+                        UUID tenant,
+                        int headerRow) {
 
                 Map<String, Integer> headerMap = headers(
-                                sheet.getRow(2));
+                                sheet.getRow(headerRow));
 
                 int count = 0;
 
-                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                for (int rowIndex = headerRow + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
 
                         Row row = sheet.getRow(rowIndex);
 
@@ -715,14 +796,15 @@ public class AalExcelImportService {
 
         private int importInvoices(
                         Sheet sheet,
-                        UUID tenant) {
+                        UUID tenant,
+                        int headerRow) {
 
                 Map<String, Integer> headerMap = headers(
-                                sheet.getRow(2));
+                                sheet.getRow(headerRow));
 
                 int count = 0;
 
-                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                for (int rowIndex = headerRow + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
 
                         Row row = sheet.getRow(rowIndex);
 
@@ -818,6 +900,19 @@ public class AalExcelImportService {
 
                         invoices.save(invoice);
 
+                        // The Command Center keeps collections on its Invoices sheet,
+                        // while the MOTHERSHIP keeps them on the monthly shipment row.
+                        // Normalize both sources into the same canonical shipment field.
+                        if (shipmentId != null) {
+                                shipments.findByTenantIdAndReferenceCode(tenant, shipmentReference)
+                                                .ifPresent(shipment -> {
+                                                        shipment.setImportedCollectionData(
+                                                                        invoice.getAmountPaid(),
+                                                                        invoice.getStatus());
+                                                        shipments.save(shipment);
+                                                });
+                        }
+
                         count++;
                 }
 
@@ -826,14 +921,15 @@ public class AalExcelImportService {
 
         private int importClients(
                         Sheet sheet,
-                        UUID tenant) {
+                        UUID tenant,
+                        int headerRow) {
 
                 Map<String, Integer> headerMap = headers(
-                                sheet.getRow(2));
+                                sheet.getRow(headerRow));
 
                 int count = 0;
 
-                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                for (int rowIndex = headerRow + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
 
                         Row row = sheet.getRow(rowIndex);
 
@@ -915,14 +1011,15 @@ public class AalExcelImportService {
 
         private int importPartners(
                         Sheet sheet,
-                        UUID tenant) {
+                        UUID tenant,
+                        int headerRow) {
 
                 Map<String, Integer> headerMap = headers(
-                                sheet.getRow(2));
+                                sheet.getRow(headerRow));
 
                 int count = 0;
 
-                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                for (int rowIndex = headerRow + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
 
                         Row row = sheet.getRow(rowIndex);
 
@@ -1009,14 +1106,15 @@ public class AalExcelImportService {
 
         private int importTasks(
                         Sheet sheet,
-                        UUID tenant) {
+                        UUID tenant,
+                        int headerRow) {
 
                 Map<String, Integer> headerMap = headers(
-                                sheet.getRow(2));
+                                sheet.getRow(headerRow));
 
                 int count = 0;
 
-                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                for (int rowIndex = headerRow + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
 
                         Row row = sheet.getRow(rowIndex);
 
@@ -1099,14 +1197,15 @@ public class AalExcelImportService {
 
         private int importExpenses(
                         Sheet sheet,
-                        UUID tenant) {
+                        UUID tenant,
+                        int headerRow) {
 
                 Map<String, Integer> headerMap = headers(
-                                sheet.getRow(2));
+                                sheet.getRow(headerRow));
 
                 int count = 0;
 
-                for (int rowIndex = 3; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                for (int rowIndex = headerRow + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
 
                         Row row = sheet.getRow(rowIndex);
 
@@ -1255,10 +1354,7 @@ public class AalExcelImportService {
 
                 for (Cell cell : row) {
 
-                        String key = formatter
-                                        .formatCellValue(cell)
-                                        .trim()
-                                        .toLowerCase(Locale.ROOT);
+                        String key = normalizeHeader(formatter.formatCellValue(cell));
 
                         if (!key.isBlank()) {
 
@@ -1284,9 +1380,7 @@ public class AalExcelImportService {
                 }
 
                 Integer index = headers.get(
-                                header
-                                                .trim()
-                                                .toLowerCase(Locale.ROOT));
+                                normalizeHeader(header));
 
                 if (index == null) {
                         return "";
@@ -1380,9 +1474,7 @@ public class AalExcelImportService {
                 }
 
                 Integer index = headers.get(
-                                header
-                                                .trim()
-                                                .toLowerCase(Locale.ROOT));
+                                normalizeHeader(header));
 
                 if (index == null) {
                         return null;

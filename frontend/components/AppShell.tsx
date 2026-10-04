@@ -119,6 +119,13 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "GOVERNANCE",
+    label: "Legacy Excel Migration",
+    href: "/legacy-import",
+    icon: "file",
+    roles: ["ADMIN", "MANAGER"],
+  },
+  {
+    section: "GOVERNANCE",
     label: "Audit Trail",
     href: "/audit",
     icon: "shield",

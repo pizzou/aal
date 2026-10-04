@@ -113,6 +113,16 @@ public class ReportingService {
                         start,
                         end,
                         currency),
+                clientActivity(
+                        tenantId,
+                        start,
+                        end,
+                        currency),
+                destinationProfitability(
+                        tenantId,
+                        start,
+                        end,
+                        currency),
                 carrierProfitability(
                         tenantId,
                         start,
@@ -924,6 +934,116 @@ public class ReportingService {
     }
 
     /*
+     * Client activity mirrors the MOTHERSHIP client-count and repeat-business
+     * analysis while using canonical tenant-scoped shipment records.
+     */
+    private List<ClientActivity> clientActivity(
+            UUID tenantId,
+            LocalDate from,
+            LocalDate to,
+            String currency) {
+        return jdbc.query(
+                """
+                WITH shipment_activity AS (
+                    SELECT
+                        COALESCE(NULLIF(TRIM(client_name), ''), 'Unknown') AS customer,
+                        COALESCE(date_opened, created_at::date) AS shipment_date,
+                        COALESCE(amount_billed_to_client, 0) AS revenue,
+                        COALESCE(amount_paid_by_client, 0) AS collected,
+                        GREATEST(COALESCE(amount_billed_to_client, 0)
+                                 - COALESCE(amount_paid_by_client, 0), 0) AS outstanding,
+                        COALESCE(amount_billed_to_client, 0)
+                          - COALESCE(amount_paid_to_supply, supplier_cost, 0)
+                          - COALESCE(other_expenses, other_cost, 0) AS net_income
+                    FROM shipments
+                    WHERE tenant_id = ?
+                      AND UPPER(COALESCE(NULLIF(currency, ''), ?)) = ?
+                      AND COALESCE(date_opened, created_at::date)
+                          BETWEEN ?::date AND ?::date
+                )
+                SELECT customer,
+                       COUNT(*) AS shipments,
+                       COUNT(DISTINCT shipment_date) AS distinct_shipment_days,
+                       MIN(shipment_date) AS first_shipment_date,
+                       MAX(shipment_date) AS last_shipment_date,
+                       SUM(revenue) AS revenue,
+                       SUM(collected) AS collected,
+                       SUM(outstanding) AS outstanding,
+                       SUM(net_income) AS net_income
+                FROM shipment_activity
+                GROUP BY customer
+                ORDER BY shipments DESC, revenue DESC, customer
+                LIMIT 200
+                """,
+                (rs, rowNum) -> new ClientActivity(
+                        rs.getString("customer"),
+                        rs.getLong("shipments"),
+                        rs.getLong("distinct_shipment_days"),
+                        rs.getDate("first_shipment_date").toLocalDate(),
+                        rs.getDate("last_shipment_date").toLocalDate(),
+                        nz(rs.getBigDecimal("revenue")),
+                        nz(rs.getBigDecimal("collected")),
+                        nz(rs.getBigDecimal("outstanding")),
+                        nz(rs.getBigDecimal("net_income"))),
+                tenantId, currency, currency, from, to);
+    }
+
+    /*
+     * Destination performance uses the most specific known destination
+     * (city/port, then country, then address) and MOTHERSHIP-style net income.
+     */
+    private List<DestinationProfitability> destinationProfitability(
+            UUID tenantId,
+            LocalDate from,
+            LocalDate to,
+            String currency) {
+        return jdbc.query(
+                """
+                SELECT
+                    COALESCE(
+                        NULLIF(TRIM(destination_city_port), ''),
+                        NULLIF(TRIM(destination_country), ''),
+                        NULLIF(TRIM(destination_address), ''),
+                        'Unknown'
+                    ) AS destination,
+                    COUNT(*) AS shipments,
+                    COALESCE(SUM(COALESCE(gross_weight_kg, weight_kg, 0)), 0) AS gross_weight,
+                    COALESCE(SUM(COALESCE(chargeable_weight_kg,
+                                         GREATEST(COALESCE(gross_weight_kg,0),
+                                                  COALESCE(volumetric_weight_kg,0)), 0)), 0) AS chargeable_weight,
+                    COALESCE(SUM(COALESCE(amount_billed_to_client,0)),0) AS revenue,
+                    COALESCE(SUM(COALESCE(supplier_cost,0)),0) AS supplier_cost,
+                    COALESCE(SUM(COALESCE(other_cost,0)),0) AS other_cost,
+                    COALESCE(SUM(COALESCE(amount_billed_to_client,0)
+                        - COALESCE(amount_paid_to_supply, supplier_cost, 0)
+                        - COALESCE(other_expenses, other_cost, 0)),0) AS net_income
+                FROM shipments
+                WHERE tenant_id = ?
+                  AND UPPER(COALESCE(NULLIF(currency, ''), ?)) = ?
+                  AND COALESCE(date_opened, created_at::date)
+                      BETWEEN ?::date AND ?::date
+                GROUP BY 1
+                ORDER BY shipments DESC, revenue DESC, destination
+                LIMIT 200
+                """,
+                (rs, rowNum) -> {
+                    BigDecimal revenue = nz(rs.getBigDecimal("revenue"));
+                    BigDecimal netIncome = nz(rs.getBigDecimal("net_income"));
+                    return new DestinationProfitability(
+                            rs.getString("destination"),
+                            rs.getLong("shipments"),
+                            nz(rs.getBigDecimal("gross_weight")),
+                            nz(rs.getBigDecimal("chargeable_weight")),
+                            revenue,
+                            nz(rs.getBigDecimal("supplier_cost")),
+                            nz(rs.getBigDecimal("other_cost")),
+                            netIncome,
+                            margin(netIncome, revenue));
+                },
+                tenantId, currency, currency, from, to);
+    }
+
+    /*
      * 
      * ========================================================================
      * CARRIER PROFITABILITY
@@ -1251,6 +1371,14 @@ public class ReportingService {
                                          )::date AS month,
 
                                          COUNT(*) AS shipments,
+                                         COALESCE(SUM(COALESCE(gross_weight_kg, weight_kg, 0)), 0) AS gross_weight,
+                                         COALESCE(SUM(COALESCE(chargeable_weight_kg,
+                                             GREATEST(COALESCE(gross_weight_kg,0),
+                                                      COALESCE(volumetric_weight_kg,0)), 0)), 0) AS chargeable_weight,
+                                         COALESCE(SUM(COALESCE(amount_paid_to_supply, supplier_cost, 0)), 0) AS supplier_payments,
+                                         COALESCE(SUM(COALESCE(other_expenses, other_cost, 0)), 0) AS other_expenses,
+                                         COUNT(*) FILTER (WHERE status IN ('DELIVERED','COMPLETED')) AS completed,
+                                         COUNT(*) FILTER (WHERE status = 'DEPARTED') AS departed,
 
                                          COALESCE(
                                              SUM(
@@ -1263,7 +1391,16 @@ public class ReportingService {
                                                  - COALESCE(other_cost,0)
                                              ),
                                              0
-                                         ) AS gross_profit
+                                         ) AS gross_profit,
+
+                                         COALESCE(
+                                             SUM(
+                                                 COALESCE(amount_billed_to_client,0)
+                                                 - COALESCE(amount_paid_to_supply, supplier_cost, 0)
+                                                 - COALESCE(other_expenses, other_cost, 0)
+                                             ),
+                                             0
+                                         ) AS net_income
 
                                      FROM shipments
                                      WHERE tenant_id = ?
@@ -1288,6 +1425,12 @@ public class ReportingService {
                                          sm.shipments,
                                          0
                                      ) AS shipments,
+                                     COALESCE(sm.gross_weight, 0) AS gross_weight,
+                                     COALESCE(sm.chargeable_weight, 0) AS chargeable_weight,
+                                     COALESCE(sm.supplier_payments, 0) AS supplier_payments,
+                                     COALESCE(sm.other_expenses, 0) AS other_expenses,
+                                     COALESCE(sm.completed, 0) AS completed,
+                                     COALESCE(sm.departed, 0) AS departed,
 
                                      COALESCE(
                                          im.invoiced,
@@ -1307,7 +1450,11 @@ public class ReportingService {
                                      COALESCE(
                                          sm.gross_profit,
                                          0
-                                     ) AS gross_profit
+                                     ) AS gross_profit,
+                                     COALESCE(
+                                         sm.net_income,
+                                         0
+                                     ) AS net_income
 
                                  FROM months m
 
@@ -1319,23 +1466,25 @@ public class ReportingService {
 
                                  ORDER BY m.month
                                  """,
-                (rs, rowNum) -> new MonthlyTrend(
-                        rs.getDate("month")
-                                .toLocalDate()
-                                .toString(),
-                        rs.getLong("shipments"),
-                        nz(
-                                rs.getBigDecimal(
-                                        "invoiced")),
-                        nz(
-                                rs.getBigDecimal(
-                                        "collected")),
-                        nz(
-                                rs.getBigDecimal(
-                                        "outstanding")),
-                        nz(
-                                rs.getBigDecimal(
-                                        "gross_profit"))),
+                (rs, rowNum) -> {
+                    BigDecimal revenue = nz(rs.getBigDecimal("invoiced"));
+                    BigDecimal netIncome = nz(rs.getBigDecimal("net_income"));
+                    return new MonthlyTrend(
+                            rs.getDate("month").toLocalDate().toString(),
+                            rs.getLong("shipments"),
+                            nz(rs.getBigDecimal("gross_weight")),
+                            nz(rs.getBigDecimal("chargeable_weight")),
+                            revenue,
+                            nz(rs.getBigDecimal("collected")),
+                            nz(rs.getBigDecimal("outstanding")),
+                            nz(rs.getBigDecimal("supplier_payments")),
+                            nz(rs.getBigDecimal("other_expenses")),
+                            rs.getLong("completed"),
+                            rs.getLong("departed"),
+                            nz(rs.getBigDecimal("gross_profit")),
+                            netIncome,
+                            margin(netIncome, revenue));
+                },
                 from,
                 to,
                 tenantId,

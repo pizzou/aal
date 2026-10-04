@@ -248,6 +248,89 @@ export default function ReportsPage() {
           </section>
           <section className="grid grid-2" style={{ marginTop: 14 }}>
             <div className="card">
+              <h2 className="card-title">Client activity & repeat business</h2>
+              <p className="page-subtitle">
+                Shipment count and distinct shipment days per client.
+              </p>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Client</th>
+                      <th>Shipments</th>
+                      <th>Days active</th>
+                      <th>Last shipment</th>
+                      <th>Revenue</th>
+                      <th>Outstanding</th>
+                      <th>Net income</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.clientActivity.map((x) => (
+                      <tr key={x.customer}>
+                        <td>{x.customer}</td>
+                        <td>{x.shipments}</td>
+                        <td>{x.distinctShipmentDays}</td>
+                        <td>{x.lastShipmentDate}</td>
+                        <td>{money(x.revenue, report.currency)}</td>
+                        <td>{money(x.outstanding, report.currency)}</td>
+                        <td>{money(x.netIncome, report.currency)}</td>
+                      </tr>
+                    ))}
+                    {report.clientActivity.length === 0 && (
+                      <tr>
+                        <td colSpan={7}>No client activity for this period.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="card">
+              <h2 className="card-title">Destination performance</h2>
+              <p className="page-subtitle">
+                Shipment volume, chargeable weight, revenue and workbook-style
+                net income.
+              </p>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Destination</th>
+                      <th>Shipments</th>
+                      <th>Gross kg</th>
+                      <th>Chargeable kg</th>
+                      <th>Revenue</th>
+                      <th>Net income</th>
+                      <th>Margin</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.destinationProfitability.map((x) => (
+                      <tr key={x.destination}>
+                        <td>{x.destination}</td>
+                        <td>{x.shipments}</td>
+                        <td>{x.grossWeightKg.toLocaleString()}</td>
+                        <td>{x.chargeableWeightKg.toLocaleString()}</td>
+                        <td>{money(x.revenue, report.currency)}</td>
+                        <td>{money(x.netIncome, report.currency)}</td>
+                        <td>{x.marginPercent.toFixed(2)}%</td>
+                      </tr>
+                    ))}
+                    {report.destinationProfitability.length === 0 && (
+                      <tr>
+                        <td colSpan={7}>
+                          No destination data for this period.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+          <section className="grid grid-2" style={{ marginTop: 14 }}>
+            <div className="card">
               <h2 className="card-title">Receivables aging</h2>
               {report.receivablesAging.map((x) => (
                 <div className="metric-row" key={x.bucket}>
@@ -280,10 +363,18 @@ export default function ReportsPage() {
                   <tr>
                     <th>Month</th>
                     <th>Shipments</th>
+                    <th>Gross kg</th>
+                    <th>Chargeable kg</th>
+                    <th>Completed</th>
+                    <th>Departed</th>
                     <th>Revenue</th>
                     <th>Collections</th>
                     <th>Outstanding</th>
+                    <th>Supplier payments</th>
+                    <th>Other expenses</th>
                     <th>Gross profit</th>
+                    <th>Net income</th>
+                    <th>Net margin</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -291,12 +382,20 @@ export default function ReportsPage() {
                     <tr key={x.month}>
                       <td>{x.month}</td>
                       <td>{x.shipments}</td>
+                      <td>{x.grossWeightKg.toLocaleString()}</td>
+                      <td>{x.chargeableWeightKg.toLocaleString()}</td>
+                      <td>{x.completed}</td>
+                      <td>{x.departed}</td>
                       <td>{money(x.invoicedRevenue, report.currency)}</td>
                       <td>{money(x.collectedRevenue, report.currency)}</td>
                       <td>
                         {money(x.outstandingReceivables, report.currency)}
                       </td>
+                      <td>{money(x.supplierPayments, report.currency)}</td>
+                      <td>{money(x.otherExpenses, report.currency)}</td>
                       <td>{money(x.grossProfit, report.currency)}</td>
+                      <td>{money(x.netIncome, report.currency)}</td>
+                      <td>{x.profitMarginPercent.toFixed(2)}%</td>
                     </tr>
                   ))}
                 </tbody>

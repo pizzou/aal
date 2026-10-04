@@ -59,6 +59,8 @@ public final class ReportingDtos {
                         FleetSummary fleet,
 
                         List<CustomerProfitability> customerProfitability,
+                        List<ClientActivity> clientActivity,
+                        List<DestinationProfitability> destinationProfitability,
                         List<CarrierProfitability> carrierProfitability,
                         List<ShipmentProfitability> shipmentProfitability,
                         List<MonthlyTrend> monthlyTrend,
@@ -175,10 +177,42 @@ public final class ReportingDtos {
         public record MonthlyTrend(
                         String month,
                         long shipments,
+                        BigDecimal grossWeightKg,
+                        BigDecimal chargeableWeightKg,
                         BigDecimal invoicedRevenue,
                         BigDecimal collectedRevenue,
                         BigDecimal outstandingReceivables,
-                        BigDecimal grossProfit) {
+                        BigDecimal supplierPayments,
+                        BigDecimal otherExpenses,
+                        long completed,
+                        long departed,
+                        BigDecimal grossProfit,
+                        BigDecimal netIncome,
+                        BigDecimal profitMarginPercent) {
+        }
+
+        public record ClientActivity(
+                        String customer,
+                        long shipments,
+                        long distinctShipmentDays,
+                        LocalDate firstShipmentDate,
+                        LocalDate lastShipmentDate,
+                        BigDecimal revenue,
+                        BigDecimal collected,
+                        BigDecimal outstanding,
+                        BigDecimal netIncome) {
+        }
+
+        public record DestinationProfitability(
+                        String destination,
+                        long shipments,
+                        BigDecimal grossWeightKg,
+                        BigDecimal chargeableWeightKg,
+                        BigDecimal revenue,
+                        BigDecimal supplierCost,
+                        BigDecimal otherCost,
+                        BigDecimal netIncome,
+                        BigDecimal marginPercent) {
         }
 
         public record ReceivablesAging(

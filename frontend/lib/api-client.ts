@@ -2310,6 +2310,28 @@ export type ManagementReport = {
     grossProfit: number;
     marginPercent: number;
   }>;
+  clientActivity: Array<{
+    customer: string;
+    shipments: number;
+    distinctShipmentDays: number;
+    firstShipmentDate: string;
+    lastShipmentDate: string;
+    revenue: number;
+    collected: number;
+    outstanding: number;
+    netIncome: number;
+  }>;
+  destinationProfitability: Array<{
+    destination: string;
+    shipments: number;
+    grossWeightKg: number;
+    chargeableWeightKg: number;
+    revenue: number;
+    supplierCost: number;
+    otherCost: number;
+    netIncome: number;
+    marginPercent: number;
+  }>;
   carrierProfitability: Array<{
     carrier: string;
     shipments: number;
@@ -2338,10 +2360,18 @@ export type ManagementReport = {
   monthlyTrend: Array<{
     month: string;
     shipments: number;
+    grossWeightKg: number;
+    chargeableWeightKg: number;
     invoicedRevenue: number;
     collectedRevenue: number;
     outstandingReceivables: number;
+    supplierPayments: number;
+    otherExpenses: number;
+    completed: number;
+    departed: number;
     grossProfit: number;
+    netIncome: number;
+    profitMarginPercent: number;
   }>;
   receivablesAging: Array<{
     bucket: string;

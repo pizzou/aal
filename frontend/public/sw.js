@@ -1,10 +1,11 @@
-const CACHE = "aal-static-v3";
+const CACHE = "aal-static-v2";
+const STATIC_ASSETS = ["/branding/aal-logo.jpg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((cache) => cache.add("/branding/aal-logo.jpg"))
+      .then((cache) => cache.addAll(STATIC_ASSETS))
       .then(() => self.skipWaiting()),
   );
 });
@@ -16,12 +17,6 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter(
-              (key) =>
-                key.startsWith("aal-shell-") ||
-                key.startsWith("aal-static-") ||
-                key !== CACHE && key.includes("aal-"),
-            )
             .filter((key) => key !== CACHE)
             .map((key) => caches.delete(key)),
         ),
@@ -32,49 +27,52 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
-
   if (request.method !== "GET") return;
-  if (request.mode === "navigate") return;
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Never intercept API, RSC/Flight, or application HTML requests. Those must
-  // always be served by Next.js so authentication and route rendering cannot be
-  // trapped behind a stale service-worker response.
-  if (
-    url.pathname.startsWith("/api/") ||
-    url.pathname.startsWith("/_next/") && !url.pathname.startsWith("/_next/static/") ||
-    request.headers.has("RSC") ||
-    request.headers.has("Next-Router-State-Tree") ||
-    request.headers.has("Next-Url")
-  ) {
+  // API responses and authenticated application HTML must always come from the
+  // network. Caching the root/dashboard HTML can keep an old Next.js auth bundle
+  // alive after a deployment and leave users permanently on the auth loading view.
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/_next/data/")) {
     return;
   }
 
-  const cacheable =
-    url.pathname.startsWith("/_next/static/") ||
-    url.pathname === "/branding/aal-logo.jpg" ||
-    url.pathname === "/manifest.webmanifest";
+  // Next.js hashed static chunks are safe to cache. Their filenames change when
+  // the application build changes, so they cannot pin an old application shell.
+  if (url.pathname.startsWith("/_next/static/")) {
+    event.respondWith(
+      caches.open(CACHE).then((cache) =>
+        cache.match(request).then((cached) => {
+          const network = fetch(request)
+            .then((response) => {
+              if (response.ok) {
+                cache.put(request, response.clone()).catch(() => {});
+              }
+              return response;
+            })
+            .catch(() => cached || Response.error());
 
-  if (!cacheable) return;
+          return cached || network;
+        }),
+      ),
+    );
+    return;
+  }
 
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request)
+  // Keep only the public branding asset offline. Do not cache pages such as /,
+  // /login, or authenticated application routes.
+  if (url.pathname === "/branding/aal-logo.jpg") {
+    event.respondWith(
+      fetch(request)
         .then((response) => {
           if (response.ok) {
-            const copy = response.clone();
-            void caches
-              .open(CACHE)
-              .then((cache) => cache.put(request, copy))
-              .catch(() => undefined);
+            caches.open(CACHE).then((cache) => cache.put(request, response.clone())).catch(() => {});
           }
           return response;
         })
-        .catch(() => cached);
-
-      return cached || network;
-    }),
-  );
+        .catch(() => caches.match(request).then((cached) => cached || Response.error())),
+    );
+  }
 });

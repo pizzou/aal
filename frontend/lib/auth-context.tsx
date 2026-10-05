@@ -100,6 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    let loadingWatchdog: number | null = null;
     const storedToken = getAccessToken();
     const storedContext = readStoredAuthContext();
     const pathname =
@@ -120,6 +121,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
      * slow backend can never turn a refresh into an apparent logout.
      * Server-side APIs remain the source of truth for authorization.
      */
+    // Restore a bearer credential immediately. This prevents a browser refresh
+    // from depending on a cold/waking API before the application can render.
+    if (storedToken) {
+      setAccessTokenState(storedToken);
+    }
+
     if (storedToken && storedContext) {
       currentTenant = storedContext.tenantId;
       setTenantId(storedContext.tenantId);
@@ -161,7 +168,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
      * This path is only needed for protected pages with no complete local
      * bearer session. A failed remote lookup is treated as a transient failure,
      * not as evidence that an existing credential is invalid.
+     *
+     * The watchdog is deliberately independent of the API timeout. It protects
+     * the React boot state even if a browser, proxy, service worker, or failed
+     * fetch implementation never settles the promise.
      */
+    loadingWatchdog = window.setTimeout(() => {
+      if (cancelled) return;
+      setIsLoading(false);
+      if (!storedToken && !storedContext) {
+        clearLocalSession();
+      }
+    }, 6500);
+
     void (async () => {
       try {
         const session: AuthSessionResponse = await authApi.session({
@@ -207,12 +226,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           clearLocalSession();
         }
       } finally {
+        if (loadingWatchdog !== null) {
+          window.clearTimeout(loadingWatchdog);
+          loadingWatchdog = null;
+        }
         if (!cancelled) setIsLoading(false);
       }
     })();
 
     return () => {
       cancelled = true;
+      if (loadingWatchdog !== null) {
+        window.clearTimeout(loadingWatchdog);
+        loadingWatchdog = null;
+      }
     };
   }, []);
 

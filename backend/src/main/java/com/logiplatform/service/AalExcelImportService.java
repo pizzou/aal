@@ -162,11 +162,23 @@ public class AalExcelImportService {
                         // materialized before invoices/quotes attempt to link to them,
                         // regardless of worksheet ordering.
                         List<SheetAndDescriptor> detected = new ArrayList<>();
+                        List<String> unrecognizedSheets = new ArrayList<>();
                         for (Sheet sheet : workbook) {
                                 SheetDescriptor descriptor = classifySheet(sheet);
                                 if (descriptor != null) {
                                         detected.add(new SheetAndDescriptor(sheet, descriptor));
+                                } else if (sheet != null && sheet.getLastRowNum() >= 0) {
+                                        unrecognizedSheets.add(sheet.getSheetName());
                                 }
+                        }
+
+                        if (detected.isEmpty()) {
+                                String sheets = unrecognizedSheets.isEmpty()
+                                                ? "The workbook contains no readable worksheets."
+                                                : "No supported AAL worksheet was detected. Sheets found: "
+                                                                + String.join(", ", unrecognizedSheets)
+                                                                + ". Expected MOTHERSHIP, Command Center, Quotations, Invoices, Clients, Partners, Tasks or Expenses headers.";
+                                throw new IllegalArgumentException(sheets);
                         }
 
                         for (SheetAndDescriptor item : detected) {
@@ -243,13 +255,45 @@ public class AalExcelImportService {
 
         private static boolean has(Map<String, Integer> h, String... required) {
                 for (String value : required) {
-                        if (!h.containsKey(normalizeHeader(value))) return false;
+                        if (!h.containsKey(canonicalHeader(value))) return false;
                 }
                 return true;
         }
 
         private static String normalizeHeader(String value) {
-                return value == null ? "" : value.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
+                if (value == null) return "";
+                return value
+                                .replace('\u00a0', ' ')
+                                .trim()
+                                .toLowerCase(Locale.ROOT)
+                                .replaceAll("\\s+", " ");
+        }
+
+        /**
+         * Excel users routinely add harmless punctuation, line breaks or slightly
+         * different labels to otherwise compatible columns. Keep the importer
+         * strict about meaning while accepting those presentation-level variants.
+         */
+        private static String canonicalHeader(String value) {
+                String key = normalizeHeader(value)
+                                .replaceAll("[.:]+$", "")
+                                .replaceAll("\\s*/\\s*", " / ")
+                                .replaceAll("\\s*\\(\\s*", " (")
+                                .replaceAll("\\s*\\)\\s*", ")");
+
+                return switch (key) {
+                        case "awb", "awb no", "awb number", "awb no." -> "awb no";
+                        case "name of client", "client name", "customer", "customer name" -> "name of client";
+                        case "origin city", "origin city / port", "origin/port" -> "origin city / port";
+                        case "destination city", "destination city / port", "destination/port" -> "destination city / port";
+                        case "client revenue", "client revenue (usd)", "client revenue usd" -> "client revenue (usd)";
+                        case "actual weight", "actual weight (kg)", "gross weight (kg)" -> key;
+                        case "volume weight", "volume weight (kg)", "volumetric weight (kg)" -> key;
+                        case "supplier cost", "supplier cost (usd)" -> "supplier cost (usd)";
+                        case "other cost", "other cost (usd)" -> "other cost (usd)";
+                        case "invoice no", "invoice number" -> "invoice no";
+                        default -> key;
+                };
         }
 
         private static int findHeaderRow(Sheet sheet, String... required) {
@@ -260,11 +304,17 @@ public class AalExcelImportService {
         }
 
         private static void validateWorkbook(MultipartFile file) {
-                if (file == null || file.isEmpty()) throw new IllegalArgumentException("Excel file is empty");
-                if (file.getSize() > 10L * 1024L * 1024L) throw new IllegalArgumentException("Excel file exceeds the 10 MB import limit");
+                if (file == null || file.isEmpty()) {
+                        throw new IllegalArgumentException("Excel file is empty");
+                }
+                if (file.getSize() > 50L * 1024L * 1024L) {
+                        throw new IllegalArgumentException("Excel file exceeds the 50 MB import limit");
+                }
                 String filename = file.getOriginalFilename();
-                if (filename == null || !(filename.toLowerCase(Locale.ROOT).endsWith(".xlsx") || filename.toLowerCase(Locale.ROOT).endsWith(".xlsm")))
-                        throw new IllegalArgumentException("Only .xlsx and .xlsm AAL workbooks are supported");
+                String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+                if (!(lower.endsWith(".xls") || lower.endsWith(".xlsx") || lower.endsWith(".xlsm"))) {
+                        throw new IllegalArgumentException("Only .xls, .xlsx and .xlsm AAL workbooks are supported");
+                }
         }
 
         private static String sha256(byte[] bytes) {
@@ -1328,9 +1378,7 @@ public class AalExcelImportService {
 
                 for (String header : required) {
 
-                        String key = header
-                                        .trim()
-                                        .toLowerCase(Locale.ROOT);
+                        String key = canonicalHeader(header);
 
                         if (!headers.containsKey(key)) {
 
@@ -1354,13 +1402,10 @@ public class AalExcelImportService {
 
                 for (Cell cell : row) {
 
-                        String key = normalizeHeader(formatter.formatCellValue(cell));
+                        String key = canonicalHeader(formatter.formatCellValue(cell));
 
                         if (!key.isBlank()) {
-
-                                result.put(
-                                                key,
-                                                cell.getColumnIndex());
+                                result.put(key, cell.getColumnIndex());
                         }
                 }
 
@@ -1380,7 +1425,7 @@ public class AalExcelImportService {
                 }
 
                 Integer index = headers.get(
-                                normalizeHeader(header));
+                                canonicalHeader(header));
 
                 if (index == null) {
                         return "";
@@ -1474,7 +1519,7 @@ public class AalExcelImportService {
                 }
 
                 Integer index = headers.get(
-                                normalizeHeader(header));
+                                canonicalHeader(header));
 
                 if (index == null) {
                         return null;

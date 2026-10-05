@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, ManagementReport, reportsApi } from "@/lib/api-client";
+import ReportCharts from "@/components/ReportCharts";
 
 function firstOfMonth() {
   const d = new Date();
@@ -110,6 +111,7 @@ export default function ReportsPage() {
               </div>
             </div>
           </div>
+          <ReportCharts report={report} />
           <section className="grid grid-2" style={{ marginTop: 14 }}>
             <div className="card">
               <h2 className="card-title">Operations</h2>

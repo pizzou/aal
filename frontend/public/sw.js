@@ -1,4 +1,4 @@
-const CACHE = "aal-static-v2";
+const CACHE = "aal-static-v3";
 const STATIC_ASSETS = ["/branding/aal-logo.jpg"];
 
 self.addEventListener("install", (event) => {

@@ -132,11 +132,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setTenantId(storedContext.tenantId);
       setRole(storedContext.role);
       setAccessTokenState(storedToken);
-      setIsLoading(false);
 
-      return () => {
-        cancelled = true;
-      };
+      /*
+       * Do not block the workspace on a remote session check. The stored
+       * credential/context is enough to hydrate the shell immediately; the
+       * backend remains the authorization source of truth and is reconciled in
+       * the background below. This is important on a hard browser refresh when
+       * the Render service is cold.
+       */
+      setIsLoading(false);
     }
 
     const publicPage =
@@ -179,7 +183,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!storedToken && !storedContext) {
         clearLocalSession();
       }
-    }, 6500);
+    }, 4000);
 
     void (async () => {
       try {

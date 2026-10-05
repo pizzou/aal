@@ -998,10 +998,11 @@ export interface AalExcelImportResult {
 }
 
 export const aalExcelImportApi = {
-  importWorkbooks: (files: File[]) => {
+  importWorkbooks: async (files: File[]) => {
     const body = new FormData();
     files.forEach((file) => body.append("files", file));
-    return apiFetch<AalExcelImportResult>(
+
+    const result = await apiFetch<AalExcelImportResult>(
       "/api/command-center/import/excel/batch",
       {
         method: "POST",
@@ -1009,6 +1010,24 @@ export const aalExcelImportApi = {
         // Do not set Content-Type manually. The browser must add the multipart boundary.
       },
     );
+
+    if (
+      !result ||
+      typeof result !== "object" ||
+      typeof result.shipments !== "number" ||
+      typeof result.quotations !== "number" ||
+      typeof result.invoices !== "number" ||
+      typeof result.clients !== "number" ||
+      typeof result.partners !== "number" ||
+      typeof result.tasks !== "number" ||
+      typeof result.expenses !== "number"
+    ) {
+      throw new Error(
+        "The server accepted the workbook but did not return a valid import result. Check the backend deployment and server logs before retrying.",
+      );
+    }
+
+    return result;
   },
 };
 

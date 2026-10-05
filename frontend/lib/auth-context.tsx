@@ -136,9 +136,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       /*
        * Do not block the workspace on a remote session check. The stored
        * credential/context is enough to hydrate the shell immediately; the
-       * backend remains the authorization source of truth and is reconciled in
-       * the background below. This is important on a hard browser refresh when
-       * the Render service is cold.
+       * backend remains the authorization source of truth. Protected requests
+       * perform the real server-side validation. This is important on a hard
+       * browser refresh when the Render service is cold.
        */
       setIsLoading(false);
     }
@@ -168,22 +168,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     /*
-     * Recover a cookie-backed session when storage was unavailable/cleared.
-     * This path is only needed for protected pages with no complete local
-     * bearer session. A failed remote lookup is treated as a transient failure,
-     * not as evidence that an existing credential is invalid.
+     * A complete bearer session is authoritative enough to hydrate the
+     * workspace immediately. Do NOT block a browser refresh on /api/auth/session:
+     * that endpoint performs a database-backed JWT validation and therefore turns
+     * a Render cold start or temporary DB saturation into an apparent logout.
      *
-     * The watchdog is deliberately independent of the API timeout. It protects
-     * the React boot state even if a browser, proxy, service worker, or failed
-     * fetch implementation never settles the promise.
+     * The first protected API request still validates the JWT server-side. A
+     * definitive 401 clears the local session through api-client.ts.
+     */
+    if (storedToken && storedContext) {
+      setIsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    /*
+     * If sessionStorage is unavailable but the HttpOnly cookie exists, recover
+     * it once. This is the exceptional fallback path; it is never used when a
+     * complete local bearer session is already available.
      */
     loadingWatchdog = window.setTimeout(() => {
       if (cancelled) return;
       setIsLoading(false);
-      if (!storedToken && !storedContext) {
-        clearLocalSession();
-      }
-    }, 4000);
+      clearLocalSession();
+    }, 5000);
 
     void (async () => {
       try {
@@ -203,12 +212,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setTenantId(session.tenantId);
         setRole(session.role);
 
-        if (storedToken) {
-          setAccessTokenState(storedToken);
-        } else {
-          setAccessToken(COOKIE_SESSION_SENTINEL);
-          setAccessTokenState(COOKIE_SESSION_SENTINEL);
-        }
+        setAccessToken(COOKIE_SESSION_SENTINEL);
+        setAccessTokenState(COOKIE_SESSION_SENTINEL);
 
         if (
           session.mustChangePassword &&
@@ -220,15 +225,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } catch {
         if (cancelled) return;
-
-        /*
-         * A timeout/cold-start/network failure is not an authentication failure.
-         * Keep an existing bearer session intact. If no credential exists, the
-         * protected-route shell will redirect once loading has finished.
-         */
-        if (!storedToken) {
-          clearLocalSession();
-        }
+        clearLocalSession();
       } finally {
         if (loadingWatchdog !== null) {
           window.clearTimeout(loadingWatchdog);

@@ -11,6 +11,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static com.logiplatform.dto.AdvancedDashboardDtos.*;
@@ -26,14 +28,17 @@ import static com.logiplatform.dto.AdvancedDashboardDtos.*;
 public class AdvancedDashboardService {
 
     private static final Logger log = LoggerFactory.getLogger(AdvancedDashboardService.class);
-    private static final long CACHE_TTL_MS = 15_000L;
+    private static final long CACHE_TTL_MS = 30_000L;
     private final JdbcTemplate jdbc;
+    private final Executor dashboardExecutor;
     private final ConcurrentHashMap<CacheKey, CachedResponse> cache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<CacheKey, Object> cacheLocks = new ConcurrentHashMap<>();
 
     public AdvancedDashboardService(
-            @Qualifier("dashboardJdbcTemplate") JdbcTemplate jdbc) {
+            @Qualifier("dashboardJdbcTemplate") JdbcTemplate jdbc,
+            @Qualifier("dashboardExecutor") Executor dashboardExecutor) {
         this.jdbc = jdbc;
+        this.dashboardExecutor = dashboardExecutor;
     }
 
     public Response dashboard(LocalDate asOf) {
@@ -60,27 +65,70 @@ public class AdvancedDashboardService {
                     return cached.response();
                 }
 
-                // Resolve the reporting currency once for the complete snapshot.
-                // Several former sections independently queried tenant_profiles,
-                // multiplying database latency on every dashboard refresh.
-                String currency = reportingCurrency(tenantId);
-                OperationsKpi operations = operations(tenantId, date);
+               
+               String resolvedCurrency;
+try {
+    resolvedCurrency = reportingCurrency(tenantId);
+} catch (RuntimeException ex) {
+    log.warn("Unable to resolve dashboard reporting currency; using USD", ex);
+    resolvedCurrency = "USD";
+}
+
+final String currency = resolvedCurrency;
+
+CompletableFuture<OperationsKpi> operationsFuture =
+        supply(() -> operations(tenantId, date), emptyOperations());
+
+CompletableFuture<FinancialKpi> financialFuture =
+        supply(() -> financial(tenantId, date, currency), emptyFinancial(currency));
+
+CompletableFuture<FleetKpi> fleetFuture =
+        supply(() -> fleet(tenantId), emptyFleet());
+
+CompletableFuture<List<ModeMetric>> modeFuture =
+        supply(() -> modeMix(tenantId, date), List.of());
+
+CompletableFuture<List<StatusMetric>> statusFuture =
+        supply(() -> statusMix(tenantId, date), List.of());
+
+CompletableFuture<List<TrendPoint>> trendFuture =
+        supply(() -> trend(tenantId, date, currency), List.of());
+
+CompletableFuture<List<LaneMetric>> lanesFuture =
+        supply(() -> topLanes(tenantId, date), List.of());
+
+CompletableFuture<List<DashboardException>> exceptionsFuture =
+        supply(() -> exceptions(tenantId, date), List.of());
+
+CompletableFuture<OperatingKpis> operatingFuture =
+        supply(() -> operatingKpis(tenantId, date, currency), emptyOperatingKpis());
+
+CompletableFuture<List<MonthlyFinancialPoint>> monthlyFuture =
+        supply(() -> monthlyFinancial(tenantId, date, currency), List.of());
+
+CompletableFuture<List<AgingMetric>> agingFuture =
+        supply(() -> receivablesAging(tenantId, date, currency), List.of());
+
+CompletableFuture<List<QuotationStatusMetric>> quotationFuture =
+        supply(() -> quotationStatus(tenantId), List.of());
+
+                OperationsKpi operations = operationsFuture.join();
 
                 Response response = new Response(
                         date,
                         operations,
-                        financial(tenantId, date, currency),
-                        fleet(tenantId),
-                        modeMix(tenantId, date),
-                        statusMix(tenantId, date),
-                        trend(tenantId, date, currency),
-                        topLanes(tenantId, date),
-                        exceptions(tenantId, date),
-                        actions(tenantId, date, operations),
-                        operatingKpis(tenantId, date, currency),
-                        monthlyFinancial(tenantId, date, currency),
-                        receivablesAging(tenantId, date, currency),
-                        quotationStatus(tenantId));
+                        financialFuture.join(),
+                        fleetFuture.join(),
+                        modeFuture.join(),
+                        statusFuture.join(),
+                        trendFuture.join(),
+                        lanesFuture.join(),
+                        exceptionsFuture.join(),
+                        safeActions(tenantId, date, operations),
+                        operatingFuture.join(),
+                        monthlyFuture.join(),
+                        agingFuture.join(),
+                        quotationFuture.join());
                 cache.put(key, new CachedResponse(currentTime, response));
                 if (cache.size() > 100) {
                     cache.entrySet().removeIf(entry ->
@@ -98,6 +146,48 @@ public class AdvancedDashboardService {
         } finally {
             cacheLocks.remove(key, lock);
         }
+    }
+
+    private List<DashboardAction> safeActions(
+            UUID tenantId,
+            LocalDate asOf,
+            OperationsKpi operations) {
+        try {
+            return actions(tenantId, asOf, operations);
+        } catch (RuntimeException ex) {
+            log.warn("Dashboard action aggregate degraded: {}", ex.getMessage());
+            return List.of(new DashboardAction(
+                    "LOW",
+                    "Operations data temporarily limited",
+                    "Core control-tower metrics remain available while secondary activity data recovers.",
+                    "/shipments"));
+        }
+    }
+
+    private <T> CompletableFuture<T> supply(java.util.function.Supplier<T> task, T fallback) {
+        return CompletableFuture.supplyAsync(task, dashboardExecutor)
+                .exceptionally(ex -> {
+                    log.warn("Dashboard aggregate degraded: {}", ex.getMessage());
+                    return fallback;
+                });
+    }
+
+    private static OperationsKpi emptyOperations() {
+        return new OperationsKpi(0, 0, 0, 0, 0, 0, 0, BigDecimal.ZERO, BigDecimal.ZERO);
+    }
+
+    private static FinancialKpi emptyFinancial(String currency) {
+        return new FinancialKpi(currency, false, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+    }
+
+    private static FleetKpi emptyFleet() {
+        return new FleetKpi(0, 0, 0, 0, BigDecimal.ZERO, 0, 0, 0, BigDecimal.ZERO);
+    }
+
+    private static OperatingKpis emptyOperatingKpis() {
+        return new OperatingKpis(0, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, 0, BigDecimal.ZERO, BigDecimal.ZERO, 0, 0, 0, BigDecimal.ZERO);
     }
 
     private OperationsKpi operations(UUID tenantId, LocalDate asOf) {

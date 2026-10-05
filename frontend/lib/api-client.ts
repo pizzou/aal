@@ -76,33 +76,6 @@ function notifyAuthenticationExpired(): void {
   }
 }
 
-async function confirmAuthenticationExpired(): Promise<boolean> {
-  const token = readStoredAccessToken();
-  if (!token) return true;
-
-  try {
-    const headers = new Headers();
-    if (token !== COOKIE_SESSION_SENTINEL) {
-      headers.set("Authorization", `Bearer ${token}`);
-    }
-
-    const response = await fetchWithTimeout(
-      `${API_BASE}/api/auth/session`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-        headers,
-      },
-      3_000,
-    );
-    return response.status === 401 || response.status === 403;
-  } catch {
-    // A timeout/network failure is not proof that the credentials are invalid.
-    return false;
-  }
-}
-
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -132,10 +105,14 @@ async function ensureCsrf(forceRefresh = false): Promise<string> {
 
   if (forceRefresh) csrfToken = null;
 
-  const request = fetch(`${API_BASE}/api/auth/csrf`, {
-    credentials: "include",
-    cache: "no-store",
-  })
+  const request = fetchWithTimeout(
+    `${API_BASE}/api/auth/csrf`,
+    {
+      credentials: "include",
+      cache: "no-store",
+    },
+    CSRF_TIMEOUT_MS,
+  )
     .then(async (response) => {
       if (!response.ok) {
         throw new ApiError(
@@ -220,7 +197,9 @@ const GET_CACHE_TTL_MS = 3_000;
 const GET_STALE_GRACE_MS = 60_000;
 const GET_TIMEOUT_MS = 8_000;
 const DASHBOARD_TIMEOUT_MS = 15_000;
-const AUTH_SESSION_TIMEOUT_MS = 5_000;
+const AUTH_SESSION_TIMEOUT_MS = 4_000;
+const AUTH_LOGIN_TIMEOUT_MS = 20_000;
+const CSRF_TIMEOUT_MS = 6_000;
 const AIR_CARGO_SEARCH_TIMEOUT_MS = 40_000;
 const getCache = new Map<
   string,
@@ -230,6 +209,8 @@ const getInflight = new Map<string, Promise<unknown>>();
 
 function requestTimeoutFor(path: string): number {
   if (path === "/api/auth/session") return AUTH_SESSION_TIMEOUT_MS;
+  if (path === "/api/auth/login") return AUTH_LOGIN_TIMEOUT_MS;
+  if (path === "/api/auth/send-login-otp") return AUTH_LOGIN_TIMEOUT_MS;
   if (path.startsWith("/api/command-center/advanced"))
     return DASHBOARD_TIMEOUT_MS;
   return path === "/api/air-cargo/flights/search"
@@ -426,10 +407,14 @@ export async function apiFetch<T>(
 
     if (!response.ok) {
       if (response.status === 401) {
+        /*
+         * A 401 from a protected endpoint is already authoritative: the backend
+         * rejected the credential. Do not make a second /session request here.
+         * That extra round trip was especially harmful when Render was waking
+         * from sleep or the database was temporarily unavailable.
+         */
         csrfToken = null;
-        if (await confirmAuthenticationExpired()) {
-          notifyAuthenticationExpired();
-        }
+        notifyAuthenticationExpired();
       }
       throw new ApiError(response.status, message);
     }
@@ -2134,11 +2119,11 @@ export function openOperationsEventStream(handlers: {
 
       if (!response.ok || !response.body) {
         handlers.onError?.(response.status);
+
         if (response.status === 401) {
-          if (await confirmAuthenticationExpired()) {
-            notifyAuthenticationExpired();
-          }
+          notifyAuthenticationExpired();
         }
+
         scheduleReconnect();
         return;
       }

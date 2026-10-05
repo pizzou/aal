@@ -69,7 +69,6 @@ public class AuthService {
         this.otpRequired = otpRequired || "production".equalsIgnoreCase(environment);
     }
 
-    @Transactional(transactionManager = "authTransactionManager")
     public AuthResponse login(LoginRequest request) {
 
         String stage = "start";
@@ -251,7 +250,24 @@ public class AuthService {
                         u.id()
                 );
 
-                issueOtpIfNeeded(u, now, false);
+                String otpCode = issueOtpIfNeeded(u, now, false);
+
+                if (otpCode != null) {
+                    try {
+                        mail.sendLoginOtp(
+                                new User(tenantId, u.email(), "", u.role()) {{
+                                    setDisplayName(u.displayName());
+                                }},
+                                otpCode,
+                                OTP_MINUTES);
+                    } catch (MailService.MailDeliveryException ex) {
+                        clearOtp(u.id());
+                        throw new ResponseStatusException(
+                                HttpStatus.SERVICE_UNAVAILABLE,
+                                "Unable to send the verification code. Please try again shortly.",
+                                ex);
+                    }
+                }
 
                 log.info(
                         "Authentication requires OTP userId={} email={}",
@@ -331,7 +347,6 @@ public class AuthService {
         }
     }
 
-    @Transactional(transactionManager = "authTransactionManager")
     public void sendLoginOtp(String challenge) {
 
         if (!otpRequired) {
@@ -376,7 +391,20 @@ public class AuthService {
 
             stage = "issue-otp";
 
-            issueOtpIfNeeded(u, Instant.now(), true);
+            String otpCode = issueOtpIfNeeded(u, Instant.now(), true);
+            if (otpCode != null) {
+                try {
+                    User mailUser = new User(tenantId, u.email(), "", u.role());
+                    mailUser.setDisplayName(u.displayName());
+                    mail.sendLoginOtp(mailUser, otpCode, OTP_MINUTES);
+                } catch (MailService.MailDeliveryException ex) {
+                    clearOtp(u.id());
+                    throw new ResponseStatusException(
+                            HttpStatus.SERVICE_UNAVAILABLE,
+                            "Unable to send the verification code. Please try again shortly.",
+                            ex);
+                }
+            }
 
         } catch (ResponseStatusException ex) {
 
@@ -403,7 +431,7 @@ public class AuthService {
         }
     }
 
-    private void issueOtpIfNeeded(
+    private String issueOtpIfNeeded(
             UserRecord u,
             Instant now,
             boolean forceNew
@@ -420,7 +448,7 @@ public class AuthService {
                     u.id(),
                     u.otpExpiresAt()
             );
-            return;
+            return null;
         }
 
         if (forceNew
@@ -457,23 +485,13 @@ public class AuthService {
                 tenantId
         );
 
-        User mailUser = new User(tenantId, u.email(), "", u.role());
-        mailUser.setDisplayName(u.displayName());
-
-        try {
-            mail.sendLoginOtp(mailUser, code, OTP_MINUTES);
-        } catch (MailService.MailDeliveryException ex) {
-            clearOtp(u.id());
-            log.error(
-                    "OTP email delivery failed userId={} reason={}",
-                    u.id(),
-                    ex.getMessage());
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "Unable to send the verification code. Please try again shortly.",
-                    ex
-            );
-        }
+        /*
+         * Return the generated code to the caller. The database write is already
+         * committed by JdbcTemplate; email delivery deliberately happens outside
+         * the authentication transaction so a slow Brevo request cannot hold a
+         * PostgreSQL connection while the login endpoint waits.
+         */
+        return code;
     }
 
     private void validateChallenge(

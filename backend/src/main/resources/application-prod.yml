@@ -8,8 +8,8 @@ spring:
     hikari:
       maximum-pool-size: ${DB_POOL_MAX_SIZE:30}
       minimum-idle: ${DB_POOL_MIN_IDLE:8}
-      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
-      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:2000}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:3000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:1500}
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
       leak-detection-threshold: ${DB_LEAK_DETECTION_MS:0}
       pool-name: ${DB_POOL_NAME:LogiPlatformProductionPool}
@@ -31,7 +31,7 @@ spring:
     out-of-order: false
   data:
     redis:
-      host: ${SPRING_DATA_REDIS_HOST}
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
       port: ${SPRING_DATA_REDIS_PORT:6379}
       password: ${SPRING_DATA_REDIS_PASSWORD:}
       timeout: ${SPRING_DATA_REDIS_TIMEOUT:2000ms}
@@ -120,8 +120,8 @@ sms:
 
 document-security:
   clamav:
-    enabled: ${CLAMAV_ENABLED:true}
-    required: ${CLAMAV_REQUIRED:true}
+    enabled: ${CLAMAV_ENABLED:false}
+    required: ${CLAMAV_REQUIRED:false}
     host: ${CLAMAV_HOST:clamav}
     port: ${CLAMAV_PORT:3310}
     timeout-ms: ${CLAMAV_TIMEOUT_MS:15000}
@@ -155,4 +155,4 @@ integration:
 
 # Control-tower aggregate query guard.
 dashboard:
-  query-timeout-seconds: ${DASHBOARD_QUERY_TIMEOUT_SECONDS:5}
+  query-timeout-seconds: ${DASHBOARD_QUERY_TIMEOUT_SECONDS:4}

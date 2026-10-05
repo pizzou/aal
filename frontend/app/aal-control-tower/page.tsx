@@ -16,6 +16,7 @@ import { useRouter } from "next/navigation";
 import Icon, { IconName } from "@/components/Icon";
 
 const today = () => new Date().toLocaleDateString("en-CA");
+const DASHBOARD_SNAPSHOT_KEY = "aal.dashboard.snapshot.v2";
 
 function money(value: number | null | undefined, currency: string): string {
   return `${currency} ${(value ?? 0).toLocaleString(undefined, {
@@ -55,7 +56,7 @@ function modeLabel(mode: string): string {
 }
 
 export default function AalControlTower() {
-  const { accessToken, isLoading } = useAuth();
+  const { accessToken, isLoading, tenantId, role } = useAuth();
   const router = useRouter();
   const [data, setData] = useState<AdvancedDashboard | null>(null);
   const [shipments, setShipments] = useState<Shipment[]>([]);
@@ -78,6 +79,57 @@ export default function AalControlTower() {
   const auxiliaryTimerRef = useRef<number | null>(null);
   const auxiliaryStartTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+
+  function snapshotKey(): string {
+    return `${DASHBOARD_SNAPSHOT_KEY}:${tenantId ?? "unknown"}:${role ?? "unknown"}`;
+  }
+
+  function restoreSnapshot(): void {
+    if (typeof window === "undefined" || !accessToken) return;
+    try {
+      const raw = window.sessionStorage.getItem(snapshotKey());
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        asOf?: string;
+        savedAt?: string;
+        data?: AdvancedDashboard;
+        shipments?: Shipment[];
+      };
+      if (!parsed.data) return;
+
+      if (parsed.asOf) setAsOf(parsed.asOf);
+      setData(parsed.data);
+      if (Array.isArray(parsed.shipments)) setShipments(parsed.shipments);
+      if (parsed.savedAt) setLastUpdatedAt(parsed.savedAt);
+    } catch {
+      // A corrupt/off-version snapshot must never prevent the live dashboard.
+      try {
+        window.sessionStorage.removeItem(snapshotKey());
+      } catch {
+        // Ignore storage cleanup failures.
+      }
+    }
+  }
+
+  function persistSnapshot(
+    dashboard: AdvancedDashboard,
+    recentShipments: Shipment[],
+  ): void {
+    if (typeof window === "undefined" || !accessToken) return;
+    try {
+      window.sessionStorage.setItem(
+        snapshotKey(),
+        JSON.stringify({
+          asOf,
+          savedAt: new Date().toISOString(),
+          data: dashboard,
+          shipments: recentShipments.slice(0, 5),
+        }),
+      );
+    } catch {
+      // Storage quota/privacy restrictions must never break the dashboard.
+    }
+  }
 
   async function loadCore(forceRefresh = false) {
     if (!accessToken || !mountedRef.current) return;
@@ -103,7 +155,9 @@ export default function AalControlTower() {
     void recentPromise
       .then((result) => {
         if (!mountedRef.current || run !== coreRunRef.current) return;
-        setShipments(Array.isArray(result?.content) ? result.content : []);
+        const recent = Array.isArray(result?.content) ? result.content : [];
+        setShipments(recent);
+        if (data) persistSnapshot(data, recent);
       })
       .catch((reason) => {
         if (
@@ -126,9 +180,11 @@ export default function AalControlTower() {
 
       if (!mountedRef.current || run !== coreRunRef.current) return;
 
+      const updatedAt = new Date().toISOString();
       setData(dashboard);
-      setLastUpdatedAt(new Date().toISOString());
+      setLastUpdatedAt(updatedAt);
       setError("");
+      persistSnapshot(dashboard, shipments);
     } catch (reason) {
       if (
         controller.signal.aborted ||
@@ -275,7 +331,7 @@ export default function AalControlTower() {
 
   useEffect(() => {
     if (!accessToken) return;
-
+    restoreSnapshot();
     void load();
 
     // Poll instead of holding an always-open SSE connection. The control tower

@@ -12,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import com.logiplatform.service.FinanceIncomeAllocationService;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -26,19 +27,22 @@ public class BillingService {
     private final CommercialPaymentRepository payments;
     private final FinancePostingService finance;
     private final FinanceDocumentSequenceService documentSequences;
+    private final FinanceIncomeAllocationService incomeAllocations;
 
     public BillingService(
             ShipmentRepository shipments,
             CommercialInvoiceRepository invoices,
             CommercialPaymentRepository payments,
             FinancePostingService finance,
-            FinanceDocumentSequenceService documentSequences) {
+            FinanceDocumentSequenceService documentSequences,
+            FinanceIncomeAllocationService incomeAllocations) {
 
         this.shipments = shipments;
         this.invoices = invoices;
         this.payments = payments;
         this.finance = finance;
         this.documentSequences = documentSequences;
+        this.incomeAllocations = incomeAllocations;
     }
 
     @Transactional
@@ -133,7 +137,23 @@ public class BillingService {
                 amount,
                 null,
                 idempotencyKey,
-                reference);
+                reference,
+                null);
+    }
+
+    /**
+     * Backward-compatible canonical payment entry point for integrations that
+     * do not provide income classification.
+     */
+    @Transactional
+    public CommercialInvoice recordPayment(
+            UUID invoiceId,
+            BigDecimal amount,
+            String currency,
+            String idempotencyKey,
+            String reference) {
+        return recordPayment(
+                invoiceId, amount, currency, idempotencyKey, reference, null);
     }
 
     /**
@@ -150,7 +170,8 @@ public class BillingService {
             BigDecimal amount,
             String currency,
             String idempotencyKey,
-            String reference) {
+            String reference,
+            UUID incomeSourceId) {
 
         UUID tenantId = TenantContext.getTenantId();
 
@@ -190,7 +211,10 @@ public class BillingService {
                             .equalsIgnoreCase(requestedCurrency)
                     || !sameNullable(
                             prior.getReference(),
-                            reference)) {
+                            reference)
+                    || !java.util.Objects.equals(
+                            prior.getIncomeSourceId(),
+                            incomeSourceId)) {
 
                 throw new ResponseStatusException(
                         HttpStatus.CONFLICT,
@@ -234,14 +258,23 @@ public class BillingService {
          */
         invoice.applyPayment(amount);
 
-        payments.saveAndFlush(
+        CommercialPayment payment = payments.saveAndFlush(
                 new CommercialPayment(
                         tenantId,
                         invoice.getId(),
                         amount,
                         invoiceCurrency,
                         key,
-                        normalizeReference(reference)));
+                        normalizeReference(reference),
+                        incomeSourceId));
+
+        /*
+         * Income allocation is metadata attached to the canonical payment.
+         * No second income/payment ledger is created and no Excel values are
+         * seeded. Active rules are copied as percentages so historical
+         * allocation remains stable if configuration changes later.
+         */
+        incomeAllocations.applyRules(payment);
 
         /*
          * Accounting is posted through the single finance boundary.

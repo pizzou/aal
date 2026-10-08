@@ -9,6 +9,8 @@ import {
   shipmentsApi,
   Shipment,
   financeApi,
+  FinanceIncomeSource,
+  financeIncomeConfigurationApi,
 } from "@/lib/api-client";
 
 type Invoice = {
@@ -79,6 +81,8 @@ export default function BillingPage() {
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
+  const [incomeSources, setIncomeSources] = useState<FinanceIncomeSource[]>([]);
+  const [incomeSourceId, setIncomeSourceId] = useState("");
   const [reconciliation, setReconciliation] = useState<any>(null);
 
   const [loading, setLoading] = useState(true);
@@ -101,6 +105,11 @@ export default function BillingPage() {
       setInvoices(invoiceRows as Invoice[]);
       setShipments(shipmentRows.content);
       setReconciliation(reconciliationRow);
+      try {
+        setIncomeSources(await financeIncomeConfigurationApi.sources());
+      } catch {
+        setIncomeSources([]);
+      }
     } catch (exception) {
       setError(
         exception instanceof Error
@@ -245,6 +254,7 @@ export default function BillingPage() {
           body: JSON.stringify({
             amount,
             reference: paymentReference.trim() || undefined,
+            incomeSourceId: incomeSourceId || undefined,
           }),
         },
       );
@@ -252,6 +262,7 @@ export default function BillingPage() {
       setPaymentInvoice(null);
       setPaymentAmount("");
       setPaymentReference("");
+      setIncomeSourceId("");
 
       setSuccess("Customer payment recorded successfully.");
 
@@ -553,6 +564,26 @@ export default function BillingPage() {
                   onChange={(event) => setPaymentReference(event.target.value)}
                   placeholder="Bank / mobile money / receipt reference"
                 />
+              </label>
+              <label className="field">
+                <span>Income source</span>
+                <select
+                  value={incomeSourceId}
+                  onChange={(event) => setIncomeSourceId(event.target.value)}
+                >
+                  <option value="">Leave unclassified</option>
+                  {incomeSources
+                    .filter((source) => source.active)
+                    .map((source) => (
+                      <option key={source.id} value={source.id}>
+                        {source.name} ({source.code})
+                      </option>
+                    ))}
+                </select>
+                <small>
+                  When selected, the active allocation rules for this source are
+                  copied to the payment.
+                </small>
               </label>
 
               <div className="actions">

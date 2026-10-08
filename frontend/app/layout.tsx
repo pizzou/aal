@@ -24,6 +24,10 @@ export const metadata: Metadata = {
   },
 };
 
+// Nonce-based CSP is request-specific. Keep the document dynamic so Next.js can
+// apply the current middleware nonce to its generated bootstrap/client scripts.
+export const dynamic = "force-dynamic";
+
 export const viewport: Viewport = {
   themeColor: "#071A52",
   colorScheme: "light",

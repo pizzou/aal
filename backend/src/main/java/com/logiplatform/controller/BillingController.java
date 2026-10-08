@@ -21,7 +21,7 @@ public class BillingController {
     public record BillRequest(@NotNull LocalDate dueDate, String owner) {
     }
 
-    public record PaymentRequest(@NotNull @Positive BigDecimal amount, String reference) {
+    public record PaymentRequest(@NotNull @Positive BigDecimal amount, String reference, UUID incomeSourceId) {
     }
 
     @PostMapping("/shipments/{shipmentId}/invoice")
@@ -34,6 +34,6 @@ public class BillingController {
     public CommercialInvoice payment(@PathVariable UUID invoiceId,
             @RequestHeader(value = "Idempotency-Key", required = true) String key,
             @jakarta.validation.Valid @RequestBody PaymentRequest r) {
-        return service.recordPayment(invoiceId, r.amount(), key, r.reference());
+        return service.recordPayment(invoiceId, r.amount(), null, key, r.reference(), r.incomeSourceId());
     }
 }

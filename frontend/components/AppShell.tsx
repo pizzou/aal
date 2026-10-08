@@ -112,6 +112,13 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "COMMERCIAL & FINANCE",
+    label: "Income Allocation",
+    href: "/finance/income-allocation",
+    icon: "money",
+    roles: ["ADMIN", "MANAGER", "FINANCE"],
+  },
+  {
+    section: "COMMERCIAL & FINANCE",
     label: "Management Reports",
     href: "/reports",
     icon: "chart",
@@ -215,44 +222,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (bare) return <>{children}</>;
 
-  if (isLoading)
-    return (
-      <div className="app-loading">
-        <div
-          className="loading-mark"
-          style={{
-            width: 64,
-            height: 64,
-            borderRadius: 16,
-            overflow: "hidden",
-            padding: 0,
-            background: "#071A52",
-          }}
-        >
-          <img
-            src="/branding/aal-logo.jpg"
-            alt="Aviation Africa Logistics Ltd"
-            className="aal-logo"
-          />
-        </div>
-        <div>
-          <strong>Aviation Africa Logistics Ltd</strong>
-          <span>Loading secure operations workspace…</span>
-        </div>
-      </div>
-    );
-
-  if (!accessToken) {
-    return (
-      <div className="app-loading">
-        <div className="loading-mark" aria-hidden="true" />
-        <div>
-          <strong>Aviation Africa Logistics Ltd</strong>
-          <span>Redirecting to secure sign-in…</span>
-        </div>
-      </div>
-    );
-  }
+  /*
+   * Authentication restoration is deliberately non-blocking. Protected pages
+   * render their own recovery state while AuthProvider restores the browser
+   * credential. This prevents a slow API/Render cold start from replacing the
+   * entire application with a blank global loader.
+   */
+  if (isLoading && !accessToken) return <>{children}</>;
+  if (!accessToken) return <>{children}</>;
 
   // Customer accounts are intentionally not supported in the internal UI.
   // AuthProvider clears them before this shell normally renders, but this guard

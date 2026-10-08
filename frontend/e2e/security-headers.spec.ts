@@ -12,7 +12,9 @@ test.describe("AAL production security headers", () => {
 
     const csp = headers["content-security-policy"] || "";
     expect(csp).toContain("script-src 'self'");
-    expect(csp).toContain("strict-dynamic");
+    expect(csp).toContain("script-src-elem 'self'");
+    expect(csp).toContain("script-src-attr 'none'");
+    expect(csp).toMatch(/nonce-[A-Za-z0-9+/=]+/);
     expect(csp).not.toContain("unsafe-eval");
     expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
   });

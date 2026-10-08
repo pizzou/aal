@@ -1,4 +1,4 @@
-const CACHE = "aal-static-v3";
+const CACHE = "aal-static-v4";
 const STATIC_ASSETS = ["/branding/aal-logo.jpg"];
 
 self.addEventListener("install", (event) => {
@@ -32,47 +32,38 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // API responses and authenticated application HTML must always come from the
-  // network. Caching the root/dashboard HTML can keep an old Next.js auth bundle
-  // alive after a deployment and leave users permanently on the auth loading view.
-  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/_next/data/")) {
+  // Next.js HTML, RSC payloads and authenticated APIs must never be served
+  // from this service worker. Vercel/Next handles the correct cache policy.
+  if (
+    url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/_next/") ||
+    url.pathname === "/" ||
+    url.pathname.startsWith("/login") ||
+    url.pathname.startsWith("/aal-control-tower") ||
+    url.pathname.startsWith("/billing") ||
+    url.pathname.startsWith("/finance/") ||
+    url.pathname.startsWith("/reports")
+  ) {
     return;
   }
 
-  // Next.js hashed static chunks are safe to cache. Their filenames change when
-  // the application build changes, so they cannot pin an old application shell.
-  if (url.pathname.startsWith("/_next/static/")) {
-    event.respondWith(
-      caches.open(CACHE).then((cache) =>
-        cache.match(request).then((cached) => {
-          const network = fetch(request)
-            .then((response) => {
-              if (response.ok) {
-                cache.put(request, response.clone()).catch(() => {});
-              }
-              return response;
-            })
-            .catch(() => cached || Response.error());
-
-          return cached || network;
-        }),
-      ),
-    );
-    return;
-  }
-
-  // Keep only the public branding asset offline. Do not cache pages such as /,
-  // /login, or authenticated application routes.
   if (url.pathname === "/branding/aal-logo.jpg") {
     event.respondWith(
       fetch(request)
         .then((response) => {
           if (response.ok) {
-            caches.open(CACHE).then((cache) => cache.put(request, response.clone())).catch(() => {});
+            void caches
+              .open(CACHE)
+              .then((cache) => cache.put(request, response.clone()))
+              .catch(() => undefined);
           }
           return response;
         })
-        .catch(() => caches.match(request).then((cached) => cached || Response.error())),
+        .catch(() =>
+          caches
+            .match(request)
+            .then((cached) => cached || Response.error()),
+        ),
     );
   }
 });

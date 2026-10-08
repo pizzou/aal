@@ -2481,6 +2481,126 @@ export type AdvancedDashboard = {
   quotationStatus: Array<{ status: string; count: number }>;
 };
 
+export type FinanceIncomeSource = {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  description: string | null;
+  active: boolean;
+  createdAt: string;
+};
+
+export type FinanceBankDestination = {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  accountReference: string | null;
+  description: string | null;
+  active: boolean;
+  createdAt: string;
+};
+
+export type FinanceIncomeAllocationRule = {
+  id: string;
+  tenantId: string;
+  incomeSourceId: string;
+  bankDestinationId: string;
+  percentage: number;
+  active: boolean;
+  createdAt: string;
+};
+
+export type CommercialPaymentAllocation = {
+  id: string;
+  tenantId: string;
+  paymentId: string;
+  bankDestinationId: string;
+  percentage: number;
+  createdAt: string;
+};
+
+export const financeIncomeConfigurationApi = {
+  sources: () =>
+    apiFetch<FinanceIncomeSource[]>(
+      "/api/finance/income-configuration/sources",
+    ),
+  createSource: (data: { code: string; name: string; description?: string }) =>
+    apiFetch<FinanceIncomeSource>("/api/finance/income-configuration/sources", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateSource: (
+    id: string,
+    data: {
+      code: string;
+      name: string;
+      description?: string;
+      active: boolean;
+    },
+  ) =>
+    apiFetch<FinanceIncomeSource>(
+      `/api/finance/income-configuration/sources/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    ),
+
+  banks: () =>
+    apiFetch<FinanceBankDestination[]>(
+      "/api/finance/income-configuration/banks",
+    ),
+  createBank: (data: {
+    code: string;
+    name: string;
+    accountReference?: string;
+    description?: string;
+  }) =>
+    apiFetch<FinanceBankDestination>(
+      "/api/finance/income-configuration/banks",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+  updateBank: (
+    id: string,
+    data: {
+      code: string;
+      name: string;
+      accountReference?: string;
+      description?: string;
+      active: boolean;
+    },
+  ) =>
+    apiFetch<FinanceBankDestination>(
+      `/api/finance/income-configuration/banks/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    ),
+
+  rules: () =>
+    apiFetch<FinanceIncomeAllocationRule[]>(
+      "/api/finance/income-configuration/rules",
+    ),
+  createRule: (data: {
+    incomeSourceId: string;
+    bankDestinationId: string;
+    percentage: number;
+  }) =>
+    apiFetch<FinanceIncomeAllocationRule>(
+      "/api/finance/income-configuration/rules",
+      { method: "POST", body: JSON.stringify(data) },
+    ),
+  updateRule: (id: string, data: { percentage: number; active: boolean }) =>
+    apiFetch<FinanceIncomeAllocationRule>(
+      `/api/finance/income-configuration/rules/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    ),
+  paymentAllocations: (paymentId: string) =>
+    apiFetch<CommercialPaymentAllocation[]>(
+      `/api/finance/income-configuration/payments/${encodeURIComponent(paymentId)}/allocations`,
+    ),
+};
+
 export const financeApi = {
   reconcile: (asOf?: string, currency?: string) => {
     const p = new URLSearchParams();

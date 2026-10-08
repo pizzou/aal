@@ -34,6 +34,11 @@ type StoredAuthContext = {
   role: string;
 };
 
+type JwtBootstrap = {
+  tenantId?: string;
+  role?: string;
+};
+
 const AuthContext = createContext<AuthState | null>(null);
 
 let currentTenant: string | null = null;
@@ -48,7 +53,6 @@ function readStoredAuthContext(): StoredAuthContext | null {
   try {
     const raw = window.sessionStorage.getItem(AUTH_CONTEXT_STORAGE_KEY);
     if (!raw) return null;
-
     const parsed = JSON.parse(raw) as Partial<StoredAuthContext>;
     if (
       typeof parsed.tenantId !== "string" ||
@@ -59,11 +63,7 @@ function readStoredAuthContext(): StoredAuthContext | null {
       window.sessionStorage.removeItem(AUTH_CONTEXT_STORAGE_KEY);
       return null;
     }
-
-    return {
-      tenantId: parsed.tenantId,
-      role: parsed.role,
-    };
+    return { tenantId: parsed.tenantId, role: parsed.role };
   } catch {
     return null;
   }
@@ -71,28 +71,81 @@ function readStoredAuthContext(): StoredAuthContext | null {
 
 function writeStoredAuthContext(tenantId: string, role: string): void {
   if (typeof window === "undefined") return;
-
   try {
     window.sessionStorage.setItem(
       AUTH_CONTEXT_STORAGE_KEY,
       JSON.stringify({ tenantId, role }),
     );
   } catch {
-    // Session storage can be unavailable in privacy-restricted browsers.
+    // Storage can be unavailable in privacy-restricted browsers.
   }
 }
 
 function clearStoredAuthContext(): void {
   if (typeof window === "undefined") return;
-
   try {
     window.sessionStorage.removeItem(AUTH_CONTEXT_STORAGE_KEY);
   } catch {
-    // Ignore storage cleanup failures; the in-memory session is still cleared.
+    // Ignore storage cleanup failures.
   }
 }
 
+/*
+ * The JWT is never trusted for authorization on the client. It is only used
+ * to restore the already-issued UI context synchronously during a hard refresh.
+ * Every protected API call is still authorized by the verified server token.
+ */
+function decodeJwtBootstrap(token: string | null): JwtBootstrap | null {
+  if (
+    !token ||
+    token === COOKIE_SESSION_SENTINEL ||
+    typeof window === "undefined"
+  ) {
+    return null;
+  }
+
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+
+    const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(
+      normalized.length + ((4 - (normalized.length % 4)) % 4),
+      "=",
+    );
+    const payload = JSON.parse(window.atob(padded)) as Record<string, unknown>;
+
+    return {
+      tenantId:
+        typeof payload.tenantId === "string" ? payload.tenantId : undefined,
+      role: typeof payload.role === "string" ? payload.role : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isPublicPath(pathname: string): boolean {
+  return (
+    pathname === "/" ||
+    pathname === "/login" ||
+    pathname === "/forgot-password" ||
+    pathname === "/reset-password" ||
+    pathname === "/quote" ||
+    pathname === "/book" ||
+    pathname === "/track" ||
+    pathname.startsWith("/track/") ||
+    pathname.startsWith("/quote/view/") ||
+    pathname.startsWith("/quote/results/")
+  );
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
+  /*
+   * Browser credentials are intentionally read inside useEffect so the server
+   * render and client hydration remain identical. The shell itself never
+   * blocks an already-routed workspace behind this loading state.
+   */
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [role, setRole] = useState<string | null>(null);
   const [accessToken, setAccessTokenState] = useState<string | null>(null);
@@ -101,66 +154,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     let loadingWatchdog: number | null = null;
+
     const storedToken = getAccessToken();
     const storedContext = readStoredAuthContext();
+    const jwt = decodeJwtBootstrap(storedToken);
+    const bootstrapped =
+      storedContext ??
+      (jwt?.tenantId && jwt.role
+        ? { tenantId: jwt.tenantId, role: jwt.role }
+        : null);
+
+    if (storedToken) setAccessTokenState(storedToken);
+
+    if (bootstrapped) {
+      currentTenant = bootstrapped.tenantId;
+      setTenantId(bootstrapped.tenantId);
+      setRole(bootstrapped.role);
+      writeStoredAuthContext(bootstrapped.tenantId, bootstrapped.role);
+      setIsLoading(false);
+    }
+
     const pathname =
       typeof window !== "undefined" ? window.location.pathname : "/";
 
-    const clearLocalSession = () => {
-      clearAccessToken();
-      clearStoredAuthContext();
-      currentTenant = null;
-      setTenantId(null);
-      setRole(null);
-      setAccessTokenState(null);
-    };
-
-    /*
-     * A successful OTP login persists both the bearer token and the validated
-     * tenant/role context. Restore both synchronously on browser refresh so a
-     * slow backend can never turn a refresh into an apparent logout.
-     * Server-side APIs remain the source of truth for authorization.
-     */
-    // Restore a bearer credential immediately. This prevents a browser refresh
-    // from depending on a cold/waking API before the application can render.
-    if (storedToken) {
-      setAccessTokenState(storedToken);
-    }
-
-    if (storedToken && storedContext) {
-      currentTenant = storedContext.tenantId;
-      setTenantId(storedContext.tenantId);
-      setRole(storedContext.role);
-      setAccessTokenState(storedToken);
-
-      /*
-       * Do not block the workspace on a remote session check. The stored
-       * credential/context is enough to hydrate the shell immediately; the
-       * backend remains the authorization source of truth. Protected requests
-       * perform the real server-side validation. This is important on a hard
-       * browser refresh when the Render service is cold.
-       */
-      setIsLoading(false);
-    }
-
-    const publicPage =
-      pathname === "/" ||
-      pathname === "/login" ||
-      pathname === "/forgot-password" ||
-      pathname === "/reset-password" ||
-      pathname === "/quote" ||
-      pathname === "/book" ||
-      pathname === "/track" ||
-      pathname.startsWith("/track/") ||
-      pathname.startsWith("/quote/view/") ||
-      pathname.startsWith("/quote/results/");
-
-    /*
-     * Public pages must render immediately. In particular /login cannot wait
-     * for Render to wake the API service.
-     */
-    if (publicPage && !storedToken) {
-      clearLocalSession();
+    if (isPublicPath(pathname) && !storedToken) {
       setIsLoading(false);
       return () => {
         cancelled = true;
@@ -168,15 +185,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     /*
-     * A complete bearer session is authoritative enough to hydrate the
-     * workspace immediately. Do NOT block a browser refresh on /api/auth/session:
-     * that endpoint performs a database-backed JWT validation and therefore turns
-     * a Render cold start or temporary DB saturation into an apparent logout.
-     *
-     * The first protected API request still validates the JWT server-side. A
-     * definitive 401 clears the local session through api-client.ts.
+     * Bearer sessions do not need a blocking /session request. A protected API
+     * request will verify the JWT. A Render/network timeout must never destroy
+     * a valid local session and send the operator back to the login screen.
      */
-    if (storedToken && storedContext) {
+    if (storedToken && bootstrapped) {
       setIsLoading(false);
       return () => {
         cancelled = true;
@@ -184,14 +197,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     /*
-     * If sessionStorage is unavailable but the HttpOnly cookie exists, recover
-     * it once. This is the exceptional fallback path; it is never used when a
-     * complete local bearer session is already available.
+     * Cookie-only fallback. This path is intentionally isolated and bounded.
+     * Network errors leave the browser session alone; only a definitive
+     * unauthenticated response clears it.
      */
     loadingWatchdog = window.setTimeout(() => {
       if (cancelled) return;
       setIsLoading(false);
-      clearLocalSession();
     }, 5000);
 
     void (async () => {
@@ -203,7 +215,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
 
         if (!session.authenticated || !session.tenantId || !session.role) {
-          clearLocalSession();
+          clearAccessToken();
+          clearStoredAuthContext();
+          currentTenant = null;
+          setTenantId(null);
+          setRole(null);
+          setAccessTokenState(null);
           return;
         }
 
@@ -217,15 +234,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (
           session.mustChangePassword &&
-          typeof window !== "undefined" &&
           window.location.pathname !== "/account/security"
         ) {
           window.location.replace("/account/security");
           return;
         }
       } catch {
-        if (cancelled) return;
-        clearLocalSession();
+        /*
+         * A timeout/cold-start is not proof that authentication is invalid.
+         * Keep any existing browser credential and let protected calls decide.
+         */
       } finally {
         if (loadingWatchdog !== null) {
           window.clearTimeout(loadingWatchdog);
@@ -246,26 +264,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handleAuthenticationExpired = () => {
-      const token = getAccessToken();
-
-      if (token) return;
+      /*
+       * api-client clears the bearer before emitting this event. Therefore an
+       * event with no token is a real server-side 401 and can clear the UI.
+       */
+      if (getAccessToken()) return;
 
       clearStoredAuthContext();
       currentTenant = null;
-
       setTenantId(null);
       setRole(null);
       setAccessTokenState(null);
+      setIsLoading(false);
     };
 
     window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthenticationExpired);
-
-    return () => {
+    return () =>
       window.removeEventListener(
         AUTH_EXPIRED_EVENT,
         handleAuthenticationExpired,
       );
-    };
   }, []);
 
   function login(token: string | null, tenant: string, userRole: string) {
@@ -275,41 +293,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setAccessToken(token);
     writeStoredAuthContext(tenant, userRole);
-
     currentTenant = tenant;
-
     setTenantId(tenant);
     setRole(userRole);
     setAccessTokenState(token);
+    setIsLoading(false);
   }
 
   async function logout() {
     try {
       await authApi.logout();
     } catch {
-      // Local credentials must always be removed even when backend logout fails.
+      // Local credentials must always be removed.
     }
 
     clearAccessToken();
     clearStoredAuthContext();
-
     currentTenant = null;
-
     setTenantId(null);
     setRole(null);
     setAccessTokenState(null);
+    setIsLoading(false);
   }
 
   return (
     <AuthContext.Provider
-      value={{
-        accessToken,
-        tenantId,
-        role,
-        isLoading,
-        login,
-        logout,
-      }}
+      value={{ accessToken, tenantId, role, isLoading, login, logout }}
     >
       {children}
     </AuthContext.Provider>
@@ -318,10 +327,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth(): AuthState {
   const ctx = useContext(AuthContext);
-
-  if (!ctx) {
-    throw new Error("useAuth must be used within AuthProvider");
-  }
-
+  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   return ctx;
 }

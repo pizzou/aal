@@ -369,7 +369,17 @@ export default function AalControlTower() {
     [trend],
   );
 
-  if (isLoading || !accessToken) return null;
+  if (!accessToken) {
+    return (
+      <main className="dashboard-page">
+        <section className="dashboard-loading card" aria-live="polite">
+          <img src="/branding/aal-logo.jpg" alt="Aviation Africa Logistics Ltd" />
+          <strong>Restoring secure operations workspace…</strong>
+          <span>Restoring your existing AAL session. Live dashboard data will load automatically.</span>
+        </section>
+      </main>
+    );
+  }
 
   // The API contract normally supplies every nested dashboard object. Keep the
   // control tower render-safe when an older backend, a partially populated

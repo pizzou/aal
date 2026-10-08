@@ -46,6 +46,11 @@ export function middleware(request: NextRequest) {
     "font-src 'self' data:",
     "style-src 'self' 'unsafe-inline'",
     `script-src 'self' 'nonce-${value}' 'strict-dynamic'`,
+    // script-src-elem is intentionally explicit: it governs <script src> elements
+    // independently of strict-dynamic and keeps same-origin Next.js chunks loadable
+    // even when a browser/proxy supplies a script element without the nonce.
+    `script-src-elem 'self' 'nonce-${value}'`,
+    "script-src-attr 'none'",
     `connect-src 'self' ${apiOrigin} wss:`,
     "worker-src 'self' blob:",
     "manifest-src 'self'",

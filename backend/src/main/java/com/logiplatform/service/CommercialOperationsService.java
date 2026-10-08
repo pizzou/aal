@@ -380,7 +380,8 @@ public class CommercialOperationsService {
                         r.amount(),
                         r.currency(),
                         r.idempotencyKey(),
-                        r.reference()));
+                        r.reference(),
+                        r.incomeSourceId()));
     }
 
     @Transactional

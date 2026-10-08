@@ -2,6 +2,8 @@
 
 import { useEffect } from "react";
 
+const SERVICE_WORKER_URL = "/sw.js?v=4";
+
 export default function ServiceWorkerRegistration() {
   useEffect(() => {
     if (!("serviceWorker" in navigator) || !window.isSecureContext) {
@@ -11,12 +13,11 @@ export default function ServiceWorkerRegistration() {
     let cancelled = false;
 
     void navigator.serviceWorker
-      .register("/sw.js", { updateViaCache: "none" })
+      .register(SERVICE_WORKER_URL, { updateViaCache: "none" })
       .then((registration) => {
         if (cancelled) return;
 
-        // Pick up security/cache fixes without waiting for the browser's normal
-        // service-worker update interval.
+        // Make the latest worker eligible immediately after a deployment.
         void registration.update().catch(() => undefined);
       })
       .catch(() => undefined);

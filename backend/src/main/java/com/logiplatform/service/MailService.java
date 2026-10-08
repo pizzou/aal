@@ -413,6 +413,125 @@ public class MailService {
         );
     }
 
+
+    /**
+     * Sends a customer-facing financial document as a PDF attachment.
+     * This method is intentionally synchronous so the API only reports
+     * success after Brevo has accepted the message.
+     */
+    public void sendFinancialDocument(
+            String recipientEmail,
+            String recipientName,
+            String subject,
+            String messageHtml,
+            String attachmentName,
+            byte[] attachmentBytes) {
+
+        if (recipientEmail == null || recipientEmail.isBlank()) {
+            throw new MailDeliveryException("Recipient email is required");
+        }
+        if (attachmentBytes == null || attachmentBytes.length == 0) {
+            throw new MailDeliveryException("Document attachment is empty");
+        }
+
+        String greeting = escape(
+                recipientName == null || recipientName.isBlank()
+                        ? "Customer"
+                        : recipientName.trim());
+
+        String html = """
+                <html><body style="font-family:Arial,sans-serif;color:#172033;line-height:1.55">
+                  <div style="max-width:680px;margin:0 auto;padding:28px">
+                    <div style="font-size:13px;font-weight:700;letter-spacing:1.5px;color:#0B3B8F">%s</div>
+                    <h2 style="margin:10px 0 8px">%s</h2>
+                    <p>Hello %s,</p>
+                    <p>%s</p>
+                    <p style="font-size:13px;color:#64748b">The official PDF document is attached to this email.</p>
+                    <p>%s</p>
+                  </div>
+                </body></html>
+                """.formatted(
+                escape(senderName == null || senderName.isBlank()
+                        ? "Aviation Africa Logistics Ltd"
+                        : senderName.trim()),
+                escape(subject),
+                greeting,
+                messageHtml == null ? "" : messageHtml,
+                escape(senderName == null || senderName.isBlank()
+                        ? "Aviation Africa Logistics Ltd"
+                        : senderName.trim()));
+
+        sendOrThrowWithAttachment(
+                recipientEmail.trim(),
+                subject,
+                html,
+                attachmentName,
+                attachmentBytes);
+    }
+
+    private void sendOrThrowWithAttachment(
+            String to,
+            String subject,
+            String html,
+            String attachmentName,
+            byte[] attachmentBytes) {
+
+        if (brevoUrl == null || brevoUrl.isBlank()) {
+            throw new MailDeliveryException("Transactional email provider URL is not configured");
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.set("api-key", brevoApiKey);
+
+        String resolvedSender = senderResolver.resolveOrBlank();
+        if (resolvedSender.isBlank()) {
+            throw new MailDeliveryException("No active Brevo transactional sender is available");
+        }
+
+        Map<String, Object> attachment = Map.of(
+                "content", java.util.Base64.getEncoder().encodeToString(attachmentBytes),
+                "name", attachmentName == null || attachmentName.isBlank()
+                        ? "document.pdf"
+                        : attachmentName);
+
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("sender", Map.of(
+                "email", resolvedSender,
+                "name", senderName == null || senderName.isBlank()
+                        ? "Aviation Africa Logistics Ltd"
+                        : senderName.trim()));
+        payload.put("to", List.of(Map.of("email", to)));
+        payload.put("subject", subject);
+        payload.put("htmlContent", html);
+        payload.put("attachment", List.of(attachment));
+
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    brevoUrl.trim(),
+                    HttpMethod.POST,
+                    new HttpEntity<>(payload, headers),
+                    String.class);
+
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new MailDeliveryException(
+                        "Email provider rejected the message (HTTP "
+                                + response.getStatusCode().value() + ")");
+            }
+            log.info(
+                    "Financial document email accepted recipient={} sender={} attachment={}",
+                    maskEmail(to), maskEmail(resolvedSender), attachmentName);
+        } catch (HttpStatusCodeException ex) {
+            throw new MailDeliveryException(
+                    "Email provider rejected the message (HTTP "
+                            + ex.getStatusCode().value() + ")", ex);
+        } catch (RestClientException ex) {
+            throw new MailDeliveryException(
+                    "Email provider is temporarily unavailable", ex);
+        }
+    }
+
     private void send(
             String to,
             String subject,

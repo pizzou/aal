@@ -113,6 +113,7 @@ public class SecurityConfig {
                                 new AntPathRequestMatcher("/api/public/commercial/**"),
                                 new AntPathRequestMatcher("/api/public/quotes/**"),
                                 new AntPathRequestMatcher("/api/public/tracking/**"),
+                                new AntPathRequestMatcher("/api/finance/hardening/public/**"),
 
                                 new AntPathRequestMatcher("/actuator/health"),
                                 new AntPathRequestMatcher("/actuator/health/**"),

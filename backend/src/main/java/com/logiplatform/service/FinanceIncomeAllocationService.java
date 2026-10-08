@@ -53,7 +53,7 @@ public class FinanceIncomeAllocationService {
 
     @Transactional(readOnly = true)
     public List<FinanceIncomeAllocationRule> rules() {
-        return rules.findAllByTenantIdOrderByIncomeSourceIdBankDestinationId(
+        return rules.findAllByTenantIdOrderByIncomeSourceIdAscBankDestinationIdAsc(
                 TenantContext.getTenantId());
     }
 

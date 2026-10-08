@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   apiFetch,
+  downloadApiFile,
   commercialApi,
   shipmentsApi,
   Shipment,
@@ -84,6 +85,10 @@ export default function BillingPage() {
   const [incomeSources, setIncomeSources] = useState<FinanceIncomeSource[]>([]);
   const [incomeSourceId, setIncomeSourceId] = useState("");
   const [reconciliation, setReconciliation] = useState<any>(null);
+  const [lastReceipt, setLastReceipt] = useState<{
+    paymentId: string;
+    receiptNo: string | null;
+  } | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -259,6 +264,21 @@ export default function BillingPage() {
         },
       );
 
+      let receipt: { paymentId: string; receiptNo: string | null } | null =
+        null;
+      try {
+        receipt = await apiFetch<{
+          paymentId: string;
+          receiptNo: string | null;
+        }>(
+          `/api/finance/documents/invoices/${paymentInvoice.id}/latest-receipt`,
+        );
+      } catch {
+        // The collection itself has already succeeded; receipt lookup is a
+        // convenience step and must not make a successful payment look failed.
+      }
+
+      setLastReceipt(receipt);
       setPaymentInvoice(null);
       setPaymentAmount("");
       setPaymentReference("");
@@ -275,6 +295,90 @@ export default function BillingPage() {
       );
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function downloadInvoice(invoice: Invoice) {
+    try {
+      await downloadApiFile(
+        `/api/finance/documents/invoices/${invoice.id}/pdf`,
+        `invoice-${invoice.invoiceNo}.pdf`,
+      );
+    } catch (exception) {
+      setError(
+        exception instanceof Error
+          ? exception.message
+          : "Unable to download invoice.",
+      );
+    }
+  }
+
+  async function emailInvoice(invoice: Invoice) {
+    const recipientEmail = window.prompt(
+      "Client email (leave blank to use the shipment notification email):",
+      "",
+    );
+    if (recipientEmail === null) return;
+    try {
+      await apiFetch<void>(
+        `/api/finance/documents/invoices/${invoice.id}/email`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            recipientEmail: recipientEmail.trim() || undefined,
+          }),
+        },
+      );
+      setSuccess(
+        `Invoice ${invoice.invoiceNo} was accepted for email delivery.`,
+      );
+    } catch (exception) {
+      setError(
+        exception instanceof Error
+          ? exception.message
+          : "Unable to email invoice.",
+      );
+    }
+  }
+
+  async function downloadReceipt(paymentId: string) {
+    try {
+      await downloadApiFile(
+        `/api/finance/documents/payments/${paymentId}/receipt/pdf`,
+        "payment-receipt.pdf",
+      );
+    } catch (exception) {
+      setError(
+        exception instanceof Error
+          ? exception.message
+          : "Unable to download receipt.",
+      );
+    }
+  }
+
+  async function emailReceipt(paymentId: string) {
+    const recipientEmail = window.prompt(
+      "Client email (leave blank to use the shipment notification email):",
+      "",
+    );
+    if (recipientEmail === null) return;
+    try {
+      await apiFetch<void>(
+        `/api/finance/documents/payments/${paymentId}/receipt/email`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            recipientEmail: recipientEmail.trim() || undefined,
+          }),
+        },
+      );
+      setSuccess("Payment receipt was accepted for email delivery.");
+    } catch (exception) {
+      setError(
+        exception instanceof Error
+          ? exception.message
+          : "Unable to email receipt.",
+      );
     }
   }
 
@@ -475,6 +579,92 @@ export default function BillingPage() {
 
                 if (!shipment) {
                   return null;
+                }
+
+                async function downloadInvoice(invoice: Invoice) {
+                  try {
+                    await downloadApiFile(
+                      `/api/finance/documents/invoices/${invoice.id}/pdf`,
+                      `invoice-${invoice.invoiceNo}.pdf`,
+                    );
+                  } catch (exception) {
+                    setError(
+                      exception instanceof Error
+                        ? exception.message
+                        : "Unable to download invoice.",
+                    );
+                  }
+                }
+
+                async function emailInvoice(invoice: Invoice) {
+                  const recipientEmail = window.prompt(
+                    "Client email (leave blank to use the shipment notification email):",
+                    "",
+                  );
+                  if (recipientEmail === null) return;
+                  try {
+                    await apiFetch<void>(
+                      `/api/finance/documents/invoices/${invoice.id}/email`,
+                      {
+                        method: "POST",
+                        body: JSON.stringify({
+                          recipientEmail: recipientEmail.trim() || undefined,
+                        }),
+                      },
+                    );
+                    setSuccess(
+                      `Invoice ${invoice.invoiceNo} was accepted for email delivery.`,
+                    );
+                  } catch (exception) {
+                    setError(
+                      exception instanceof Error
+                        ? exception.message
+                        : "Unable to email invoice.",
+                    );
+                  }
+                }
+
+                async function downloadReceipt(paymentId: string) {
+                  try {
+                    await downloadApiFile(
+                      `/api/finance/documents/payments/${paymentId}/receipt/pdf`,
+                      "payment-receipt.pdf",
+                    );
+                  } catch (exception) {
+                    setError(
+                      exception instanceof Error
+                        ? exception.message
+                        : "Unable to download receipt.",
+                    );
+                  }
+                }
+
+                async function emailReceipt(paymentId: string) {
+                  const recipientEmail = window.prompt(
+                    "Client email (leave blank to use the shipment notification email):",
+                    "",
+                  );
+                  if (recipientEmail === null) return;
+                  try {
+                    await apiFetch<void>(
+                      `/api/finance/documents/payments/${paymentId}/receipt/email`,
+                      {
+                        method: "POST",
+                        body: JSON.stringify({
+                          recipientEmail: recipientEmail.trim() || undefined,
+                        }),
+                      },
+                    );
+                    setSuccess(
+                      "Payment receipt was accepted for email delivery.",
+                    );
+                  } catch (exception) {
+                    setError(
+                      exception instanceof Error
+                        ? exception.message
+                        : "Unable to email receipt.",
+                    );
+                  }
                 }
 
                 return (
@@ -696,6 +886,92 @@ export default function BillingPage() {
                 filtered.map((invoice) => {
                   const shipment = shipmentForInvoice(invoice);
 
+                  async function downloadInvoice(invoice: Invoice) {
+                    try {
+                      await downloadApiFile(
+                        `/api/finance/documents/invoices/${invoice.id}/pdf`,
+                        `invoice-${invoice.invoiceNo}.pdf`,
+                      );
+                    } catch (exception) {
+                      setError(
+                        exception instanceof Error
+                          ? exception.message
+                          : "Unable to download invoice.",
+                      );
+                    }
+                  }
+
+                  async function emailInvoice(invoice: Invoice) {
+                    const recipientEmail = window.prompt(
+                      "Client email (leave blank to use the shipment notification email):",
+                      "",
+                    );
+                    if (recipientEmail === null) return;
+                    try {
+                      await apiFetch<void>(
+                        `/api/finance/documents/invoices/${invoice.id}/email`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify({
+                            recipientEmail: recipientEmail.trim() || undefined,
+                          }),
+                        },
+                      );
+                      setSuccess(
+                        `Invoice ${invoice.invoiceNo} was accepted for email delivery.`,
+                      );
+                    } catch (exception) {
+                      setError(
+                        exception instanceof Error
+                          ? exception.message
+                          : "Unable to email invoice.",
+                      );
+                    }
+                  }
+
+                  async function downloadReceipt(paymentId: string) {
+                    try {
+                      await downloadApiFile(
+                        `/api/finance/documents/payments/${paymentId}/receipt/pdf`,
+                        "payment-receipt.pdf",
+                      );
+                    } catch (exception) {
+                      setError(
+                        exception instanceof Error
+                          ? exception.message
+                          : "Unable to download receipt.",
+                      );
+                    }
+                  }
+
+                  async function emailReceipt(paymentId: string) {
+                    const recipientEmail = window.prompt(
+                      "Client email (leave blank to use the shipment notification email):",
+                      "",
+                    );
+                    if (recipientEmail === null) return;
+                    try {
+                      await apiFetch<void>(
+                        `/api/finance/documents/payments/${paymentId}/receipt/email`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify({
+                            recipientEmail: recipientEmail.trim() || undefined,
+                          }),
+                        },
+                      );
+                      setSuccess(
+                        "Payment receipt was accepted for email delivery.",
+                      );
+                    } catch (exception) {
+                      setError(
+                        exception instanceof Error
+                          ? exception.message
+                          : "Unable to email receipt.",
+                      );
+                    }
+                  }
+
                   return (
                     <tr key={invoice.id}>
                       <td>
@@ -746,15 +1022,31 @@ export default function BillingPage() {
                       </td>
 
                       <td>
-                        {invoice.balance > 0 && (
+                        <div className="actions" style={{ flexWrap: "wrap" }}>
                           <button
                             type="button"
                             className="btn btn-small"
-                            onClick={() => setPaymentInvoice(invoice)}
+                            onClick={() => downloadInvoice(invoice)}
                           >
-                            Receive payment
+                            Invoice PDF
                           </button>
-                        )}
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            onClick={() => emailInvoice(invoice)}
+                          >
+                            Email
+                          </button>
+                          {invoice.balance > 0 && (
+                            <button
+                              type="button"
+                              className="btn btn-small"
+                              onClick={() => setPaymentInvoice(invoice)}
+                            >
+                              Receive payment
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

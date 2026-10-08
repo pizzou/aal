@@ -156,3 +156,12 @@ integration:
 # Control-tower aggregate query guard.
 dashboard:
   query-timeout-seconds: ${DASHBOARD_QUERY_TIMEOUT_SECONDS:4}
+
+financial-document:
+  storage-provider: ${FINANCIAL_DOCUMENT_STORAGE_PROVIDER:SUPABASE}
+  supabase-url: ${SUPABASE_URL:}
+  supabase-service-key: ${SUPABASE_SERVICE_ROLE_KEY:}
+  supabase-bucket: ${SUPABASE_FINANCIAL_DOCUMENT_BUCKET:financial-documents}
+
+finance:
+  overdue-reminder-cron: ${FINANCE_OVERDUE_REMINDER_CRON:0 0 8 * * *}

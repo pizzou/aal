@@ -442,6 +442,45 @@ export async function apiFetch<T>(
   return value;
 }
 
+export async function downloadApiFile(
+  path: string,
+  fallbackFilename: string,
+): Promise<void> {
+  const headers = new Headers();
+  applyAuthenticationHeader(headers, path);
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "GET",
+    credentials: "include",
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      await extractErrorMessage(
+        response,
+        `Download failed with status ${response.status}`,
+      ),
+    );
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  const filename = match?.[1] || fallbackFilename;
+
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export interface AuthLoginResponse {
   accessToken: string | null;
   tenantId: string;

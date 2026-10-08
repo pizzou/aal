@@ -3,7 +3,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { ApiError, ManagementReport, reportsApi } from "@/lib/api-client";
+import {
+  ApiError,
+  ManagementReport,
+  reportsApi,
+  downloadApiFile,
+} from "@/lib/api-client";
 import ReportCharts from "@/components/ReportCharts";
 
 function firstOfMonth() {
@@ -24,6 +29,20 @@ export default function ReportsPage() {
   const [to, setTo] = useState(today());
   const [report, setReport] = useState<ManagementReport | null>(null);
   const [error, setError] = useState("");
+  async function downloadReport(format: "pdf" | "xlsx" | "csv") {
+    try {
+      const params = new URLSearchParams();
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      await downloadApiFile(
+        `/api/reports/management/export.${format}?${params.toString()}`,
+        `aal-management-report.${format}`,
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Unable to export report");
+    }
+  }
+
   async function load() {
     try {
       setError("");
@@ -72,9 +91,20 @@ export default function ReportsPage() {
           </div>
           <div className="field">
             <label>&nbsp;</label>
-            <button className="btn btn-primary" onClick={load}>
-              Refresh report
-            </button>
+            <div className="actions" style={{ flexWrap: "wrap" }}>
+              <button className="btn btn-primary" onClick={load}>
+                Refresh report
+              </button>
+              <button className="btn" onClick={() => downloadReport("pdf")}>
+                PDF
+              </button>
+              <button className="btn" onClick={() => downloadReport("xlsx")}>
+                Excel
+              </button>
+              <button className="btn" onClick={() => downloadReport("csv")}>
+                CSV
+              </button>
+            </div>
           </div>
         </div>
       </section>

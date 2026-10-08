@@ -89,6 +89,15 @@ public class CommercialInvoice {
     )
     private String notes;
 
+    @Column(name = "lifecycle_status", nullable = false, length = 30)
+    private String lifecycleStatus = "ISSUED";
+
+    @Column(name = "credit_note_amount", nullable = false, precision = 19, scale = 4)
+    private BigDecimal creditNoteAmount = BigDecimal.ZERO;
+
+    @Column(name = "debit_note_amount", nullable = false, precision = 19, scale = 4)
+    private BigDecimal debitNoteAmount = BigDecimal.ZERO;
+
     @Version
     @Column(
             name = "version",
@@ -179,10 +188,20 @@ public class CommercialInvoice {
         return amountPaid;
     }
 
+    public BigDecimal getCreditNoteAmount() {
+        return creditNoteAmount;
+    }
+
+    public BigDecimal getDebitNoteAmount() {
+        return debitNoteAmount;
+    }
+
+    public BigDecimal getAdjustedTotal() {
+        return invoiceAmount.add(debitNoteAmount).subtract(creditNoteAmount);
+    }
+
     public BigDecimal getBalance() {
-        return invoiceAmount.subtract(
-                amountPaid
-        );
+        return getAdjustedTotal().subtract(amountPaid);
     }
 
     public LocalDate getDueDate() {
@@ -203,6 +222,17 @@ public class CommercialInvoice {
 
     public String getNotes() {
         return notes;
+    }
+
+    public String getLifecycleStatus() {
+        return lifecycleStatus;
+    }
+
+    public void changeLifecycleStatus(String status) {
+        if (status == null || status.isBlank()) {
+            throw new IllegalArgumentException("Invoice lifecycle status is required");
+        }
+        this.lifecycleStatus = status.trim().toUpperCase();
     }
 
     public long getDaysOverdue() {

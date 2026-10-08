@@ -336,7 +336,7 @@ public class EnterpriseCompletionService {
     public List<Map<String,Object>> customerStatement(String client) {
         return db.queryForList("""
           SELECT i.invoice_no,i.issue_date,i.due_date,i.currency,i.invoice_amount,i.amount_paid,
-                 (i.invoice_amount-i.amount_paid) balance,i.status
+                 (i.invoice_amount+i.debit_note_amount-i.credit_note_amount-i.amount_paid) balance,i.lifecycle_status status
           FROM commercial_invoices i
           WHERE i.client=? ORDER BY i.issue_date DESC
           """, client);

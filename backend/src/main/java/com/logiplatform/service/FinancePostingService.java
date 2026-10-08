@@ -34,21 +34,60 @@ public class FinancePostingService {
         validateTenant(tenantId);
         validateAmount(amount);
         String c = normalizeCurrency(currency);
-        postBalanced(tenantId, invoiceId, "INVOICE", invoiceId, amount, c,
+        BigDecimal alreadyPosted = ledger.sumBySource(
+                tenantId, "INVOICE", invoiceId, "DEBIT", c);
+        BigDecimal unposted = amount.subtract(alreadyPosted == null ? BigDecimal.ZERO : alreadyPosted);
+        if (unposted.signum() <= 0) return;
+        postBalanced(tenantId, invoiceId, "INVOICE", invoiceId, unposted, c,
                 ACCOUNTS_RECEIVABLE, FREIGHT_REVENUE, "Freight invoice " + invoiceNo);
     }
 
     @Transactional
     public void postCustomerPayment(UUID tenantId, UUID invoiceId, BigDecimal amount,
             String currency, String invoiceNo, String reference) {
+        postCustomerPayment(tenantId, null, invoiceId, amount, currency, invoiceNo, reference);
+    }
+
+    @Transactional
+    public void postCustomerPayment(UUID tenantId, UUID paymentId, UUID invoiceId, BigDecimal amount,
+            String currency, String invoiceNo, String reference) {
         validateTenant(tenantId);
         validateAmount(amount);
         String c = normalizeCurrency(currency);
+        if (paymentId != null) {
+            BigDecimal alreadyPosted = ledger.sumBySource(
+                    tenantId, "CUSTOMER_PAYMENT", paymentId, "DEBIT", c);
+            BigDecimal unposted = amount.subtract(alreadyPosted == null ? BigDecimal.ZERO : alreadyPosted);
+            if (unposted.signum() <= 0) return;
+            amount = unposted;
+        }
         String description = "Customer payment " + invoiceNo;
         if (reference != null && !reference.isBlank())
             description += " / " + reference.trim();
-        postBalanced(tenantId, invoiceId, "CUSTOMER_PAYMENT", null, amount, c,
+        postBalanced(tenantId, invoiceId, "CUSTOMER_PAYMENT", paymentId, amount, c,
                 CASH, ACCOUNTS_RECEIVABLE, description);
+    }
+
+    @Transactional
+    public void postCreditNote(UUID tenantId, UUID noteId, BigDecimal amount,
+            String currency, String invoiceNo, String reason) {
+        validateTenant(tenantId);
+        validateAmount(amount);
+        String c = normalizeCurrency(currency);
+        postBalanced(tenantId, null, "CREDIT_NOTE", noteId, amount, c,
+                FREIGHT_REVENUE, ACCOUNTS_RECEIVABLE,
+                "Credit note for " + invoiceNo + " / " + reason);
+    }
+
+    @Transactional
+    public void postDebitNote(UUID tenantId, UUID noteId, BigDecimal amount,
+            String currency, String invoiceNo, String reason) {
+        validateTenant(tenantId);
+        validateAmount(amount);
+        String c = normalizeCurrency(currency);
+        postBalanced(tenantId, null, "DEBIT_NOTE", noteId, amount, c,
+                ACCOUNTS_RECEIVABLE, FREIGHT_REVENUE,
+                "Debit note for " + invoiceNo + " / " + reason);
     }
 
     @Transactional

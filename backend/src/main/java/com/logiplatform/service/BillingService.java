@@ -18,6 +18,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Locale;
 import java.util.UUID;
+import com.logiplatform.security.TenantPrincipal;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 @Service
 public class BillingService {
@@ -46,6 +48,37 @@ public class BillingService {
     }
 
     @Transactional
+    public CommercialInvoice createDraftInvoice(UUID shipmentId, LocalDate dueDate, String owner) {
+        UUID tenantId=TenantContext.getTenantId();
+        Shipment shipment=shipments.findByIdAndTenantId(shipmentId,tenantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Shipment not found"));
+        CommercialInvoice existing=invoices.findByTenantIdAndShipmentId(tenantId,shipmentId).orElse(null);
+        if(existing!=null) return existing;
+
+        BigDecimal amount=shipment.getAmountBilledToClient();
+        if(amount==null) amount=shipment.getClientRevenue();
+        if(amount==null || amount.signum()<=0)
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,"Shipment has no billable client revenue");
+
+        String currency=normalizeCurrency(shipment.getCurrency()==null?"USD":shipment.getCurrency());
+        String invoiceNo=shipment.getInvoiceNo();
+        if(invoiceNo==null || invoiceNo.isBlank()){
+            invoiceNo=documentSequences.nextInvoiceNumber();
+            shipment.assignInvoiceNoIfBlank(invoiceNo);
+            shipments.save(shipment);
+        }
+
+        CommercialInvoice invoice=invoices.saveAndFlush(new CommercialInvoice(
+                tenantId,invoiceNo,LocalDate.now(),
+                shipment.getClientName()!=null?shipment.getClientName():shipment.getContact(),
+                shipmentId,currency,amount,dueDate,owner));
+        invoice.changeLifecycleStatus("DRAFT");
+        invoices.updateLifecycleStatus(tenantId,invoice.getId(),"DRAFT");
+        invoices.insertLifecycleHistory(tenantId,invoice.getId(),null,"DRAFT","Draft invoice created",currentUser());
+        return invoice;
+    }
+
+    @Transactional
     public CommercialInvoice billShipment(
             UUID shipmentId,
             LocalDate dueDate,
@@ -69,6 +102,14 @@ public class BillingService {
                 .orElse(null);
 
         if (existing != null) {
+            if ("DRAFT".equalsIgnoreCase(existing.getLifecycleStatus())) {
+                finance.postInvoice(tenantId, existing.getId(), existing.getInvoiceAmount(),
+                        existing.getCurrency(), existing.getInvoiceNo());
+                existing.changeLifecycleStatus("ISSUED");
+                invoices.updateLifecycleStatus(tenantId, existing.getId(), "ISSUED");
+                invoices.insertLifecycleHistory(tenantId, existing.getId(), "DRAFT", "ISSUED",
+                        "Draft invoice issued by billing", currentUser());
+            }
             return existing;
         }
 
@@ -116,6 +157,10 @@ public class BillingService {
                 amount,
                 currency,
                 invoiceNo);
+        invoice.changeLifecycleStatus("ISSUED");
+        invoices.updateLifecycleStatus(tenantId, invoice.getId(), "ISSUED");
+        invoices.insertLifecycleHistory(tenantId, invoice.getId(), null, "ISSUED",
+                "Invoice issued from shipment billing", currentUser());
 
         return invoice;
     }
@@ -241,6 +286,31 @@ public class BillingService {
 
         String invoiceCurrency = normalizeCurrency(invoice.getCurrency());
 
+        /*
+         * Re-check idempotency after acquiring the invoice lock. Two identical
+         * requests can pass the first read concurrently; the second request
+         * must observe the committed payment instead of attempting a second
+         * receipt/ledger posting.
+         */
+        CommercialPayment lockedPrior = payments
+                .findByTenantIdAndIdempotencyKey(tenantId, key)
+                .orElse(null);
+        if (lockedPrior != null) {
+            String requestedCurrency = currency == null || currency.isBlank()
+                    ? invoiceCurrency
+                    : normalizeCurrency(currency);
+            if (!lockedPrior.getInvoiceId().equals(invoiceId)
+                    || lockedPrior.getAmount().compareTo(amount) != 0
+                    || !lockedPrior.getCurrency().equalsIgnoreCase(requestedCurrency)
+                    || !sameNullable(lockedPrior.getReference(), reference)
+                    || !java.util.Objects.equals(lockedPrior.getIncomeSourceId(), incomeSourceId)) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Idempotency key was already used with different payment data");
+            }
+            return invoice;
+        }
+
         if (currency != null
                 && !currency.isBlank()
                 && !invoiceCurrency.equalsIgnoreCase(
@@ -258,6 +328,8 @@ public class BillingService {
          */
         invoice.applyPayment(amount);
 
+        String receiptNo = documentSequences.nextReceiptNumber();
+
         CommercialPayment payment = payments.saveAndFlush(
                 new CommercialPayment(
                         tenantId,
@@ -266,7 +338,8 @@ public class BillingService {
                         invoiceCurrency,
                         key,
                         normalizeReference(reference),
-                        incomeSourceId));
+                        incomeSourceId,
+                        receiptNo));
 
         /*
          * Income allocation is metadata attached to the canonical payment.
@@ -281,13 +354,34 @@ public class BillingService {
          */
         finance.postCustomerPayment(
                 tenantId,
+                payment.getId(),
                 invoice.getId(),
                 amount,
                 invoiceCurrency,
                 invoice.getInvoiceNo(),
                 reference);
 
-        return invoices.save(invoice);
+        String previousLifecycle = savedLifecycle(invoice);
+        CommercialInvoice saved = invoices.save(invoice);
+        String lifecycle = saved.getBalance().signum() <= 0 ? "PAID" : "PARTIALLY_PAID";
+        saved.changeLifecycleStatus(lifecycle);
+        invoices.updateLifecycleStatus(tenantId, saved.getId(), lifecycle);
+        if (!lifecycle.equalsIgnoreCase(previousLifecycle)) {
+            invoices.insertLifecycleHistory(tenantId, saved.getId(), previousLifecycle, lifecycle,
+                    "Customer payment recorded", currentUser());
+        }
+        return saved;
+    }
+
+    private static String savedLifecycle(CommercialInvoice invoice) {
+        String value=invoice.getLifecycleStatus();
+        return value==null || value.isBlank() ? "ISSUED" : value;
+    }
+
+    private static UUID currentUser() {
+        Object principal=SecurityContextHolder.getContext().getAuthentication()==null
+                ? null : SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        return principal instanceof TenantPrincipal tp ? tp.userId() : null;
     }
 
     private static String normalizeCurrency(String currency) {

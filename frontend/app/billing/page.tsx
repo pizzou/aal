@@ -502,6 +502,9 @@ export default function BillingPage() {
           <Link className="btn btn-primary" href="/reports">
             Management reports
           </Link>
+          <Link className="btn" href="/billing/hardening">
+            Financial hardening
+          </Link>
         </div>
       </div>
 

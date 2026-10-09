@@ -25,7 +25,7 @@ import java.util.*;
 public class FinanceProfitAllocationService {
     private static final BigDecimal HUNDRED = new BigDecimal("100.0000");
     private static final BigDecimal TOLERANCE = new BigDecimal("0.0001");
-    private static final String BASIS = "Billed revenue minus supplier payments and other expenses (AAL net-income formula)";
+    private static final String BASIS = "AAL net income: billed revenue minus supplier payments (falling back to supplier cost) and other expenses (falling back to other cost)";
 
     private final JdbcTemplate db;
     private final ShipmentRepository shipments;
@@ -112,8 +112,16 @@ public class FinanceProfitAllocationService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "Shipment has no positive billed revenue; invoice it before allocating profit");
         }
-        BigDecimal supplierPaid = nz(shipment.getAmountPaidToSupply(), BigDecimal.ZERO);
-        BigDecimal otherExpenses = nz(shipment.getOtherExpenses(), BigDecimal.ZERO);
+        // Keep this calculation aligned with the operational reports and legacy
+        // workbook semantics: where cash-paid/expense values have not been entered,
+        // use the recorded supplier/other cost rather than silently treating them
+        // as zero and overstating distributable profit.
+        BigDecimal supplierPaid = nz(
+                shipment.getAmountPaidToSupply(),
+                nz(shipment.getSupplierCost(), BigDecimal.ZERO));
+        BigDecimal otherExpenses = nz(
+                shipment.getOtherExpenses(),
+                nz(shipment.getOtherCost(), BigDecimal.ZERO));
         BigDecimal netProfit = revenue.subtract(supplierPaid).subtract(otherExpenses).setScale(4, RoundingMode.HALF_UP);
         if (netProfit.signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,

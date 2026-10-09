@@ -67,8 +67,8 @@ public interface CommercialInvoiceRepository
                 (
                     tenant_id,
                     invoice_id,
-                    previous_status,
-                    new_status,
+                    from_status,
+                    to_status,
                     reason,
                     changed_by,
                     changed_at

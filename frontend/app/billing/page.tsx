@@ -249,29 +249,41 @@ export default function BillingPage() {
       );
       await load();
 
-      if (pdfTab && created.id) {
+      if (created.id) {
         try {
-          const blob = await fetchApiBlob(
-            `/api/finance/documents/invoices/${created.id}/pdf`,
-          );
-          const objectUrl = URL.createObjectURL(blob);
-          pdfTab.location.href = objectUrl;
-          window.setTimeout(
-            () => URL.revokeObjectURL(objectUrl),
-            5 * 60 * 1000,
-          );
-          setSuccess(
-            `Invoice ${created.invoiceNo || ""} created and opened. Use the PDF viewer’s Print control to print it.`,
-          );
+          const pdfPath = `/api/finance/documents/invoices/${created.id}/pdf`;
+          if (pdfTab) {
+            const blob = await fetchApiBlob(pdfPath);
+            const objectUrl = URL.createObjectURL(blob);
+            pdfTab.location.href = objectUrl;
+            window.setTimeout(
+              () => URL.revokeObjectURL(objectUrl),
+              5 * 60 * 1000,
+            );
+            setSuccess(
+              `Invoice ${created.invoiceNo || ""} created and opened. Use the PDF viewer’s Print control to print it.`,
+            );
+          } else {
+            // A popup blocker must not leave the user with an invoice they
+            // cannot open. The authenticated download path is the fallback.
+            await downloadApiFile(
+              pdfPath,
+              `invoice-${created.invoiceNo || created.id}.pdf`,
+            );
+            setSuccess(
+              `Invoice ${created.invoiceNo || ""} created and downloaded as a PDF. Open the downloaded file to print it.`,
+            );
+          }
         } catch (pdfException) {
-          pdfTab.close();
+          pdfTab?.close();
           setError(
-            `Invoice ${created.invoiceNo || ""} was created, but the PDF could not be opened: ${pdfException instanceof Error ? pdfException.message : "unknown PDF error"}. Use View/Print from the invoice register.`,
+            `Invoice ${created.invoiceNo || ""} was created, but its PDF could not be generated or downloaded: ${pdfException instanceof Error ? pdfException.message : "unknown PDF error"}. The invoice remains in the register; use View/Print after correcting the reported PDF/storage issue.`,
           );
         }
       } else {
-        setSuccess(
-          `Invoice ${created.invoiceNo || ""} created and added to the register. Your browser blocked the PDF tab; use View/Print from the invoice register.`,
+        pdfTab?.close();
+        setError(
+          "The billing API did not return an invoice ID, so the PDF could not be opened. Refresh the invoice register and check the server logs.",
         );
       }
     } catch (exception) {

@@ -425,7 +425,7 @@ public class FinancialDocumentService {
                 text(c, "PAYMENT RECEIPT", 360, y, 15, true);
                 y -= 26;
                 text(c, companyAddress, 42, y, 9, false);
-                text(c, "Receipt: " + safe(payment.getReceiptNo()), 360, y, 9, false);
+                text(c, "Receipt: " + receiptNumber(payment), 360, y, 9, false);
                 y -= 14;
                 text(c, companyEmail + (blank(companyPhone) ? "" : " | " + companyPhone), 42, y, 9, false);
                 text(c, "Payment: " + payment.getCreatedAt(), 360, y, 9, false);

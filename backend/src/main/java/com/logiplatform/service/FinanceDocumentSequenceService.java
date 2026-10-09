@@ -96,6 +96,31 @@ public class FinanceDocumentSequenceService {
 
 
     @Transactional
+    public String nextFinanceNoteNumber(String noteType) {
+        UUID tenant = requireTenant();
+        String type = noteType == null ? "" : noteType.trim().toUpperCase(java.util.Locale.ROOT);
+        String prefix = switch (type) {
+            case "CREDIT" -> "AAL-CN-";
+            case "DEBIT" -> "AAL-DN-";
+            default -> throw new IllegalArgumentException("Finance note type must be CREDIT or DEBIT");
+        };
+        int year = LocalDate.now().getYear();
+        String documentType = "CREDIT".equals(type) ? "CREDIT_NOTE" : "DEBIT_NOTE";
+        ensureSequenceRow(tenant, documentType, year);
+        lockSequenceRow(tenant, documentType, year);
+        synchronizeSequenceWithExistingData(tenant, documentType, year,
+                "finance_notes", "note_no", prefix);
+        Long sequence = db.queryForObject("""
+            UPDATE finance_document_sequences
+               SET last_value=last_value+1,updated_at=now()
+             WHERE tenant_id=? AND document_type=? AND fiscal_year=?
+             RETURNING last_value
+            """, Long.class, tenant, documentType, year);
+        if (sequence == null) throw new IllegalStateException("Unable to allocate finance note number");
+        return prefix + year + "-" + String.format("%06d", sequence);
+    }
+
+    @Transactional
     public String nextReceiptNumber() {
         UUID tenant = requireTenant();
         int year = LocalDate.now().getYear();

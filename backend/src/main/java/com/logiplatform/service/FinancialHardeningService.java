@@ -128,37 +128,40 @@ public class FinancialHardeningService {
         @SuppressWarnings("unchecked") List<Map<String,Object>> invoices=(List<Map<String,Object>>)data.get("invoices");
         @SuppressWarnings("unchecked") List<Map<String,Object>> payments=(List<Map<String,Object>>)data.get("payments");
         try(PDDocument doc=new PDDocument(); ByteArrayOutputStream out=new ByteArrayOutputStream()){
-            PDPage page=new PDPage(PDRectangle.A4); doc.addPage(page);
-            try(PDPageContentStream c=new PDPageContentStream(doc,page)){
-                float y=800;
-                text(c,companyName,42,y,18,true);
-                text(c,"CUSTOMER STATEMENT",350,y,14,true); y-=28;
-                text(c,"Customer: "+client,42,y,10,true);
-                text(c,"Period: "+data.get("from")+" to "+data.get("to"),350,y,9,false); y-=32;
-                text(c,"INVOICES",42,y,10,true); y-=16;
-                for(Map<String,Object> r:invoices){
-                    if(y<110)break;
-                    String line=Objects.toString(r.get("invoice_no"),"")+"  "+
-                            Objects.toString(r.get("issue_date"),"")+"  "+
-                            Objects.toString(r.get("currency"),"")+" "+
-                            money(n(r.get("invoice_amount")))+"  Balance "+
-                            money(n(r.get("balance")));
-                    text(c,truncate(line,105),42,y,8,false); y-=13;
-                }
-                y-=10; text(c,"PAYMENTS",42,y,10,true); y-=16;
-                for(Map<String,Object> r:payments){
-                    if(y<80)break;
-                    String line=Objects.toString(r.get("invoice_no"),"")+"  "+
-                            Objects.toString(r.get("created_at"),"")+"  "+
-                            Objects.toString(r.get("currency"),"")+" "+
-                            money(n(r.get("amount")))+"  "+Objects.toString(r.get("reference"),"");
-                    text(c,truncate(line,105),42,y,8,false); y-=13;
-                }
-                text(c,"Outstanding balances are calculated from the tenant's posted commercial invoices.",42,60,8,false);
+            final float left=42f;
+            PDPage[] currentPage={null};
+            PDPageContentStream[] stream={null};
+            float[] y={0f};
+            Runnable closePage=()->{ try { if(stream[0]!=null) stream[0].close(); } catch(Exception ignored){} stream[0]=null; };
+            java.util.function.Consumer<Boolean> newPage=(first)->{
+                closePage.run();
+                try {
+                    currentPage[0]=new PDPage(PDRectangle.A4); doc.addPage(currentPage[0]);
+                    stream[0]=new PDPageContentStream(doc,currentPage[0]); y[0]=800f;
+                    text(stream[0],companyName,left,y[0],16,true); y[0]-=24;
+                    text(stream[0],"CUSTOMER STATEMENT",left,y[0],12,true); y[0]-=18;
+                    text(stream[0],"Customer: "+client,left,y[0],9,true); y[0]-=14;
+                    text(stream[0],"Period: "+data.get("from")+" to "+data.get("to"),left,y[0],8,false); y[0]-=24;
+                    if(first){text(stream[0],"INVOICES",left,y[0],9,true);y[0]-=15;}
+                } catch(Exception ex){throw new IllegalStateException(ex);}
+            };
+            newPage.accept(true);
+            for(Map<String,Object> r:invoices){
+                if(y[0]<75){newPage.accept(false);text(stream[0],"INVOICES (continued)",left,y[0],9,true);y[0]-=15;}
+                String line=Objects.toString(r.get("invoice_no"),"")+"  "+Objects.toString(r.get("issue_date"),"")+"  "+Objects.toString(r.get("currency"),"")+" "+money(n(r.get("invoice_amount")))+"  Paid "+money(n(r.get("amount_paid")))+"  Balance "+money(n(r.get("balance")));
+                text(stream[0],truncate(line,125),left,y[0],7,false);y[0]-=12;
             }
-            doc.save(out);
+            if(y[0]<100){newPage.accept(false);} else {y[0]-=12;}
+            text(stream[0],"PAYMENTS",left,y[0],9,true);y[0]-=15;
+            for(Map<String,Object> r:payments){
+                if(y[0]<75){newPage.accept(false);text(stream[0],"PAYMENTS (continued)",left,y[0],9,true);y[0]-=15;}
+                String line=Objects.toString(r.get("invoice_no"),"")+"  "+Objects.toString(r.get("created_at"),"")+"  "+Objects.toString(r.get("currency"),"")+" "+money(n(r.get("amount")))+"  "+Objects.toString(r.get("reference"),"");
+                text(stream[0],truncate(line,125),left,y[0],7,false);y[0]-=12;
+            }
+            text(stream[0],"Outstanding balances are shown by currency in the accompanying statement data.",left,45,7,false);
+            closePage.run(); doc.save(out);
             byte[] pdf=out.toByteArray();
-            UUID source=UUID.nameUUIDFromBytes((tenant()+":"+client+":"+data.get("from")+":"+data.get("to")).getBytes());
+            UUID source=UUID.nameUUIDFromBytes((tenant()+":"+client+":"+data.get("from")+":"+data.get("to")).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             archive.archive("STATEMENT",source,"statement-"+safeFile(client)+".pdf","application/pdf",pdf);
             return pdf;
         }catch(Exception e){throw new IllegalStateException("Unable to generate customer statement PDF",e);}
@@ -209,11 +212,14 @@ public class FinancialHardeningService {
         BigDecimal amount=n(n.get("amount"));
         String currency=Objects.toString(n.get("currency"),"USD");
         String reason=Objects.toString(n.get("reason"),"");
-        if(invoiceId!=null && "CREDIT".equals(type)){
-            Map<String,Object> inv=one("SELECT invoice_amount,amount_paid,credit_note_amount,debit_note_amount FROM commercial_invoices WHERE tenant_id=? AND id=? FOR UPDATE",tenant,invoiceId);
-            BigDecimal remaining=n(inv.get("invoice_amount")).add(n(inv.get("debit_note_amount")))
-                    .subtract(n(inv.get("credit_note_amount"))).subtract(n(inv.get("amount_paid")));
-            if(amount.compareTo(remaining)>0) throw bad("Credit note cannot exceed the invoice balance");
+        if(invoiceId!=null){
+            Map<String,Object> inv=one("SELECT currency,lifecycle_status,invoice_amount,amount_paid,credit_note_amount,debit_note_amount FROM commercial_invoices WHERE tenant_id=? AND id=? FOR UPDATE",tenant,invoiceId);
+            String invoiceCurrency=Objects.toString(inv.get("currency"),"USD");
+            if(!invoiceCurrency.equalsIgnoreCase(currency)) throw bad("Finance note currency must match the linked invoice currency");
+            if(Set.of("VOID","CANCELLED","DRAFT").contains(Objects.toString(inv.get("lifecycle_status"),"ISSUED").toUpperCase(Locale.ROOT)))
+                throw bad("Finance notes can only be posted against an issued invoice");
+            BigDecimal gross=n(inv.get("invoice_amount")).add(n(inv.get("debit_note_amount"))).subtract(n(inv.get("credit_note_amount")));
+            if("CREDIT".equals(type) && amount.compareTo(gross)>0) throw bad("Credit note cannot exceed the invoice gross amount");
         }
         if("CREDIT".equals(type)) posting.postCreditNote(tenant,noteId,amount,currency,invoiceNo,reason);
         else posting.postDebitNote(tenant,noteId,amount,currency,invoiceNo,reason);
@@ -228,7 +234,11 @@ public class FinancialHardeningService {
             BigDecimal balance=n(inv.get("invoice_amount")).add(n(inv.get("debit_note_amount")))
                     .subtract(n(inv.get("credit_note_amount"))).subtract(n(inv.get("amount_paid")));
             String oldStatus=Objects.toString(inv.get("lifecycle_status"),"ISSUED");
-            String newStatus=balance.signum()<=0?"PAID":"PARTIALLY_PAID";
+            BigDecimal paidNow=n(inv.get("amount_paid"));
+            LocalDate dueDate=db.query("SELECT due_date FROM commercial_invoices WHERE tenant_id=? AND id=?",rs->{java.sql.Date d=rs.next()?rs.getDate(1):null;return d==null?null:d.toLocalDate();},tenant,invoiceId);
+            String newStatus=balance.signum()<=0?"PAID":paidNow.signum()>0?"PARTIALLY_PAID":
+                    dueDate!=null&&dueDate.isBefore(LocalDate.now())?"OVERDUE":
+                    Set.of("SENT","OVERDUE").contains(oldStatus.toUpperCase(Locale.ROOT))?oldStatus:"ISSUED";
             db.update("UPDATE commercial_invoices SET lifecycle_status=? WHERE tenant_id=? AND id=?",
                     newStatus,tenant,invoiceId);
             if(!oldStatus.equalsIgnoreCase(newStatus)){
@@ -278,6 +288,59 @@ public class FinancialHardeningService {
         return one("SELECT * FROM finance_tax_jurisdictions WHERE tenant_id=? AND jurisdiction_code=?",t,normalizedCode);
     }
 
+    @Transactional(readOnly=true)
+    public List<Map<String,Object>> taxRules(String jurisdictionCode, LocalDate onDate) {
+        LocalDate effective=onDate==null?LocalDate.now():onDate;
+        if(blank(jurisdictionCode)) throw bad("Jurisdiction code is required");
+        return db.queryForList("""
+            SELECT id,code,tax_name,rate,withholding_rate,currency,valid_from,valid_until,
+                   jurisdiction_code,tax_type,inclusive,exemption_code,applies_to
+              FROM finance_tax_rules
+             WHERE tenant_id=? AND active=true AND jurisdiction_code=?
+               AND valid_from<=? AND (valid_until IS NULL OR valid_until>=?)
+             ORDER BY code
+            """,tenant(),jurisdictionCode.trim().toUpperCase(Locale.ROOT),effective,effective);
+    }
+
+    @Transactional
+    public Map<String,Object> calculateTax(String jurisdictionCode, String taxCode, BigDecimal amount,
+                                            String currency, LocalDate onDate, String documentType, UUID documentId) {
+        if(amount==null||amount.signum()<0) throw bad("Taxable amount must be zero or greater");
+        if(blank(currency)||currency.trim().length()!=3) throw bad("A three-letter currency is required");
+        LocalDate effective=onDate==null?LocalDate.now():onDate;
+        Map<String,Object> rule=one("""
+            SELECT * FROM finance_tax_rules WHERE tenant_id=? AND active=true AND jurisdiction_code=? AND code=?
+              AND valid_from<=? AND (valid_until IS NULL OR valid_until>=?) FOR SHARE
+            """,tenant(),jurisdictionCode.trim().toUpperCase(Locale.ROOT),taxCode.trim().toUpperCase(Locale.ROOT),effective,effective);
+        String ruleCurrency=Objects.toString(rule.get("currency"),"");
+        if(!blank(ruleCurrency)&&!ruleCurrency.equalsIgnoreCase(currency)) throw bad("Tax rule currency does not match document currency");
+        BigDecimal rate=n(rule.get("rate")).divide(new BigDecimal("100"),10,java.math.RoundingMode.HALF_UP);
+        boolean inclusive=Boolean.TRUE.equals(rule.get("inclusive"));
+        BigDecimal base=amount;
+        BigDecimal tax;
+        if(inclusive){
+            BigDecimal divisor=BigDecimal.ONE.add(rate);
+            base=rate.signum()==0?amount:amount.divide(divisor,4,java.math.RoundingMode.HALF_UP);
+            tax=amount.subtract(base).setScale(4,java.math.RoundingMode.HALF_UP);
+        } else tax=amount.multiply(rate).setScale(4,java.math.RoundingMode.HALF_UP);
+        BigDecimal withholding=base.multiply(n(rule.get("withholding_rate")).divide(new BigDecimal("100"),10,java.math.RoundingMode.HALF_UP)).setScale(4,java.math.RoundingMode.HALF_UP);
+        Map<String,Object> result=new LinkedHashMap<>();
+        result.put("jurisdictionCode",jurisdictionCode.trim().toUpperCase(Locale.ROOT)); result.put("taxCode",rule.get("code"));
+        result.put("taxName",rule.get("tax_name")); result.put("effectiveDate",effective); result.put("currency",currency.toUpperCase(Locale.ROOT));
+        result.put("inclusive",inclusive); result.put("taxableAmount",base); result.put("rate",n(rule.get("rate")));
+        result.put("taxAmount",tax); result.put("withholdingRate",n(rule.get("withholding_rate"))); result.put("withholdingAmount",withholding);
+        result.put("totalAmount",inclusive?amount:amount.add(tax)); result.put("netPayable",(inclusive?amount:amount.add(tax)).subtract(withholding));
+        if(documentId!=null){
+            if(blank(documentType)) throw bad("Document type is required when saving a tax snapshot");
+            db.update("""
+                INSERT INTO finance_tax_calculation_snapshots(tenant_id,document_type,document_id,tax_rule_id,tax_code,tax_name,taxable_amount,rate,tax_amount,currency,rule_snapshot)
+                VALUES(?,?,?,?,?,?,?,?,?,?,CAST(? AS jsonb))
+                """,tenant(),documentType.trim().toUpperCase(Locale.ROOT),documentId,rule.get("id"),rule.get("code"),rule.get("tax_name"),base,n(rule.get("rate")),tax,currency.toUpperCase(Locale.ROOT),
+                "{\"jurisdictionCode\":\""+jurisdictionCode.trim().toUpperCase(Locale.ROOT)+"\",\"effectiveDate\":\""+effective+"\",\"inclusive\":"+inclusive+",\"rate\":"+n(rule.get("rate")).toPlainString()+"}");
+        }
+        return result;
+    }
+
     @Scheduled(cron="${finance.overdue-reminder-cron:0 0 8 * * *}")
     public void overdueReminderTick() {
         UUID tenant;
@@ -307,17 +370,23 @@ public class FinancialHardeningService {
         for(Map<String,Object> r:due){
             UUID id=(UUID)r.get("id"); String email=Objects.toString(r.get("email"),null);
             if(blank(email)) continue;
+            // Claim this invoice/day before sending. The unique key prevents parallel schedulers
+            // from sending the same reminder twice; FAILED claims may be retried safely.
+            int claimed=db.update("""
+                INSERT INTO finance_overdue_reminders(id,tenant_id,invoice_id,reminder_date,reminder_level,recipient_email,status)
+                VALUES(?,?,?,?,1,?,'PENDING')
+                ON CONFLICT(tenant_id,invoice_id,reminder_date,reminder_level)
+                DO UPDATE SET status='PENDING',recipient_email=EXCLUDED.recipient_email,error_detail=NULL,created_at=now()
+                WHERE finance_overdue_reminders.status='FAILED'
+                """,UUID.randomUUID(),tenant,id,LocalDate.now(),email);
+            if(claimed==0) continue;
             try{
                 byte[] pdf=documents.invoicePdf(id);
                 mail.sendFinancialDocument(email,Objects.toString(r.get("client"),"Customer"),
                         "Overdue invoice "+r.get("invoice_no"),
                         "Invoice <strong>"+escape(Objects.toString(r.get("invoice_no"),""))+"</strong> is overdue. Please arrange payment at your earliest convenience.",
                         "invoice-"+safeFile(Objects.toString(r.get("invoice_no"),id.toString()))+".pdf",pdf);
-                db.update("""
-                        INSERT INTO finance_overdue_reminders(id,tenant_id,invoice_id,reminder_date,reminder_level,recipient_email,status)
-                        VALUES(?,?,?,?,1,?,'SENT')
-                        ON CONFLICT(tenant_id,invoice_id,reminder_date,reminder_level) DO NOTHING
-                        """,UUID.randomUUID(),tenant,id,LocalDate.now(),email);
+                db.update("UPDATE finance_overdue_reminders SET status='SENT',error_detail=NULL WHERE tenant_id=? AND invoice_id=? AND reminder_date=? AND reminder_level=1 AND status='PENDING'",tenant,id,LocalDate.now());
                 db.update("UPDATE commercial_invoices SET last_follow_up=CURRENT_DATE,next_follow_up=CURRENT_DATE+7 WHERE tenant_id=? AND id=?",tenant,id);
                 db.update("UPDATE commercial_invoices SET lifecycle_status='OVERDUE' WHERE tenant_id=? AND id=? AND lifecycle_status IN ('ISSUED','SENT')",tenant,id);
             }catch(Exception ex){
@@ -341,9 +410,18 @@ public class FinancialHardeningService {
     }
     private Map<String,Object> note(UUID id){return one("SELECT * FROM finance_notes WHERE tenant_id=? AND id=?",tenant(),id);}
     private String nextNoteNumber(String type){
+        // Atomic tenant/year sequence: safe when multiple operators create notes concurrently.
+        String documentType="CREDIT".equals(type)?"CREDIT_NOTE":"DEBIT_NOTE";
+        int year=LocalDate.now().getYear();
+        Long next=db.queryForObject("""
+            INSERT INTO finance_document_sequences(id,tenant_id,document_type,fiscal_year,last_value,updated_at)
+            VALUES(gen_random_uuid(),?,?,?,1,now())
+            ON CONFLICT(tenant_id,document_type,fiscal_year)
+            DO UPDATE SET last_value=finance_document_sequences.last_value+1,updated_at=now()
+            RETURNING last_value
+            """,Long.class,tenant(),documentType,year);
         String prefix="CREDIT".equals(type)?"AAL-CN-":"AAL-DN-";
-        Integer next=db.queryForObject("SELECT COUNT(*)+1 FROM finance_notes WHERE tenant_id=? AND note_type=?",Integer.class,tenant(),type);
-        return prefix+LocalDate.now().getYear()+"-"+String.format("%06d",next==null?1:next);
+        return prefix+year+"-"+String.format(Locale.ROOT,"%06d",next==null?1L:next);
     }
     private Map<String,Object> one(String sql,Object... args){
         return db.query(sql,rs->{if(!rs.next())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Record not found");Map<String,Object> m=new LinkedHashMap<>();var md=rs.getMetaData();for(int i=1;i<=md.getColumnCount();i++)m.put(md.getColumnLabel(i),rs.getObject(i));return m;},args);

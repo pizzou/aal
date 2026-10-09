@@ -74,6 +74,17 @@ public class FinancialHardeningController {
         return service.taxJurisdiction(r.code(),r.legalName(),r.registrationNo(),r.countryCode(),r.address(),r.invoicePrefix(),r.currency(),r.active());
     }
 
+    @GetMapping("/tax-rules")
+    public java.util.List<Map<String,Object>> taxRules(@RequestParam String jurisdictionCode,
+                                                        @RequestParam(required=false) LocalDate onDate){
+        return service.taxRules(jurisdictionCode,onDate);
+    }
+
+    @PostMapping("/tax/calculate")
+    public Map<String,Object> calculateTax(@Valid @RequestBody TaxCalculationRequest r){
+        return service.calculateTax(r.jurisdictionCode(),r.taxCode(),r.amount(),r.currency(),r.onDate(),r.documentType(),r.documentId());
+    }
+
     @PostMapping("/archives/{archiveId}/links")
     public Map<String,Object> issueLink(@PathVariable UUID archiveId,
                                         @RequestParam(defaultValue="24") long hours){
@@ -102,6 +113,9 @@ public class FinancialHardeningController {
     public record FinanceNoteRequest(@NotBlank String noteType,UUID invoiceId,UUID shipmentId,
                                      @NotNull java.math.BigDecimal amount,@NotBlank String currency,@NotBlank String reason){}
     public record VoidNoteRequest(@NotBlank String reason){}
+    public record TaxCalculationRequest(@NotBlank String jurisdictionCode,@NotBlank String taxCode,
+                                        @NotNull @jakarta.validation.constraints.PositiveOrZero java.math.BigDecimal amount,
+                                        @NotBlank String currency,LocalDate onDate,String documentType,UUID documentId){}
     public record TaxJurisdictionRequest(@NotBlank String code,@NotBlank String legalName,
                                          String registrationNo,@NotBlank String countryCode,String address,
                                          String invoicePrefix,@NotBlank String currency,boolean active){}

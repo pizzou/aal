@@ -50,7 +50,7 @@ public class CustomerPortalService {
         String cid=clientId(); return db.query("SELECT id,quote_id,quote_date,client,route,service_type,quoted_amount,currency,valid_until,status FROM commercial_quotes WHERE tenant_id=? AND client IN (SELECT client_company FROM client_records WHERE tenant_id=? AND client_id=?) ORDER BY quote_date DESC",(rs,n)->new Quote(rs.getObject(1,UUID.class),rs.getString(2),rs.getDate(3).toLocalDate(),rs.getString(4),rs.getString(5),rs.getString(6),rs.getBigDecimal(7),rs.getString(8),rs.getDate(9)==null?null:rs.getDate(9).toLocalDate(),rs.getString(10)),TenantContext.getTenantId(),TenantContext.getTenantId(),cid);
     }
     public List<Invoice> invoices(){
-        String cid=clientId(); return db.query("SELECT i.id,i.invoice_no,i.shipment_id,i.invoice_amount,i.amount_paid,GREATEST(i.invoice_amount+COALESCE(i.debit_note_amount,0)-COALESCE(i.credit_note_amount,0)-COALESCE(i.amount_paid,0),0),i.currency,i.lifecycle_status,i.due_date FROM commercial_invoices i LEFT JOIN shipments s ON s.id=i.shipment_id WHERE i.tenant_id=? AND (s.client_name IN (SELECT client_company FROM client_records WHERE tenant_id=? AND client_id=?) OR i.client IN (SELECT client_company FROM client_records WHERE tenant_id=? AND client_id=?)) ORDER BY i.issue_date DESC",(rs,n)->new Invoice(rs.getObject(1,UUID.class),rs.getString(2),rs.getObject(3,UUID.class),rs.getBigDecimal(4),rs.getBigDecimal(5),rs.getBigDecimal(6),rs.getString(7),rs.getString(8),rs.getDate(9)==null?null:rs.getDate(9).toLocalDate()),TenantContext.getTenantId(),TenantContext.getTenantId(),cid,TenantContext.getTenantId(),cid);
+        String cid=clientId(); return db.query("SELECT i.id,i.invoice_no,i.shipment_id,i.invoice_amount,i.amount_paid,CASE WHEN COALESCE(i.lifecycle_status,'ISSUED') IN ('DRAFT','VOID','CANCELLED') THEN 0 ELSE GREATEST(i.invoice_amount+COALESCE(i.debit_note_amount,0)-COALESCE(i.credit_note_amount,0)-COALESCE(i.amount_paid,0),0) END,i.currency,i.lifecycle_status,i.due_date FROM commercial_invoices i LEFT JOIN shipments s ON s.id=i.shipment_id AND s.tenant_id=i.tenant_id WHERE i.tenant_id=? AND COALESCE(i.lifecycle_status,'ISSUED') <> 'DRAFT' AND (s.client_name IN (SELECT client_company FROM client_records WHERE tenant_id=? AND client_id=?) OR i.client IN (SELECT client_company FROM client_records WHERE tenant_id=? AND client_id=?)) ORDER BY i.issue_date DESC",(rs,n)->new Invoice(rs.getObject(1,UUID.class),rs.getString(2),rs.getObject(3,UUID.class),rs.getBigDecimal(4),rs.getBigDecimal(5),rs.getBigDecimal(6),rs.getString(7),rs.getString(8),rs.getDate(9)==null?null:rs.getDate(9).toLocalDate()),TenantContext.getTenantId(),TenantContext.getTenantId(),cid,TenantContext.getTenantId(),cid);
     }
     public List<Event> events(UUID shipmentId){
         shipment(shipmentId);
@@ -99,8 +99,10 @@ public class CustomerPortalService {
         if(company==null) throw new AccessDeniedException("Customer organization is not configured");
         List<Map<String,Object>> invoices=db.queryForList("""
             SELECT invoice_no,issue_date,due_date,currency,invoice_amount,amount_paid,
-                   GREATEST(invoice_amount+debit_note_amount-credit_note_amount-amount_paid,0) balance,status
-              FROM commercial_invoices WHERE tenant_id=? AND client=?
+                   CASE WHEN COALESCE(lifecycle_status,'ISSUED') IN ('DRAFT','VOID','CANCELLED') THEN 0
+                        ELSE GREATEST(invoice_amount+COALESCE(debit_note_amount,0)-COALESCE(credit_note_amount,0)-COALESCE(amount_paid,0),0) END balance,
+                   lifecycle_status AS status
+              FROM commercial_invoices WHERE tenant_id=? AND client=? AND COALESCE(lifecycle_status,'ISSUED') <> 'DRAFT'
              ORDER BY issue_date DESC
             """,TenantContext.getTenantId(),company);
         Map<String,java.math.BigDecimal> outstanding=new LinkedHashMap<>();

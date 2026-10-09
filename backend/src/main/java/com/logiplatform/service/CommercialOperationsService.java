@@ -333,6 +333,11 @@ public class CommercialOperationsService {
                 invoice.getInvoiceAmount(),
                 invoice.getCurrency(),
                 invoice.getInvoiceNo());
+        tenantDb.update("""
+                INSERT INTO commercial_invoice_lifecycle_history(id,tenant_id,invoice_id,from_status,to_status,reason,changed_by)
+                VALUES(gen_random_uuid(),?,?,NULL,'ISSUED','Invoice created and issued through commercial operations',NULL)
+                ON CONFLICT DO NOTHING
+                """,tenantId,invoice.getId());
 
         return InvoiceResponse.from(invoice);
     }

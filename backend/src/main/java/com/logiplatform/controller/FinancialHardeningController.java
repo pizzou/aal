@@ -34,6 +34,20 @@ public class FinancialHardeningController {
         return service.lifecycleHistory(invoiceId);
     }
 
+    @PostMapping("/invoices/{invoiceId}/tax")
+    public Map<String,Object> applyTaxToDraftInvoice(@PathVariable UUID invoiceId,@Valid @RequestBody ApplyInvoiceTaxRequest r){
+        return service.applyTaxToDraftInvoice(invoiceId,r.jurisdictionCode(),r.taxCode(),r.onDate());
+    }
+
+    @GetMapping("/finance-notes")
+    public java.util.List<Map<String,Object>> financeNotes(@RequestParam(required=false) String status,
+                                                            @RequestParam(required=false) UUID invoiceId){
+        return service.financeNotes(status,invoiceId);
+    }
+
+    @GetMapping("/tax-jurisdictions")
+    public java.util.List<Map<String,Object>> taxJurisdictions(){ return service.taxJurisdictions(); }
+
     @GetMapping("/customer-statement")
     public Map<String,Object> statement(@RequestParam String client,
                                          @RequestParam(required=false) LocalDate from,
@@ -71,7 +85,13 @@ public class FinancialHardeningController {
 
     @PostMapping("/tax-jurisdictions")
     public Map<String,Object> taxJurisdiction(@Valid @RequestBody TaxJurisdictionRequest r){
-        return service.taxJurisdiction(r.code(),r.legalName(),r.registrationNo(),r.countryCode(),r.address(),r.invoicePrefix(),r.currency(),r.active());
+        return service.taxJurisdiction(r.code(),r.legalName(),r.registrationNo(),r.countryCode(),r.address(),r.invoicePrefix(),r.currency(),r.active(),r.defaultForInvoicing());
+    }
+
+    @PostMapping("/tax-rules")
+    public Map<String,Object> upsertTaxRule(@Valid @RequestBody TaxRuleRequest r){
+        return service.upsertTaxRule(r.jurisdictionCode(),r.code(),r.taxName(),r.rate(),r.withholdingRate(),r.currency(),
+                r.validFrom(),r.validUntil(),r.taxType(),r.inclusive(),r.exemptionCode(),r.appliesTo(),r.active());
     }
 
     @GetMapping("/tax-rules")
@@ -118,5 +138,12 @@ public class FinancialHardeningController {
                                         @NotBlank String currency,LocalDate onDate,String documentType,UUID documentId){}
     public record TaxJurisdictionRequest(@NotBlank String code,@NotBlank String legalName,
                                          String registrationNo,@NotBlank String countryCode,String address,
-                                         String invoicePrefix,@NotBlank String currency,boolean active){}
+                                         String invoicePrefix,@NotBlank String currency,boolean active,boolean defaultForInvoicing){}
+
+    public record TaxRuleRequest(@NotBlank String jurisdictionCode,@NotBlank String code,@NotBlank String taxName,
+                                 @NotNull @jakarta.validation.constraints.DecimalMin("0.0") @jakarta.validation.constraints.DecimalMax("100.0") java.math.BigDecimal rate,
+                                 @NotNull @jakarta.validation.constraints.DecimalMin("0.0") @jakarta.validation.constraints.DecimalMax("100.0") java.math.BigDecimal withholdingRate,
+                                 String currency,@NotNull LocalDate validFrom,LocalDate validUntil,String taxType,
+                                 boolean inclusive,String exemptionCode,String appliesTo,boolean active){}
+    public record ApplyInvoiceTaxRequest(@NotBlank String jurisdictionCode,@NotBlank String taxCode,LocalDate onDate){}
 }

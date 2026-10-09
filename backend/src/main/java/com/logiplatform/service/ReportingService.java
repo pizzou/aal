@@ -314,7 +314,7 @@ public class ReportingService {
                         COALESCE(
                         SUM(
                         GREATEST(
-                        invoice_amount - amount_paid,
+                        invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0) - COALESCE(amount_paid,0),
                         0
                         )
                         ),
@@ -328,7 +328,7 @@ public class ReportingService {
                                                          WHEN due_date IS NOT NULL
                                                           AND due_date < ?::date
                                                          THEN GREATEST(
-                                                             invoice_amount - amount_paid,
+                                                             invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0) - COALESCE(amount_paid,0),
                                                              0
                                                          )
                                                          ELSE 0
@@ -339,6 +339,7 @@ public class ReportingService {
 
                                          FROM commercial_invoices
                                          WHERE tenant_id = ?
+                                           AND COALESCE(lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
                                            AND UPPER(currency) = ?
                                            AND issue_date BETWEEN ?::date AND ?::date
                                          """,
@@ -508,18 +509,18 @@ public class ReportingService {
 
                                      COUNT(*) FILTER (
                                          WHERE amount_paid = 0
-                                           AND invoice_amount > 0
+                                           AND GREATEST(invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0),0) > 0
                                      ) AS unpaid,
 
                                      COUNT(*) FILTER (
                                          WHERE amount_paid > 0
-                                           AND amount_paid < invoice_amount
+                                           AND amount_paid < invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0)
                                      ) AS partially_paid,
 
                                      COUNT(*) FILTER (
                                          WHERE due_date IS NOT NULL
                                            AND due_date < ?::date
-                                           AND invoice_amount > amount_paid
+                                           AND GREATEST(invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0) - COALESCE(amount_paid,0),0) > 0
                                      ) AS overdue_invoices,
 
                                      COALESCE(SUM(invoice_amount),0) AS invoiced,
@@ -529,7 +530,7 @@ public class ReportingService {
                                      COALESCE(
                                          SUM(
                                              GREATEST(
-                                                 invoice_amount - amount_paid,
+                                                 invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0) - COALESCE(amount_paid,0),
                                                  0
                                              )
                                          ),
@@ -542,7 +543,7 @@ public class ReportingService {
                                                  WHEN due_date IS NOT NULL
                                                   AND due_date < ?::date
                                                  THEN GREATEST(
-                                                     invoice_amount - amount_paid,
+                                                     invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0) - COALESCE(amount_paid,0),
                                                      0
                                                  )
                                                  ELSE 0
@@ -555,7 +556,7 @@ public class ReportingService {
                                          SUM(
                                              CASE
                                                  WHEN due_date = ?::date
-                                                 THEN GREATEST(invoice_amount - amount_paid, 0)
+                                                 THEN GREATEST(invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0) - COALESCE(amount_paid,0), 0)
                                                  ELSE 0
                                              END), 0) AS due_today,
 
@@ -565,7 +566,7 @@ public class ReportingService {
                                                  WHEN due_date >= ?::date
                                                   AND due_date <= (?::date + 30)
                                                  THEN GREATEST(
-                                                     invoice_amount - amount_paid,
+                                                     invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0) - COALESCE(amount_paid,0),
                                                      0
                                                  )
                                                  ELSE 0
@@ -576,6 +577,7 @@ public class ReportingService {
 
                                  FROM commercial_invoices
                                  WHERE tenant_id = ?
+                                   AND COALESCE(lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
                                    AND UPPER(currency) = ?
                                    AND issue_date <= ?::date
                                  """,
@@ -1345,7 +1347,7 @@ public class ReportingService {
                                          COALESCE(
                                              SUM(
                                                  GREATEST(
-                                                     invoice_amount - amount_paid,
+                                                     invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0) - COALESCE(amount_paid,0),
                                                      0
                                                  )
                                              ),
@@ -1354,6 +1356,7 @@ public class ReportingService {
 
                                      FROM commercial_invoices
                                      WHERE tenant_id = ?
+                                       AND COALESCE(lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
                                        AND UPPER(currency) = ?
                                        AND issue_date BETWEEN ?::date AND ?::date
 
@@ -1515,15 +1518,16 @@ public class ReportingService {
                         WITH balances AS (
                         SELECT
                         GREATEST(
-                        invoice_amount - amount_paid,
+                        invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0) - COALESCE(amount_paid,0),
                         0
                         ) AS balance,
                         due_date
                         FROM commercial_invoices
                         WHERE tenant_id = ?
+                        AND COALESCE(lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
                         AND UPPER(currency) = ?
                         AND GREATEST(
-                        invoice_amount - amount_paid,
+                        invoice_amount + COALESCE(debit_note_amount,0) - COALESCE(credit_note_amount,0) - COALESCE(amount_paid,0),
                         0
                         ) > 0
                         ),

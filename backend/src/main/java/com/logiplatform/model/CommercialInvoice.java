@@ -92,6 +92,39 @@ public class CommercialInvoice {
     @Column(name = "lifecycle_status", nullable = false, length = 30)
     private String lifecycleStatus = "ISSUED";
 
+    @Column(name = "subtotal_amount", nullable = false, precision = 19, scale = 4)
+    private BigDecimal subtotalAmount = BigDecimal.ZERO;
+
+    @Column(name = "tax_rate", nullable = false, precision = 9, scale = 4)
+    private BigDecimal taxRate = BigDecimal.ZERO;
+
+    @Column(name = "tax_amount", nullable = false, precision = 19, scale = 4)
+    private BigDecimal taxAmount = BigDecimal.ZERO;
+
+    @Column(name = "tax_code", length = 80)
+    private String taxCode;
+
+    @Column(name = "tax_inclusive", nullable = false)
+    private boolean taxInclusive = false;
+
+    @Column(name = "tax_jurisdiction_code", length = 80)
+    private String taxJurisdictionCode;
+
+    @Column(name = "withholding_amount", nullable = false, precision = 19, scale = 4)
+    private BigDecimal withholdingAmount = BigDecimal.ZERO;
+
+    @Column(name = "tax_legal_name_snapshot", length = 255)
+    private String taxLegalNameSnapshot;
+
+    @Column(name = "tax_registration_snapshot", length = 120)
+    private String taxRegistrationSnapshot;
+
+    @Column(name = "tax_address_snapshot", columnDefinition = "text")
+    private String taxAddressSnapshot;
+
+    @Column(name = "tax_country_snapshot", length = 3)
+    private String taxCountrySnapshot;
+
     @Column(name = "credit_note_amount", nullable = false, precision = 19, scale = 4)
     private BigDecimal creditNoteAmount = BigDecimal.ZERO;
 
@@ -140,6 +173,10 @@ public class CommercialInvoice {
 
         this.invoiceAmount =
                 invoiceAmount;
+        this.subtotalAmount = invoiceAmount == null ? BigDecimal.ZERO : invoiceAmount;
+        this.taxRate = BigDecimal.ZERO;
+        this.taxAmount = BigDecimal.ZERO;
+        this.withholdingAmount = BigDecimal.ZERO;
 
         this.dueDate =
                 dueDate;
@@ -188,6 +225,28 @@ public class CommercialInvoice {
         return amountPaid;
     }
 
+    public BigDecimal getSubtotalAmount() { return subtotalAmount == null ? invoiceAmount : subtotalAmount; }
+
+    public BigDecimal getTaxRate() { return taxRate == null ? BigDecimal.ZERO : taxRate; }
+
+    public BigDecimal getTaxAmount() { return taxAmount == null ? BigDecimal.ZERO : taxAmount; }
+
+    public String getTaxCode() { return taxCode; }
+
+    public boolean isTaxInclusive() { return taxInclusive; }
+
+    public String getTaxJurisdictionCode() { return taxJurisdictionCode; }
+
+    public BigDecimal getWithholdingAmount() { return withholdingAmount == null ? BigDecimal.ZERO : withholdingAmount; }
+
+    public String getTaxLegalNameSnapshot() { return taxLegalNameSnapshot; }
+
+    public String getTaxRegistrationSnapshot() { return taxRegistrationSnapshot; }
+
+    public String getTaxAddressSnapshot() { return taxAddressSnapshot; }
+
+    public String getTaxCountrySnapshot() { return taxCountrySnapshot; }
+
     public BigDecimal getCreditNoteAmount() {
         return creditNoteAmount;
     }
@@ -201,7 +260,11 @@ public class CommercialInvoice {
     }
 
     public BigDecimal getBalance() {
-        return getAdjustedTotal().subtract(amountPaid);
+        String lifecycle = lifecycleStatus == null ? "ISSUED" : lifecycleStatus.trim().toUpperCase(java.util.Locale.ROOT);
+        if ("DRAFT".equals(lifecycle) || "VOID".equals(lifecycle) || "CANCELLED".equals(lifecycle)) {
+            return BigDecimal.ZERO;
+        }
+        return getAdjustedTotal().subtract(amountPaid).max(BigDecimal.ZERO);
     }
 
     public LocalDate getDueDate() {
@@ -253,10 +316,15 @@ public class CommercialInvoice {
     }
 
     public String getAgingBucket() {
-
-        long days =
-                getDaysOverdue();
-
+        String lifecycle = lifecycleStatus == null ? "ISSUED" : lifecycleStatus.trim().toUpperCase(java.util.Locale.ROOT);
+        if ("DRAFT".equals(lifecycle) || "VOID".equals(lifecycle) || "CANCELLED".equals(lifecycle)) {
+            return switch (lifecycle) {
+                case "DRAFT" -> "Draft";
+                case "VOID" -> "Void";
+                default -> "Cancelled";
+            };
+        }
+        long days = getDaysOverdue();
         if (getBalance().signum() <= 0) {
             return "Paid";
         }
@@ -281,20 +349,15 @@ public class CommercialInvoice {
     }
 
     public String getStatus() {
-
-        if (getBalance().signum() <= 0) {
-            return "Paid";
-        }
-
-        if (getDaysOverdue() > 0) {
-            return getAmountPaid().signum() > 0
-                    ? "Partially Paid"
-                    : "Overdue";
-        }
-
-        return getAmountPaid().signum() > 0
-                ? "Partially Paid"
-                : "Unpaid";
+        String lifecycle = lifecycleStatus == null ? "ISSUED" : lifecycleStatus.trim().toUpperCase(java.util.Locale.ROOT);
+        if ("DRAFT".equals(lifecycle)) return "Draft";
+        if ("VOID".equals(lifecycle)) return "Void";
+        if ("CANCELLED".equals(lifecycle)) return "Cancelled";
+        if (getBalance().signum() <= 0) return "Paid";
+        if ("OVERDUE".equals(lifecycle) || getDaysOverdue() > 0) return "Overdue";
+        if ("PARTIALLY_PAID".equals(lifecycle) || getAmountPaid().signum() > 0) return "Partially Paid";
+        if ("SENT".equals(lifecycle)) return "Sent";
+        return "ISSUED".equals(lifecycle) ? "Issued" : lifecycle;
     }
 
     public void applyPayment(

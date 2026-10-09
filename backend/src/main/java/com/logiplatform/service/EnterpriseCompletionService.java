@@ -336,7 +336,8 @@ public class EnterpriseCompletionService {
     public List<Map<String,Object>> customerStatement(String client) {
         return db.queryForList("""
           SELECT i.invoice_no,i.issue_date,i.due_date,i.currency,i.invoice_amount,i.amount_paid,
-                 (i.invoice_amount+i.debit_note_amount-i.credit_note_amount-i.amount_paid) balance,i.lifecycle_status status
+                 CASE WHEN COALESCE(i.lifecycle_status,'ISSUED') IN ('DRAFT','VOID','CANCELLED') THEN 0
+                      ELSE GREATEST(i.invoice_amount+COALESCE(i.debit_note_amount,0)-COALESCE(i.credit_note_amount,0)-COALESCE(i.amount_paid,0),0) END balance,i.lifecycle_status status
           FROM commercial_invoices i
           WHERE i.client=? ORDER BY i.issue_date DESC
           """, client);
@@ -488,7 +489,7 @@ public class EnterpriseCompletionService {
 
     @Transactional(readOnly=true)
     public Map<String,Object> analyticsForecast() {
-        BigDecimal avgRevenue=decimal(db.queryForObject("SELECT COALESCE(AVG(monthly_revenue),0) FROM (SELECT date_trunc('month',issue_date) month,SUM(invoice_amount) monthly_revenue FROM commercial_invoices WHERE issue_date>=CURRENT_DATE-INTERVAL '6 months' GROUP BY 1) x", BigDecimal.class));
+        BigDecimal avgRevenue=decimal(db.queryForObject("SELECT COALESCE(AVG(monthly_revenue),0) FROM (SELECT date_trunc('month',issue_date) month,SUM(invoice_amount) monthly_revenue FROM commercial_invoices WHERE issue_date>=CURRENT_DATE-INTERVAL '6 months' AND COALESCE(lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED') GROUP BY 1) x", BigDecimal.class));
         BigDecimal avgProfit=decimal(db.queryForObject("SELECT COALESCE(AVG(monthly_profit),0) FROM (SELECT date_trunc('month',created_at) month,SUM(COALESCE(amount_billed_to_client,0)-COALESCE(supplier_cost,0)-COALESCE(other_cost,0)-COALESCE(other_expenses,0)) monthly_profit FROM shipments WHERE created_at>=now()-INTERVAL '6 months' GROUP BY 1) x", BigDecimal.class));
         return Map.of("methodology","6-month trailing monthly average","nextMonthRevenue",avgRevenue.setScale(2,RoundingMode.HALF_UP),"nextMonthGrossProfit",avgProfit.setScale(2,RoundingMode.HALF_UP));
     }

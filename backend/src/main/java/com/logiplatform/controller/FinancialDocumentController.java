@@ -1,6 +1,8 @@
 package com.logiplatform.controller;
 
 import com.logiplatform.service.FinancialDocumentService;
+import com.logiplatform.service.FinancialHardeningService;
+import org.springframework.beans.factory.annotation.Autowired;
 import jakarta.validation.constraints.Email;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
@@ -12,9 +14,17 @@ import java.time.Duration;
 @RequestMapping("/api/finance/documents")
 public class FinancialDocumentController {
     private final FinancialDocumentService documents;
+    private final FinancialHardeningService hardening;
 
-    public FinancialDocumentController(FinancialDocumentService documents) {
+    @Autowired
+    public FinancialDocumentController(FinancialDocumentService documents, FinancialHardeningService hardening) {
         this.documents = documents;
+        this.hardening = hardening;
+    }
+
+    /** Compatibility constructor for older controller unit tests. */
+    public FinancialDocumentController(FinancialDocumentService documents) {
+        this(documents, null);
     }
 
     @GetMapping(value="/invoices/{invoiceId}/pdf", produces=MediaType.APPLICATION_PDF_VALUE)
@@ -37,8 +47,10 @@ public class FinancialDocumentController {
     @PostMapping("/invoices/{invoiceId}/email")
     public ResponseEntity<Void> emailInvoice(@PathVariable UUID invoiceId,
                                              @RequestBody(required=false) EmailDocumentRequest request) {
+        if (hardening != null) hardening.validateInvoiceCanBeEmailed(invoiceId);
         documents.emailInvoice(invoiceId, request == null ? null : request.recipientEmail(),
                 request == null ? null : request.recipientName());
+        if (hardening != null) hardening.markInvoiceSentAfterEmail(invoiceId);
         return ResponseEntity.accepted().build();
     }
 

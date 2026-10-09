@@ -559,11 +559,13 @@ CompletableFuture<List<QuotationStatusMetric>> quotationFuture =
                             (SELECT COALESCE(SUM(i.invoice_amount),0)
                                FROM commercial_invoices i
                               WHERE i.tenant_id = ?
+                                AND COALESCE(i.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
                                 AND UPPER(i.currency) = ?) AS revenue_invoiced,
 
-                            (SELECT COALESCE(SUM(GREATEST(i.invoice_amount - i.amount_paid,0)),0)
+                            (SELECT COALESCE(SUM(GREATEST(i.invoice_amount + COALESCE(i.debit_note_amount,0) - COALESCE(i.credit_note_amount,0) - COALESCE(i.amount_paid,0),0)),0)
                                FROM commercial_invoices i
                               WHERE i.tenant_id = ?
+                                AND COALESCE(i.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
                                 AND UPPER(i.currency) = ?) AS outstanding,
 
                             (SELECT COALESCE(SUM(
@@ -575,9 +577,10 @@ CompletableFuture<List<QuotationStatusMetric>> quotationFuture =
                               WHERE s.tenant_id = ?
                                 AND UPPER(COALESCE(NULLIF(s.currency,''),?)) = ?) AS gross_profit,
 
-                            (SELECT COALESCE(SUM(GREATEST(i.invoice_amount - i.amount_paid,0)),0)
+                            (SELECT COALESCE(SUM(GREATEST(i.invoice_amount + COALESCE(i.debit_note_amount,0) - COALESCE(i.credit_note_amount,0) - COALESCE(i.amount_paid,0),0)),0)
                                FROM commercial_invoices i
                               WHERE i.tenant_id = ?
+                                AND COALESCE(i.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
                                 AND UPPER(i.currency) = ?
                                 AND i.due_date < ?) AS overdue_receivables,
 
@@ -586,9 +589,10 @@ CompletableFuture<List<QuotationStatusMetric>> quotationFuture =
                               WHERE q.tenant_id = ?
                                 AND UPPER(COALESCE(q.status,'')) NOT IN ('WON','LOST','EXPIRED')) AS open_quotations,
 
-                            (SELECT COALESCE(SUM(GREATEST(i.invoice_amount - i.amount_paid,0)),0)
+                            (SELECT COALESCE(SUM(GREATEST(i.invoice_amount + COALESCE(i.debit_note_amount,0) - COALESCE(i.credit_note_amount,0) - COALESCE(i.amount_paid,0),0)),0)
                                FROM commercial_invoices i
                               WHERE i.tenant_id = ?
+                                AND COALESCE(i.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
                                 AND UPPER(i.currency) = ?
                                 AND i.due_date >= ?
                                 AND i.due_date <= ?) AS due_next_30_days,
@@ -698,12 +702,13 @@ CompletableFuture<List<QuotationStatusMetric>> quotationFuture =
                 """
                         WITH balances AS (
                             SELECT
-                                GREATEST(i.invoice_amount - i.amount_paid,0) AS balance,
+                                GREATEST(i.invoice_amount + COALESCE(i.debit_note_amount,0) - COALESCE(i.credit_note_amount,0) - i.amount_paid,0) AS balance,
                                 i.due_date
                             FROM commercial_invoices i
                             WHERE i.tenant_id = ?
+                              AND COALESCE(i.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
                               AND UPPER(i.currency) = ?
-                              AND GREATEST(i.invoice_amount - i.amount_paid,0) > 0
+                              AND GREATEST(i.invoice_amount + COALESCE(i.debit_note_amount,0) - COALESCE(i.credit_note_amount,0) - i.amount_paid,0) > 0
                         )
                         SELECT bucket, COALESCE(SUM(balance),0) AS balance
                         FROM (

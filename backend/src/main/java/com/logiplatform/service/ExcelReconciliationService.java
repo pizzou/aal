@@ -64,7 +64,7 @@ public class ExcelReconciliationService {
                 "expenses", delta(expected.expenses(), number(actual.get("expenses")))));
 
         result.put("financial", Map.of(
-                "invoiceRevenue", scalar("SELECT COALESCE(SUM(invoice_amount),0) FROM commercial_invoices WHERE tenant_id=?", tenant),
+                "invoiceRevenue", scalar("SELECT COALESCE(SUM(invoice_amount),0) FROM commercial_invoices WHERE tenant_id=? AND COALESCE(lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')", tenant),
                 "shipmentClientRevenue", scalar("SELECT COALESCE(SUM(COALESCE(amount_billed_to_client,client_revenue,0)),0) FROM shipments WHERE tenant_id=?", tenant),
                 "supplierCost", scalar("SELECT COALESCE(SUM(COALESCE(supplier_cost,0)),0) FROM shipments WHERE tenant_id=?", tenant)));
 

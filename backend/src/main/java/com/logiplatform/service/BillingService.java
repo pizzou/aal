@@ -103,7 +103,10 @@ public class BillingService {
 
         if (existing != null) {
             if ("DRAFT".equalsIgnoreCase(existing.getLifecycleStatus())) {
-                finance.postInvoice(tenantId, existing.getId(), existing.getInvoiceAmount(),
+                if (existing.getTaxAmount() != null && existing.getTaxAmount().signum() > 0)
+                    finance.postInvoiceWithTax(tenantId, existing.getId(), existing.getInvoiceAmount(), existing.getTaxAmount(),
+                            existing.getCurrency(), existing.getInvoiceNo());
+                else finance.postInvoice(tenantId, existing.getId(), existing.getInvoiceAmount(),
                         existing.getCurrency(), existing.getInvoiceNo());
                 existing.changeLifecycleStatus("ISSUED");
                 invoices.updateLifecycleStatus(tenantId, existing.getId(), "ISSUED");
@@ -151,12 +154,9 @@ public class BillingService {
                         dueDate,
                         owner));
 
-        finance.postInvoice(
-                tenantId,
-                invoice.getId(),
-                amount,
-                currency,
-                invoiceNo);
+        if (invoice.getTaxAmount() != null && invoice.getTaxAmount().signum() > 0)
+            finance.postInvoiceWithTax(tenantId, invoice.getId(), invoice.getInvoiceAmount(), invoice.getTaxAmount(), currency, invoiceNo);
+        else finance.postInvoice(tenantId, invoice.getId(), amount, currency, invoiceNo);
         invoice.changeLifecycleStatus("ISSUED");
         invoices.updateLifecycleStatus(tenantId, invoice.getId(), "ISSUED");
         invoices.insertLifecycleHistory(tenantId, invoice.getId(), null, "ISSUED",

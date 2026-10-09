@@ -244,6 +244,10 @@ public class FinancialDocumentService {
                 if (!blank(companyRegistrationNumber)) regulatory += "Reg. No: " + companyRegistrationNumber;
                 if (!blank(companyTaxId)) regulatory += (regulatory.isBlank() ? "" : " | ") + "Tax ID: " + companyTaxId;
                 if (!blank(regulatory)) { text(c, truncate(regulatory, 90), 42, y, 8, false); y -= 12; }
+                if (!blank(invoice.getTaxLegalNameSnapshot())) { text(c, truncate("Tax jurisdiction: " + invoice.getTaxLegalNameSnapshot(), 90), 42, y, 8, false); y -= 12; }
+                if (!blank(invoice.getTaxRegistrationSnapshot())) { text(c, truncate("Tax registration: " + invoice.getTaxRegistrationSnapshot(), 90), 42, y, 8, false); y -= 12; }
+                if (!blank(invoice.getTaxAddressSnapshot())) { text(c, truncate(invoice.getTaxAddressSnapshot(), 90), 42, y, 8, false); y -= 12; }
+                if (!blank(invoice.getTaxCountrySnapshot())) { text(c, truncate("Tax country: " + invoice.getTaxCountrySnapshot(), 90), 42, y, 8, false); y -= 12; }
 
                 text(c, "Invoice No.", 430, 777, 8, true);
                 text(c, truncate(invoice.getInvoiceNo(), 28), 430, 764, 10, false);
@@ -353,7 +357,17 @@ public class FinancialDocumentService {
                 }
                 line(c, 42, y, 553);
                 y -= 18;
-                text(c, "Invoice subtotal / billed amount", 330, y, 8, false);
+                text(c, "Invoice subtotal", 330, y, 8, false);
+                text(c, money(invoice.getSubtotalAmount(), invoice.getCurrency()), 465, y, 8, false);
+                y -= 15;
+                if (invoice.getTaxAmount() != null && invoice.getTaxAmount().signum() > 0) {
+                    String taxLabel = "Tax / VAT" + (blank(invoice.getTaxCode()) ? "" : " (" + invoice.getTaxCode() + ")")
+                            + (invoice.getTaxRate() == null ? "" : " " + decimalText(invoice.getTaxRate()) + "%");
+                    text(c, truncate(taxLabel, 32), 330, y, 8, false);
+                    text(c, money(invoice.getTaxAmount(), invoice.getCurrency()), 465, y, 8, false);
+                    y -= 15;
+                }
+                text(c, "Invoice total incl. tax", 330, y, 8, true);
                 text(c, money(invoice.getInvoiceAmount(), invoice.getCurrency()), 465, y, 8, true);
                 y -= 15;
                 if (invoice.getDebitNoteAmount() != null && invoice.getDebitNoteAmount().signum() > 0) {

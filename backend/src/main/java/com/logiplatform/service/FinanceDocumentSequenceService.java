@@ -71,7 +71,8 @@ public class FinanceDocumentSequenceService {
         int year = LocalDate.now().getYear();
         String prefix = db.query("""
                 SELECT invoice_prefix FROM finance_tax_jurisdictions
-                 WHERE tenant_id=? AND active=true AND invoice_prefix IS NOT NULL AND invoice_prefix <> ''
+                 WHERE tenant_id=? AND active=true AND default_for_invoicing=true
+                   AND invoice_prefix IS NOT NULL AND invoice_prefix <> ''
                  ORDER BY updated_at DESC LIMIT 1
                 """, rs -> rs.next() ? rs.getString(1) : "AAL-INV-", tenant);
         if (prefix == null || prefix.isBlank()) prefix = "AAL-INV-";

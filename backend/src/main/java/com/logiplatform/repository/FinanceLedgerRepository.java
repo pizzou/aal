@@ -12,6 +12,9 @@ import java.util.UUID;
 public interface FinanceLedgerRepository extends JpaRepository<FinanceLedgerEntry, UUID> {
     List<FinanceLedgerEntry> findAllByTenantIdOrderByPostedAtDesc(UUID tenantId);
 
+    List<FinanceLedgerEntry> findAllByTenantIdAndSourceTypeAndSourceIdOrderByPostedAtAsc(
+            UUID tenantId, String sourceType, UUID sourceId);
+
     @Query("""
             select coalesce(sum(e.amount), 0)
             from FinanceLedgerEntry e

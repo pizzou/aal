@@ -442,6 +442,27 @@ export async function apiFetch<T>(
   return value;
 }
 
+export async function fetchApiBlob(path: string): Promise<Blob> {
+  const headers = new Headers();
+  applyAuthenticationHeader(headers, path);
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "GET",
+    credentials: "include",
+    headers,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      await extractErrorMessage(
+        response,
+        `Request failed with status ${response.status}`,
+      ),
+    );
+  }
+  return response.blob();
+}
+
 export async function downloadApiFile(
   path: string,
   fallbackFilename: string,
@@ -2638,6 +2659,72 @@ export const financeIncomeConfigurationApi = {
     apiFetch<CommercialPaymentAllocation[]>(
       `/api/finance/income-configuration/payments/${encodeURIComponent(paymentId)}/allocations`,
     ),
+};
+
+export type FinanceProfitRule = {
+  id: string;
+  bankDestinationId: string;
+  bankCode: string;
+  bankName: string;
+  accountReference: string | null;
+  percentage: number;
+  active: boolean;
+  createdAt: string;
+};
+export type FinanceProfitAllocationItem = {
+  bankDestinationId: string;
+  bankCode: string;
+  bankName: string;
+  accountReference: string | null;
+  percentage: number;
+  amount: number;
+  currency: string;
+  transferStatus: string;
+};
+export type FinanceProfitAllocationResult = {
+  runId: string;
+  shipmentId: string;
+  shipmentReference: string;
+  currency: string;
+  revenue: number;
+  supplierPaid: number;
+  otherExpenses: number;
+  netProfit: number;
+  profitBasis: string;
+  transferStatus: string;
+  allocations: FinanceProfitAllocationItem[];
+};
+export type FinanceProfitRun = {
+  runId: string;
+  shipmentId: string;
+  shipmentReference: string;
+  currency: string;
+  revenue: number;
+  supplierPaid: number;
+  otherExpenses: number;
+  netProfit: number;
+  transferStatus: string;
+  createdAt: string;
+};
+export const financeProfitAllocationApi = {
+  rules: () =>
+    apiFetch<FinanceProfitRule[]>("/api/finance/profit-allocation/rules"),
+  saveRules: (
+    rules: Array<{ bankDestinationId: string; percentage: number }>,
+  ) =>
+    apiFetch<FinanceProfitRule[]>("/api/finance/profit-allocation/rules", {
+      method: "PUT",
+      body: JSON.stringify({ rules }),
+    }),
+  allocateShipment: (shipmentId: string) =>
+    apiFetch<FinanceProfitAllocationResult>(
+      `/api/finance/profit-allocation/shipments/${encodeURIComponent(shipmentId)}/allocate`,
+      {
+        method: "POST",
+      },
+    ),
+  runs: () =>
+    apiFetch<FinanceProfitRun[]>("/api/finance/profit-allocation/runs"),
 };
 
 export const financeApi = {

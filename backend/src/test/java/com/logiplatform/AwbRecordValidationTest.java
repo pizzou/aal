@@ -24,10 +24,15 @@ import static com.logiplatform.dto.SensorDtos.*;
 import static com.logiplatform.dto.AuthDtos.*;
 
 class AwbRecordValidationTest {
-    private AwbRecord awb(String number,String type){
-        return new AwbRecord(UUID.randomUUID(),UUID.randomUUID(),number,type,null,null,
-            "Shipper","Address","Consignee","Address","Agent","KGL","NBO",2,
-            new BigDecimal("100"),new BigDecimal("100"),"General","", "",false);
+    private AwbRecord awb(String number, String type) {
+        return awb(number, type, null, "KGL", "NBO");
+    }
+
+    private AwbRecord awb(String number, String type, String mawb, String origin, String destination) {
+        return new AwbRecord(UUID.randomUUID(), UUID.randomUUID(), number, type, mawb,
+            type.equalsIgnoreCase("HAWB") ? number : null,
+            "Shipper", "Address", "Consignee", "Address", "Agent", origin, destination, 2,
+            new BigDecimal("100"), new BigDecimal("100"), "General", "", "", false);
     }
     @Test void validMawbCheckDigitAccepted(){
         AwbRecord a=awb("071-61746230","MAWB");
@@ -40,10 +45,9 @@ class AwbRecordValidationTest {
         assertThrows(IllegalArgumentException.class,a::validateRecord);
     }
     @Test void invalidAirportRejected(){
-        AwbRecord a=awb("071-61746230","HAWB");
-        // constructor uses valid airports; change is not exposed, so this test documents
-        // validation through a normal record rather than mutating protected state.
-        a.validateRecord();
-        assertEquals("VALID",a.getValidationStatus());
+        // Supply a valid parent MAWB so this assertion reaches airport validation.
+        AwbRecord a = awb("HAWB-0001", "HAWB", "071-61746230", "KG", "NBO");
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, a::validateRecord);
+        assertTrue(exception.getMessage().contains("airport codes"));
     }
 }

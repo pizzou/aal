@@ -6,6 +6,7 @@ import {
   ApiError,
   apiFetch,
   downloadApiFile,
+  fetchApiBlob,
   commercialApi,
   shipmentsApi,
   Shipment,
@@ -100,30 +101,47 @@ export default function BillingPage() {
     setLoading(true);
     setError("");
 
-    try {
-      const [invoiceRows, shipmentRows, reconciliationRow] = await Promise.all([
+    // Keep each billing panel independently useful. A failed reconciliation or
+    // optional income-source request must never hide canonical invoice rows.
+    const [invoiceResult, shipmentResult, reconciliationResult, sourceResult] =
+      await Promise.allSettled([
         commercialApi.invoices(),
         shipmentsApi.list(),
         financeApi.reconcile(undefined, "USD"),
+        financeIncomeConfigurationApi.sources(),
       ]);
 
-      setInvoices(invoiceRows as Invoice[]);
-      setShipments(shipmentRows.content);
-      setReconciliation(reconciliationRow);
-      try {
-        setIncomeSources(await financeIncomeConfigurationApi.sources());
-      } catch {
-        setIncomeSources([]);
-      }
-    } catch (exception) {
-      setError(
-        exception instanceof Error
-          ? exception.message
-          : "Unable to load billing data.",
+    const failures: string[] = [];
+    if (invoiceResult.status === "fulfilled") {
+      setInvoices(invoiceResult.value as Invoice[]);
+    } else {
+      failures.push(
+        `Invoices: ${invoiceResult.reason instanceof Error ? invoiceResult.reason.message : "could not be loaded"}`,
       );
-    } finally {
-      setLoading(false);
     }
+    if (shipmentResult.status === "fulfilled") {
+      setShipments(shipmentResult.value.content);
+    } else {
+      failures.push(
+        `Shipments: ${shipmentResult.reason instanceof Error ? shipmentResult.reason.message : "could not be loaded"}`,
+      );
+    }
+    if (reconciliationResult.status === "fulfilled") {
+      setReconciliation(reconciliationResult.value);
+    } else {
+      setReconciliation(null);
+      failures.push(
+        `Reconciliation: ${reconciliationResult.reason instanceof Error ? reconciliationResult.reason.message : "unavailable"}`,
+      );
+    }
+    if (sourceResult.status === "fulfilled") {
+      setIncomeSources(sourceResult.value);
+    } else {
+      // Payment recording remains usable without the optional classification.
+      setIncomeSources([]);
+    }
+    if (failures.length) setError(failures.join(" · "));
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -191,16 +209,28 @@ export default function BillingPage() {
     setError("");
     setSuccess("");
 
+    if (!invoiceShipment) {
+      setError("Select a shipment before creating an invoice.");
+      setSaving(false);
+      return;
+    }
+    if (!invoiceDueDate) {
+      setError("Invoice due date is required.");
+      setSaving(false);
+      return;
+    }
+
+    // Open the tab synchronously in the click gesture so browser popup blockers
+    // do not prevent the authenticated invoice PDF from being viewed/printed.
+    const pdfTab = window.open("about:blank", "_blank");
+    if (pdfTab) {
+      pdfTab.document.title = "Preparing AAL invoice…";
+      pdfTab.document.body.innerHTML =
+        "<p style='font-family: sans-serif; padding: 24px'>Generating invoice PDF…</p>";
+    }
+
     try {
-      if (!invoiceShipment) {
-        throw new Error("Select a shipment before creating an invoice.");
-      }
-
-      if (!invoiceDueDate) {
-        throw new Error("Invoice due date is required.");
-      }
-
-      await apiFetch<Invoice>(
+      const created = await apiFetch<Invoice>(
         `/api/billing/shipments/${invoiceShipment}/invoice`,
         {
           method: "POST",
@@ -214,11 +244,38 @@ export default function BillingPage() {
       setInvoiceShipment("");
       setInvoiceOwner("");
       setInvoiceDueDate("");
-
-      setSuccess("Invoice created successfully.");
-
+      setSuccess(
+        `Invoice ${created.invoiceNo || ""} created. Opening the customer-ready PDF…`,
+      );
       await load();
+
+      if (pdfTab && created.id) {
+        try {
+          const blob = await fetchApiBlob(
+            `/api/finance/documents/invoices/${created.id}/pdf`,
+          );
+          const objectUrl = URL.createObjectURL(blob);
+          pdfTab.location.href = objectUrl;
+          window.setTimeout(
+            () => URL.revokeObjectURL(objectUrl),
+            5 * 60 * 1000,
+          );
+          setSuccess(
+            `Invoice ${created.invoiceNo || ""} created and opened. Use the PDF viewer’s Print control to print it.`,
+          );
+        } catch (pdfException) {
+          pdfTab.close();
+          setError(
+            `Invoice ${created.invoiceNo || ""} was created, but the PDF could not be opened: ${pdfException instanceof Error ? pdfException.message : "unknown PDF error"}. Use View/Print from the invoice register.`,
+          );
+        }
+      } else {
+        setSuccess(
+          `Invoice ${created.invoiceNo || ""} created and added to the register. Your browser blocked the PDF tab; use View/Print from the invoice register.`,
+        );
+      }
     } catch (exception) {
+      pdfTab?.close();
       setError(
         exception instanceof ApiError || exception instanceof Error
           ? exception.message
@@ -295,6 +352,34 @@ export default function BillingPage() {
       );
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function viewInvoice(invoice: Invoice) {
+    const tab = window.open("about:blank", "_blank");
+    if (!tab) {
+      setError(
+        "Your browser blocked the invoice PDF tab. Allow pop-ups for this AAL site and try again.",
+      );
+      return;
+    }
+    tab.document.title = `Invoice ${invoice.invoiceNo}`;
+    tab.document.body.innerHTML =
+      "<p style='font-family: sans-serif; padding: 24px'>Loading invoice PDF…</p>";
+    try {
+      const blob = await fetchApiBlob(
+        `/api/finance/documents/invoices/${invoice.id}/pdf`,
+      );
+      const objectUrl = URL.createObjectURL(blob);
+      tab.location.href = objectUrl;
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 5 * 60 * 1000);
+    } catch (exception) {
+      tab.close();
+      setError(
+        exception instanceof Error
+          ? exception.message
+          : "Unable to open invoice PDF.",
+      );
     }
   }
 
@@ -579,6 +664,37 @@ export default function BillingPage() {
 
                 if (!shipment) {
                   return null;
+                }
+
+                async function viewInvoice(invoice: Invoice) {
+                  const tab = window.open("about:blank", "_blank");
+                  if (!tab) {
+                    setError(
+                      "Your browser blocked the invoice PDF tab. Allow pop-ups for this AAL site and try again.",
+                    );
+                    return;
+                  }
+                  tab.document.title = `Invoice ${invoice.invoiceNo}`;
+                  tab.document.body.innerHTML =
+                    "<p style='font-family: sans-serif; padding: 24px'>Loading invoice PDF…</p>";
+                  try {
+                    const blob = await fetchApiBlob(
+                      `/api/finance/documents/invoices/${invoice.id}/pdf`,
+                    );
+                    const objectUrl = URL.createObjectURL(blob);
+                    tab.location.href = objectUrl;
+                    window.setTimeout(
+                      () => URL.revokeObjectURL(objectUrl),
+                      5 * 60 * 1000,
+                    );
+                  } catch (exception) {
+                    tab.close();
+                    setError(
+                      exception instanceof Error
+                        ? exception.message
+                        : "Unable to open invoice PDF.",
+                    );
+                  }
                 }
 
                 async function downloadInvoice(invoice: Invoice) {
@@ -886,6 +1002,37 @@ export default function BillingPage() {
                 filtered.map((invoice) => {
                   const shipment = shipmentForInvoice(invoice);
 
+                  async function viewInvoice(invoice: Invoice) {
+                    const tab = window.open("about:blank", "_blank");
+                    if (!tab) {
+                      setError(
+                        "Your browser blocked the invoice PDF tab. Allow pop-ups for this AAL site and try again.",
+                      );
+                      return;
+                    }
+                    tab.document.title = `Invoice ${invoice.invoiceNo}`;
+                    tab.document.body.innerHTML =
+                      "<p style='font-family: sans-serif; padding: 24px'>Loading invoice PDF…</p>";
+                    try {
+                      const blob = await fetchApiBlob(
+                        `/api/finance/documents/invoices/${invoice.id}/pdf`,
+                      );
+                      const objectUrl = URL.createObjectURL(blob);
+                      tab.location.href = objectUrl;
+                      window.setTimeout(
+                        () => URL.revokeObjectURL(objectUrl),
+                        5 * 60 * 1000,
+                      );
+                    } catch (exception) {
+                      tab.close();
+                      setError(
+                        exception instanceof Error
+                          ? exception.message
+                          : "Unable to open invoice PDF.",
+                      );
+                    }
+                  }
+
                   async function downloadInvoice(invoice: Invoice) {
                     try {
                       await downloadApiFile(
@@ -1026,9 +1173,16 @@ export default function BillingPage() {
                           <button
                             type="button"
                             className="btn btn-small"
+                            onClick={() => viewInvoice(invoice)}
+                          >
+                            View / Print
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-small"
                             onClick={() => downloadInvoice(invoice)}
                           >
-                            Invoice PDF
+                            Download PDF
                           </button>
                           <button
                             type="button"

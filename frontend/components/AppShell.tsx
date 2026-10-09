@@ -119,6 +119,13 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "COMMERCIAL & FINANCE",
+    label: "Profit Distribution",
+    href: "/finance/profit-allocation",
+    icon: "money",
+    roles: ["ADMIN", "MANAGER", "FINANCE"],
+  },
+  {
+    section: "COMMERCIAL & FINANCE",
     label: "Management Reports",
     href: "/reports",
     icon: "chart",

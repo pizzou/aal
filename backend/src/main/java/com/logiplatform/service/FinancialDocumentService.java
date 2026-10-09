@@ -2,9 +2,11 @@ package com.logiplatform.service;
 
 import com.logiplatform.model.CommercialInvoice;
 import com.logiplatform.model.CommercialPayment;
+import com.logiplatform.model.ClientRecord;
 import com.logiplatform.model.Shipment;
 import com.logiplatform.repository.CommercialInvoiceRepository;
 import com.logiplatform.repository.CommercialPaymentRepository;
+import com.logiplatform.repository.ClientRecordRepository;
 import com.logiplatform.repository.ShipmentRepository;
 import com.logiplatform.tenancy.TenantContext;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -12,6 +14,7 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -32,6 +35,7 @@ public class FinancialDocumentService {
     private final CommercialInvoiceRepository invoices;
     private final CommercialPaymentRepository payments;
     private final ShipmentRepository shipments;
+    private final ClientRecordRepository clients;
     private final JdbcTemplate tenantDb;
     private final MailService mail;
     private final FinancialDocumentArchiveService archive;
@@ -44,7 +48,34 @@ public class FinancialDocumentService {
     private String companyEmail;
     @Value("${app.company.phone:}")
     private String companyPhone;
+    @Value("${app.company.registration-number:}")
+    private String companyRegistrationNumber;
+    @Value("${app.company.tax-id:}")
+    private String companyTaxId;
+    @Value("${app.company.website:}")
+    private String companyWebsite;
+    @Value("${app.company.payment-instructions:}")
+    private String paymentInstructions;
 
+    @Autowired
+    public FinancialDocumentService(
+            CommercialInvoiceRepository invoices,
+            CommercialPaymentRepository payments,
+            ShipmentRepository shipments,
+            ClientRecordRepository clients,
+            @Qualifier("tenantJdbcTemplate") JdbcTemplate tenantDb,
+            MailService mail,
+            FinancialDocumentArchiveService archive) {
+        this.invoices = invoices;
+        this.payments = payments;
+        this.shipments = shipments;
+        this.clients = clients;
+        this.tenantDb = tenantDb;
+        this.mail = mail;
+        this.archive = archive;
+    }
+
+    /** Compatibility constructor retained for unit tests and older direct callers. */
     public FinancialDocumentService(
             CommercialInvoiceRepository invoices,
             CommercialPaymentRepository payments,
@@ -52,21 +83,17 @@ public class FinancialDocumentService {
             @Qualifier("tenantJdbcTemplate") JdbcTemplate tenantDb,
             MailService mail,
             FinancialDocumentArchiveService archive) {
-        this.invoices = invoices;
-        this.payments = payments;
-        this.shipments = shipments;
-        this.tenantDb = tenantDb;
-        this.mail = mail;
-        this.archive = archive;
+        this(invoices, payments, shipments, null, tenantDb, mail, archive);
     }
 
     @Transactional(readOnly = true)
     public byte[] invoicePdf(UUID invoiceId) {
         CommercialInvoice invoice = invoice(invoiceId);
         Shipment shipment = shipment(invoice.getShipmentId());
+        ClientRecord client = client(invoice.getClient());
         List<InvoiceLine> lines = lines(invoiceId);
         if (lines.isEmpty()) lines = fallbackLines(invoice, shipment);
-        byte[] pdf = buildInvoice(invoice, shipment, lines);
+        byte[] pdf = buildInvoice(invoice, shipment, client, lines);
         archive.archive("INVOICE", invoice.getId(), "invoice-" + invoice.getInvoiceNo() + ".pdf",
                 "application/pdf", pdf);
         return pdf;
@@ -179,79 +206,213 @@ public class FinancialDocumentService {
             requireTenant(), invoiceId);
     }
 
+    private ClientRecord client(String clientName) {
+        if (clients == null || blank(clientName)) return null;
+        return clients.findFirstByTenantIdAndClientCompanyIgnoreCase(requireTenant(), clientName).orElse(null);
+    }
+
     private List<InvoiceLine> fallbackLines(CommercialInvoice invoice, Shipment shipment) {
+        String description = "Freight and logistics services";
+        if (shipment != null) {
+            String route = firstNonBlank(shipment.getOriginCityPort(), shipment.getOriginAddress(), shipment.getOriginCountry())
+                    + " to " + firstNonBlank(shipment.getDestinationCityPort(), shipment.getDestinationAddress(), shipment.getDestinationCountry());
+            description += " - " + shipment.getReferenceCode() + " - " + route;
+            if (!blank(shipment.getCommodity())) description += " - " + shipment.getCommodity();
+            if (shipment.getChargeableWeightKg() != null) description += " - " + decimalText(shipment.getChargeableWeightKg()) + " kg chargeable weight";
+        }
         return List.of(new InvoiceLine(
-                1, "FREIGHT",
-                shipment == null ? "Logistics services" : "Logistics services - " + shipment.getReferenceCode(),
+                1, "FREIGHT", description,
                 BigDecimal.ONE, invoice.getInvoiceAmount(), invoice.getInvoiceAmount(), invoice.getCurrency()));
     }
 
-    private byte[] buildInvoice(CommercialInvoice invoice, Shipment shipment, List<InvoiceLine> lines) {
+    private byte[] buildInvoice(CommercialInvoice invoice, Shipment shipment, ClientRecord client, List<InvoiceLine> lines) {
         try (PDDocument doc = new PDDocument(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             PDPage page = new PDPage(PDRectangle.A4);
             doc.addPage(page);
-            try (PDPageContentStream c = new PDPageContentStream(doc, page)) {
+            PDPageContentStream c = new PDPageContentStream(doc, page);
+            try {
                 float y = 800;
                 text(c, companyName, 42, y, 18, true);
-                text(c, "INVOICE", 430, y, 17, true);
-                y -= 24;
-                text(c, companyAddress, 42, y, 9, false);
-                text(c, "Invoice: " + invoice.getInvoiceNo(), 430, y, 9, false);
-                y -= 14;
-                text(c, companyEmail + (blank(companyPhone) ? "" : " | " + companyPhone), 42, y, 9, false);
-                text(c, "Issue: " + DATE.format(invoice.getIssueDate()), 430, y, 9, false);
+                text(c, "INVOICE", 430, y, 16, true);
+                y -= 23;
+                if (!blank(companyAddress)) { text(c, companyAddress, 42, y, 8, false); y -= 12; }
+                String contact = companyEmail;
+                if (!blank(companyPhone)) contact = blank(contact) ? companyPhone : contact + " | " + companyPhone;
+                if (!blank(companyWebsite)) contact = blank(contact) ? companyWebsite : contact + " | " + companyWebsite;
+                if (!blank(contact)) { text(c, truncate(contact, 90), 42, y, 8, false); y -= 12; }
+                String regulatory = "";
+                if (!blank(companyRegistrationNumber)) regulatory += "Reg. No: " + companyRegistrationNumber;
+                if (!blank(companyTaxId)) regulatory += (regulatory.isBlank() ? "" : " | ") + "Tax ID: " + companyTaxId;
+                if (!blank(regulatory)) { text(c, truncate(regulatory, 90), 42, y, 8, false); y -= 12; }
 
-                y -= 40;
-                text(c, "BILL TO", 42, y, 10, true);
-                text(c, invoice.getClient(), 42, y - 15, 10, false);
-                if (shipment != null) text(c, shipment.getNotificationEmail(), 42, y - 29, 9, false);
-                text(c, "Due", 430, y, 9, true);
-                text(c, invoice.getDueDate() == null ? "Due on receipt" : DATE.format(invoice.getDueDate()), 430, y - 15, 9, false);
-                if (shipment != null) text(c, "Shipment: " + shipment.getReferenceCode(), 430, y - 29, 9, false);
+                text(c, "Invoice No.", 430, 777, 8, true);
+                text(c, truncate(invoice.getInvoiceNo(), 28), 430, 764, 10, false);
+                text(c, "Issue date", 430, 746, 8, true);
+                text(c, invoice.getIssueDate() == null ? "—" : DATE.format(invoice.getIssueDate()), 430, 733, 9, false);
+                text(c, "Due date", 430, 716, 8, true);
+                text(c, invoice.getDueDate() == null ? "Due on receipt" : DATE.format(invoice.getDueDate()), 430, 703, 9, false);
 
-                y -= 70;
-                text(c, "DESCRIPTION", 42, y, 9, true);
-                text(c, "QTY", 350, y, 9, true);
-                text(c, "AMOUNT", 440, y, 9, true);
-                y -= 16;
-                for (InvoiceLine line : lines) {
-                    if (y < 130) break;
-                    text(c, truncate(line.description(), 48), 42, y, 9, false);
-                    text(c, line.quantity().stripTrailingZeros().toPlainString(), 350, y, 9, false);
-                    text(c, money(line.amount(), line.currency()), 440, y, 9, false);
-                    y -= 15;
+                y = Math.min(y - 12, 715);
+                line(c, 42, y, 553);
+                y -= 18;
+                text(c, "BILL TO", 42, y, 9, true);
+                text(c, "INVOICE SUMMARY", 350, y, 9, true);
+                y -= 15;
+                text(c, truncate(blank(invoice.getClient()) ? "Customer" : invoice.getClient(), 48), 42, y, 10, true);
+                text(c, "Shipment: " + (shipment == null ? "—" : safe(shipment.getReferenceCode())), 350, y, 8, false);
+                y -= 13;
+                text(c, "Currency: " + safe(invoice.getCurrency()), 350, y, 8, false);
+                String contactPerson = client == null ? null : client.getContactPerson();
+                if (blank(contactPerson) && shipment != null) contactPerson = shipment.getContact();
+                if (!blank(contactPerson)) {
+                    text(c, truncate("Attention: " + contactPerson, 58), 42, y, 8, false);
+                    y -= 12;
                 }
-                y -= 8;
-                line(c, 42, y, 550);
-                y -= 20;
-                text(c, "Invoice total", 390, y, 9, false);
-                text(c, money(invoice.getInvoiceAmount(), invoice.getCurrency()), 470, y, 9, true);
-                y -= 16;
-                if (invoice.getDebitNoteAmount().signum() > 0) {
-                    text(c, "Debit notes", 390, y, 9, false);
-                    text(c, money(invoice.getDebitNoteAmount(), invoice.getCurrency()), 470, y, 9, false);
+                String customerEmail = client == null ? null : client.getEmail();
+                if (blank(customerEmail) && shipment != null) customerEmail = shipment.getNotificationEmail();
+                String customerPhone = client == null ? null : client.getPhone();
+                if (!blank(customerEmail) || !blank(customerPhone)) {
+                    String lineText = !blank(customerEmail) ? "Email: " + customerEmail : "";
+                    if (!blank(customerPhone)) lineText += (lineText.isBlank() ? "" : " | ") + "Phone: " + customerPhone;
+                    text(c, truncate(lineText, 76), 42, y, 8, false);
+                    y -= 12;
+                }
+                if (client != null) {
+                    String customerLocation = blank(client.getCity()) ? "" : client.getCity().trim();
+                    if (!blank(client.getCountry())) {
+                        customerLocation += (customerLocation.isBlank() ? "" : ", ") + client.getCountry().trim();
+                    }
+                    if (!blank(customerLocation)) {
+                        text(c, truncate("Customer location: " + customerLocation, 76), 42, y, 8, false);
+                        y -= 12;
+                    }
+                }
+                y -= 6;
+
+                if (shipment != null) {
+                    text(c, "SHIPMENT DETAILS", 42, y, 9, true);
+                    y -= 14;
+                    String origin = firstNonBlank(shipment.getOriginCityPort(), shipment.getOriginAddress(), shipment.getOriginCountry());
+                    String destination = firstNonBlank(shipment.getDestinationCityPort(), shipment.getDestinationAddress(), shipment.getDestinationCountry());
+                    text(c, "Origin: " + truncate(origin, 55), 42, y, 8, false);
+                    text(c, "Destination: " + truncate(destination, 50), 310, y, 8, false);
+                    y -= 13;
+                    text(c, "Mode: " + safe(shipment.getTransportMode() == null ? null : shipment.getTransportMode().name()), 42, y, 8, false);
+                    text(c, "Carrier: " + truncate(firstNonBlank(shipment.getAirlineUsed(), shipment.getCarrierName()), 40), 200, y, 8, false);
+                    text(c, "AWB / Reference: " + truncate(firstNonBlank(shipment.getCarrierReferenceNumber(), shipment.getReferenceCode()), 28), 390, y, 8, false);
+                    y -= 13;
+                    String commodity = "Commodity: " + safe(shipment.getCommodity());
+                    text(c, truncate(commodity, 58), 42, y, 8, false);
+                    String weight = "Gross: " + decimalText(shipment.getGrossWeightKg()) + " kg";
+                    if (shipment.getVolumetricWeightKg() != null) weight += " | Vol: " + decimalText(shipment.getVolumetricWeightKg()) + " kg";
+                    if (shipment.getChargeableWeightKg() != null) weight += " | Chargeable: " + decimalText(shipment.getChargeableWeightKg()) + " kg";
+                    text(c, truncate(weight, 68), 235, y, 8, false);
+                    y -= 13;
+                    String packages = shipment.getPackages() == null ? "Packages: —" : "Packages: " + shipment.getPackages();
+                    String flight = !blank(shipment.getFlightNumber()) ? "Flight: " + shipment.getFlightNumber() : "Service: " + safe(shipment.getServiceType());
+                    text(c, packages, 42, y, 8, false);
+                    text(c, truncate(flight, 48), 190, y, 8, false);
+                    text(c, "Status: " + safe(shipment.getStatus() == null ? null : shipment.getStatus().name()), 390, y, 8, false);
+                    y -= 18;
+                } else {
+                    y -= 4;
+                }
+
+                y = drawInvoiceTableHeader(c, y);
+                for (InvoiceLine invoiceLine : lines) {
+                    if (y < 105) {
+                        c.close();
+                        page = new PDPage(PDRectangle.A4);
+                        doc.addPage(page);
+                        c = new PDPageContentStream(doc, page);
+                        y = 800;
+                        text(c, companyName, 42, y, 13, true);
+                        text(c, "INVOICE CONTINUED", 390, y, 11, true);
+                        y -= 24;
+                        text(c, "Invoice No: " + invoice.getInvoiceNo(), 42, y, 9, false);
+                        y = drawInvoiceTableHeader(c, y - 22);
+                    }
+                    text(c, truncate(firstNonBlank(invoiceLine.description(), invoiceLine.chargeCode()), 49), 42, y, 8, false);
+                    text(c, decimalText(invoiceLine.quantity()), 340, y, 8, false);
+                    text(c, money(invoiceLine.unitPrice(), firstNonBlank(invoiceLine.currency(), invoice.getCurrency())), 385, y, 8, false);
+                    text(c, money(invoiceLine.amount(), firstNonBlank(invoiceLine.currency(), invoice.getCurrency())), 475, y, 8, false);
                     y -= 16;
                 }
-                if (invoice.getCreditNoteAmount().signum() > 0) {
-                    text(c, "Credit notes", 390, y, 9, false);
-                    text(c, money(invoice.getCreditNoteAmount().negate(), invoice.getCurrency()), 470, y, 9, false);
-                    y -= 16;
+
+                if (y < 210) {
+                    c.close();
+                    page = new PDPage(PDRectangle.A4);
+                    doc.addPage(page);
+                    c = new PDPageContentStream(doc, page);
+                    y = 800;
+                    text(c, companyName, 42, y, 13, true);
+                    text(c, "INVOICE SUMMARY", 390, y, 11, true);
+                    y -= 26;
+                    text(c, "Invoice No: " + invoice.getInvoiceNo(), 42, y, 9, false);
+                    y -= 24;
                 }
-                text(c, "Paid", 390, y, 9, false);
-                text(c, money(invoice.getAmountPaid(), invoice.getCurrency()), 470, y, 9, false);
-                y -= 16;
-                text(c, "Balance", 390, y, 10, true);
-                text(c, money(invoice.getBalance(), invoice.getCurrency()), 470, y, 10, true);
-                y -= 30;
-                text(c, "Status: " + invoice.getStatus(), 42, y, 9, true);
-                if (!blank(invoice.getNotes())) text(c, truncate(invoice.getNotes(), 100), 42, y - 16, 8, false);
-                text(c, "Thank you for your business.", 42, 64, 9, false);
+                line(c, 42, y, 553);
+                y -= 18;
+                text(c, "Invoice subtotal / billed amount", 330, y, 8, false);
+                text(c, money(invoice.getInvoiceAmount(), invoice.getCurrency()), 465, y, 8, true);
+                y -= 15;
+                if (invoice.getDebitNoteAmount() != null && invoice.getDebitNoteAmount().signum() > 0) {
+                    text(c, "Debit notes", 330, y, 8, false);
+                    text(c, money(invoice.getDebitNoteAmount(), invoice.getCurrency()), 465, y, 8, false);
+                    y -= 14;
+                }
+                if (invoice.getCreditNoteAmount() != null && invoice.getCreditNoteAmount().signum() > 0) {
+                    text(c, "Credit notes", 330, y, 8, false);
+                    text(c, money(invoice.getCreditNoteAmount().negate(), invoice.getCurrency()), 465, y, 8, false);
+                    y -= 14;
+                }
+                text(c, "Amount paid", 330, y, 8, false);
+                text(c, money(invoice.getAmountPaid(), invoice.getCurrency()), 465, y, 8, false);
+                y -= 15;
+                text(c, "BALANCE DUE", 330, y, 10, true);
+                text(c, money(invoice.getBalance(), invoice.getCurrency()), 465, y, 10, true);
+                y -= 18;
+                text(c, "Payment status: " + safe(invoice.getStatus()), 42, y, 8, true);
+                y -= 15;
+                if (!blank(invoice.getNotes())) {
+                    text(c, "Notes: " + truncate(invoice.getNotes(), 105), 42, y, 8, false);
+                    y -= 14;
+                }
+                if (!blank(paymentInstructions)) {
+                    text(c, "PAYMENT INSTRUCTIONS", 42, y, 8, true);
+                    y -= 13;
+                    text(c, truncate(paymentInstructions, 112), 42, y, 8, false);
+                    y -= 14;
+                }
+                text(c, "Please quote invoice " + safe(invoice.getInvoiceNo()) + " with your payment.", 42, 76, 8, false);
+                text(c, "Thank you for your business.", 42, 60, 8, true);
+            } finally {
+                if (c != null) c.close();
             }
             doc.save(out);
             return out.toByteArray();
         } catch (Exception e) {
             throw new IllegalStateException("Unable to generate invoice PDF", e);
         }
+    }
+
+    private static float drawInvoiceTableHeader(PDPageContentStream c, float y) throws Exception {
+        line(c, 42, y + 8, 553);
+        text(c, "DESCRIPTION", 42, y - 4, 8, true);
+        text(c, "QTY", 340, y - 4, 8, true);
+        text(c, "UNIT PRICE", 385, y - 4, 8, true);
+        text(c, "AMOUNT", 475, y - 4, 8, true);
+        line(c, 42, y - 11, 553);
+        return y - 26;
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) if (!blank(value)) return value;
+        return "—";
+    }
+
+    private static String decimalText(BigDecimal value) {
+        return value == null ? "—" : value.stripTrailingZeros().toPlainString();
     }
 
     private byte[] buildReceipt(CommercialPayment payment, CommercialInvoice invoice, Shipment shipment) {

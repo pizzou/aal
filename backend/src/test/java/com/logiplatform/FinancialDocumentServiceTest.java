@@ -12,6 +12,8 @@ import com.logiplatform.service.MailService;
 import com.logiplatform.tenancy.TenantContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
@@ -32,7 +34,7 @@ class FinancialDocumentServiceTest {
     void clearTenant(){ TenantContext.clear(); }
 
     @Test
-    void invoicePdfIsGeneratedAndArchived() {
+    void invoicePdfIsGeneratedAndArchived() throws Exception {
         TenantContext.setTenantId(tenant);
         CommercialInvoiceRepository invoices=mock(CommercialInvoiceRepository.class);
         CommercialPaymentRepository payments=mock(CommercialPaymentRepository.class);
@@ -71,6 +73,12 @@ class FinancialDocumentServiceTest {
 
         assertNotNull(pdf);
         assertTrue(pdf.length>100);
+        try (PDDocument document = PDDocument.load(pdf)) {
+            String renderedText = new PDFTextStripper().getText(document);
+            assertTrue(renderedText.contains("AAL-INV-2026-000001"));
+            assertTrue(renderedText.contains("AAL-SHP-2026-000001"));
+            assertTrue(renderedText.contains("BALANCE DUE"));
+        }
         verify(archive).archive(eq("INVOICE"),eq(invoiceId),anyString(),eq("application/pdf"),any(byte[].class));
     }
 

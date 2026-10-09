@@ -110,11 +110,11 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         this.rateLimiter = rateLimiter;
         this.metrics = metrics;
 
-        this.baseUrl = strip(baseUrl);
-        this.searchPath = normalizePath(searchPath, "");
-        this.bookingPath = normalizePath(bookingPath, "");
-        this.trackPath = normalizePath(trackPath, "");
-        this.cancellationPath = normalizePath(cancellationPath, "");
+        this.baseUrl = strip(blank(baseUrl) ? DEFAULT_BASE_URL : baseUrl);
+        this.searchPath = normalizePath(blank(searchPath) ? "/search" : searchPath, "/search");
+        this.bookingPath = normalizePath(blank(bookingPath) ? "/book" : bookingPath, "/book");
+        this.trackPath = normalizePath(blank(trackPath) ? "/track" : trackPath, "/track");
+        this.cancellationPath = normalizePath(blank(cancellationPath) ? "/bookings" : cancellationPath, "/bookings");
         this.awbPath = normalizePath(awbPath, "");
         this.awbMessageType = blank(awbMessageType) ? "FWB" : awbMessageType.trim().toUpperCase(Locale.ROOT);
 
@@ -156,19 +156,16 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
     public List<String> configurationIssues() {
         List<String> issues = new ArrayList<>();
         if (baseUrl.isBlank()) {
-            issues.add(
-                    "AIRCARGO_CARGOAI_BASE_URL is missing; use the endpoint supplied for the AAL CargoCONNECT account");
+            issues.add("CargoAi base URL is missing; configure AIRCARGO_CARGOAI_BASE_URL");
         }
         if (apiKey.isBlank()) {
             issues.add("AIRCARGO_CARGOAI_API_KEY is missing");
         }
         if (searchPath.isBlank()) {
-            issues.add(
-                    "AIRCARGO_CARGOAI_SEARCH_PATH is missing; use the path supplied for the AAL CargoCONNECT account");
+            issues.add("CargoAi search path is missing; configure AIRCARGO_CARGOAI_SEARCH_PATH");
         }
         if (bookingPath.isBlank()) {
-            issues.add(
-                    "AIRCARGO_CARGOAI_BOOKING_PATH is missing; use the path supplied for the AAL CargoCONNECT account");
+            issues.add("CargoAi booking path is missing; configure AIRCARGO_CARGOAI_BOOKING_PATH");
         }
         if (trackPath.isBlank()) {
             issues.add("AIRCARGO_CARGOAI_TRACK_PATH is missing; tracking will remain disabled");
@@ -199,13 +196,13 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         boolean bookingOn = bookingConfigured();
         return new ProviderCapabilities(
                 searchOn,
-                searchOn,
+                false, // Capacity is exposed through Quote & Book search, not the direct capacity port.
                 bookingOn,
-                false,
+                false, // CargoCONNECT Quote & Book changes require cancel-and-rebook.
                 bookingOn && !cancellationPath.isBlank(),
-                searchOn && !trackPath.isBlank(),
+                searchOn && !trackPath.isBlank(), // Tracking is by CargoAi flight UUID/reference.
                 bookingOn && !awbPath.isBlank(),
-                searchOn && !trackPath.isBlank(),
+                false, // No CargoAi callback endpoint is registered by this adapter.
                 false,
                 bookingOn,
                 List.of("CARGOCONNECT", "IATA", "CARGO-XML", "IATA-FWB", "IATA-FHL"));
@@ -416,15 +413,10 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
         body.put("flightUUID", flightUuid);
         body.put("rateId", rateId);
         body.put("user", userPayload());
-        body.put("shipment", shipmentPayload(command.weightKg()));
 
-        Map<String, Object> itinerary = new LinkedHashMap<>();
-        itinerary.put("origin", normalizeAirport(command.originCode()));
-        itinerary.put("destination", normalizeAirport(command.destinationCode()));
-        itinerary.put("airlineCode", command.carrierCode().trim().toUpperCase(Locale.ROOT));
-        itinerary.put("departureDates", List.of(command.departureTime().toString().substring(0, 10)));
-        itinerary.put("flightNumbers", List.of(command.flightNumber()));
-        body.put("itinerary", itinerary);
+        // Classic Quote & Book flow: the exact flightUUID and rateId returned
+        // by /search identify the offer. Do not send `itinerary` here because
+        // CargoAi treats that as Direct Booking and requires a different flow.
         body.put("comment", "AAL shipment " + safe(command.shipmentId()));
 
         JsonNode root = request(
@@ -772,6 +764,11 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
             headers.setContentType(MediaType.APPLICATION_JSON);
             headers.setAccept(List.of(MediaType.APPLICATION_JSON));
             headers.set("x-api-key", apiKey);
+            // Without this header CargoAi may select Schedules mode, which
+            // returns schedules but not necessarily live rates/bookable offers.
+            if ("SEARCH".equals(operation) || "SEARCH_POLL".equals(operation)) {
+                headers.set("x-api-name", "Quote & Book");
+            }
             if (!blank(idempotencyKey)) {
                 headers.set("Idempotency-Key", idempotencyKey);
             }

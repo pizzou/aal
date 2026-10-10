@@ -363,28 +363,75 @@ public class ReportingService {
                 from,
                 to);
 
+        /*
+         * MOTHERSHIP legacy rows store billing and collection directly on the
+         * shipment, because the source workbook has no separate invoice register.
+         * Include only shipments that do not already have a live invoice so that
+         * migration-era reporting neither drops legacy billings nor double counts
+         * shipments that have since moved to the invoice workflow.
+         */
+        BigDecimal[] legacyShipmentTotals = jdbc.queryForObject(
+                """
+                SELECT
+                    COALESCE(SUM(s.amount_billed_to_client), 0) AS billed,
+                    COALESCE(SUM(s.amount_paid_by_client), 0) AS collected,
+                    COALESCE(SUM(GREATEST(COALESCE(s.amount_billed_to_client,0)
+                        - COALESCE(s.amount_paid_by_client,0), 0)), 0) AS outstanding
+                FROM shipments s
+                WHERE s.tenant_id = ?
+                  AND UPPER(COALESCE(NULLIF(s.currency,''), ?)) = ?
+                  AND COALESCE(s.date_opened, s.created_at::date) BETWEEN ?::date AND ?::date
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM commercial_invoices ci
+                      WHERE ci.tenant_id = s.tenant_id
+                        AND COALESCE(ci.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
+                        AND (ci.shipment_id = s.id
+                             OR ci.invoice_no = s.invoice_no
+                             OR ci.invoice_no = s.reference_code)
+                  )
+                """,
+                (rs, rowNum) -> new BigDecimal[] {
+                    nz(rs.getBigDecimal("billed")),
+                    nz(rs.getBigDecimal("collected")),
+                    nz(rs.getBigDecimal("outstanding"))
+                },
+                tenantId, currency, currency, from, to);
+
         BigDecimal[] shipmentCosts = jdbc.queryForObject(
                 """
                         SELECT
                             COALESCE(
-                                SUM(COALESCE(s.supplier_cost,0)),
+                                SUM(CASE
+                                    WHEN s.notes = 'Imported from AAL MOTHERSHIP'
+                                    THEN COALESCE(s.amount_paid_to_supply, 0)
+                                    ELSE COALESCE(s.supplier_cost, 0)
+                                END),
                                 0
                             ) AS supplier_cost,
 
                             COALESCE(
-                                SUM(COALESCE(s.other_cost,0)),
+                                SUM(CASE
+                                    WHEN s.notes = 'Imported from AAL MOTHERSHIP'
+                                    THEN COALESCE(s.other_expenses, 0)
+                                    ELSE COALESCE(s.other_cost, 0)
+                                END),
                                 0
                             ) AS other_cost,
 
                             COALESCE(
                                 SUM(
-                                    COALESCE(
-                                        s.amount_billed_to_client,
-                                        s.amount_billed_to_client,
-                                        0
-                                    )
-                                    - COALESCE(s.supplier_cost,0)
-                                    - COALESCE(s.other_cost,0)
+                                    COALESCE(s.amount_billed_to_client, 0)
+                                    - CASE
+                                        WHEN s.notes = 'Imported from AAL MOTHERSHIP'
+                                        THEN COALESCE(s.amount_paid_to_supply, 0)
+                                        ELSE COALESCE(s.supplier_cost, 0)
+                                      END
+                                    - CASE
+                                        WHEN s.notes = 'Imported from AAL MOTHERSHIP'
+                                        THEN COALESCE(s.other_expenses, 0)
+                                        ELSE COALESCE(s.other_cost, 0)
+                                      END
                                 ),
                                 0
                             ) AS gross_profit
@@ -440,11 +487,11 @@ public class ReportingService {
                 to,
                 currency);
 
-        BigDecimal invoiced = nz(invoiceTotals[0]);
+        BigDecimal invoiced = nz(invoiceTotals[0]).add(nz(legacyShipmentTotals[0]));
 
-        BigDecimal collected = nz(invoiceTotals[1]);
+        BigDecimal collected = nz(invoiceTotals[1]).add(nz(legacyShipmentTotals[1]));
 
-        BigDecimal outstanding = nz(invoiceTotals[2]);
+        BigDecimal outstanding = nz(invoiceTotals[2]).add(nz(legacyShipmentTotals[2]));
 
         BigDecimal overdue = nz(invoiceTotals[3]);
 
@@ -501,7 +548,7 @@ public class ReportingService {
             LocalDate from,
             LocalDate to,
             String currency) {
-        return jdbc.queryForObject(
+        ReceivablesSummary invoiceSummary = jdbc.queryForObject(
                 """
                         SELECT
                         COUNT(*) AS invoice_count,
@@ -606,6 +653,54 @@ public class ReportingService {
                 tenantId,
                 currency,
                 to);
+
+        BigDecimal[] legacy = jdbc.queryForObject(
+                """
+                SELECT
+                    COUNT(*) AS shipment_count,
+                    COUNT(*) FILTER (WHERE COALESCE(s.amount_paid_by_client,0) = 0
+                        AND COALESCE(s.amount_billed_to_client,0) > 0) AS unpaid_count,
+                    COUNT(*) FILTER (WHERE COALESCE(s.amount_paid_by_client,0) > 0
+                        AND COALESCE(s.amount_paid_by_client,0) < COALESCE(s.amount_billed_to_client,0)) AS partial_count,
+                    COALESCE(SUM(s.amount_billed_to_client),0) AS billed,
+                    COALESCE(SUM(s.amount_paid_by_client),0) AS collected,
+                    COALESCE(SUM(GREATEST(COALESCE(s.amount_billed_to_client,0)
+                        - COALESCE(s.amount_paid_by_client,0),0)),0) AS outstanding
+                FROM shipments s
+                WHERE s.tenant_id = ?
+                  AND UPPER(COALESCE(NULLIF(s.currency,''), ?)) = ?
+                  AND COALESCE(s.date_opened, s.created_at::date) <= ?::date
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM commercial_invoices ci
+                      WHERE ci.tenant_id = s.tenant_id
+                        AND COALESCE(ci.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
+                        AND (ci.shipment_id = s.id
+                             OR ci.invoice_no = s.invoice_no
+                             OR ci.invoice_no = s.reference_code)
+                  )
+                """,
+                (rs, rowNum) -> new BigDecimal[] {
+                    BigDecimal.valueOf(rs.getLong("shipment_count")),
+                    BigDecimal.valueOf(rs.getLong("unpaid_count")),
+                    BigDecimal.valueOf(rs.getLong("partial_count")),
+                    nz(rs.getBigDecimal("billed")),
+                    nz(rs.getBigDecimal("collected")),
+                    nz(rs.getBigDecimal("outstanding"))
+                },
+                tenantId, currency, currency, to);
+
+        return new ReceivablesSummary(
+                invoiceSummary.invoiceCount() + legacy[0].longValue(),
+                invoiceSummary.unpaidInvoices() + legacy[1].longValue(),
+                invoiceSummary.partiallyPaidInvoices() + legacy[2].longValue(),
+                invoiceSummary.overdueInvoices(),
+                invoiceSummary.invoiced().add(legacy[3]),
+                invoiceSummary.collected().add(legacy[4]),
+                invoiceSummary.outstanding().add(legacy[5]),
+                invoiceSummary.overdue(),
+                invoiceSummary.dueNext30Days(),
+                invoiceSummary.dueToday());
 
     }
 
@@ -1419,6 +1514,29 @@ public class ReportingService {
                                        ) BETWEEN ?::date AND ?::date
 
                                      GROUP BY 1
+                                 ),
+
+                                 legacy_shipment_months AS (
+                                     SELECT
+                                         date_trunc('month', COALESCE(s.date_opened, s.created_at::date))::date AS month,
+                                         COALESCE(SUM(COALESCE(s.amount_billed_to_client,0)),0) AS billed,
+                                         COALESCE(SUM(COALESCE(s.amount_paid_by_client,0)),0) AS collected,
+                                         COALESCE(SUM(GREATEST(COALESCE(s.amount_billed_to_client,0)
+                                             - COALESCE(s.amount_paid_by_client,0),0)),0) AS outstanding
+                                     FROM shipments s
+                                     WHERE s.tenant_id = ?
+                                       AND UPPER(COALESCE(NULLIF(s.currency,''), ?)) = ?
+                                       AND COALESCE(s.date_opened, s.created_at::date) BETWEEN ?::date AND ?::date
+                                       AND NOT EXISTS (
+                                           SELECT 1
+                                           FROM commercial_invoices ci
+                                           WHERE ci.tenant_id = s.tenant_id
+                                             AND COALESCE(ci.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
+                                             AND (ci.shipment_id = s.id
+                                                  OR ci.invoice_no = s.invoice_no
+                                                  OR ci.invoice_no = s.reference_code)
+                                       )
+                                     GROUP BY 1
                                  )
 
                                  SELECT
@@ -1435,20 +1553,11 @@ public class ReportingService {
                                      COALESCE(sm.completed, 0) AS completed,
                                      COALESCE(sm.departed, 0) AS departed,
 
-                                     COALESCE(
-                                         im.invoiced,
-                                         0
-                                     ) AS invoiced,
+                                     COALESCE(im.invoiced, 0) + COALESCE(lsm.billed, 0) AS invoiced,
 
-                                     COALESCE(
-                                         im.collected,
-                                         0
-                                     ) AS collected,
+                                     COALESCE(im.collected, 0) + COALESCE(lsm.collected, 0) AS collected,
 
-                                     COALESCE(
-                                         im.outstanding,
-                                         0
-                                     ) AS outstanding,
+                                     COALESCE(im.outstanding, 0) + COALESCE(lsm.outstanding, 0) AS outstanding,
 
                                      COALESCE(
                                          sm.gross_profit,
@@ -1466,6 +1575,9 @@ public class ReportingService {
 
                                  LEFT JOIN shipment_months sm
                                      ON sm.month = m.month
+
+                                 LEFT JOIN legacy_shipment_months lsm
+                                     ON lsm.month = m.month
 
                                  ORDER BY m.month
                                  """,
@@ -1491,6 +1603,11 @@ public class ReportingService {
                 from,
                 to,
                 tenantId,
+                currency,
+                from,
+                to,
+                tenantId,
+                currency,
                 currency,
                 from,
                 to,

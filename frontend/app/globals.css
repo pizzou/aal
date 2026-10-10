@@ -4086,3 +4086,316 @@ select {
   .provider-capability-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .airline-network-footer { align-items: flex-start; flex-direction: column; }
 }
+
+
+/* -------------------------------------------------------------------------
+   AAL shared production UI layer
+   Consistent interaction, data density and responsive behavior across routes.
+   ------------------------------------------------------------------------- */
+:root {
+  --aal-focus-ring: 0 0 0 3px rgba(23, 105, 216, .22);
+  --aal-border-strong: #cbd5e1;
+  --aal-surface-raised: #ffffff;
+  --aal-page-gutter: clamp(16px, 2.4vw, 32px);
+}
+
+html {
+  scroll-behavior: smooth;
+  text-size-adjust: 100%;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+[role="button"],
+a.btn {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 3px solid rgba(23, 105, 216, .72);
+  outline-offset: 2px;
+}
+
+.page {
+  width: min(100%, 1720px);
+  margin-inline: auto;
+  padding-inline: var(--aal-page-gutter);
+  padding-block: clamp(18px, 2.5vw, 32px);
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 22px;
+}
+
+.page-title {
+  letter-spacing: -.035em;
+  line-height: 1.12;
+  text-wrap: balance;
+}
+
+.page-subtitle {
+  max-width: 78ch;
+  line-height: 1.6;
+}
+
+.eyebrow {
+  letter-spacing: .105em;
+  font-size: .72rem;
+  font-weight: 800;
+}
+
+:where(.card, .form-panel, .register-overview, .weight-card, .aal-hero-metric) {
+  min-width: 0;
+}
+
+.card,
+.form-panel {
+  border-color: var(--aal-line, #e5e9ef);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(16,24,40,.04));
+}
+
+.card {
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+.card:focus-within {
+  border-color: #b9cdef;
+}
+
+:where(.btn, button.btn, a.btn) {
+  min-height: 40px;
+  border-radius: 10px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  transition: background-color .16s ease, border-color .16s ease,
+    box-shadow .16s ease, transform .16s ease, color .16s ease;
+}
+
+:where(.btn, button.btn, a.btn):not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+:where(.btn, button.btn, a.btn):not(:disabled):active {
+  transform: translateY(0);
+}
+
+:where(button, input, select, textarea):disabled {
+  cursor: not-allowed;
+  opacity: .65;
+}
+
+:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):focus {
+  border-color: var(--aal-blue, #1769d8);
+  box-shadow: var(--aal-focus-ring);
+}
+
+.field > :where(label, span) {
+  line-height: 1.4;
+}
+
+.field small,
+.field .help-text {
+  color: var(--aal-muted, #667085);
+  line-height: 1.45;
+}
+
+.table-wrap {
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f7f9fc;
+  color: #344054;
+  font-size: .73rem;
+  font-weight: 800;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.table :where(th, td) {
+  padding: 11px 12px;
+  border-bottom: 1px solid #edf0f5;
+  vertical-align: middle;
+}
+
+.table tbody tr {
+  transition: background-color .12s ease;
+}
+
+.table tbody tr:hover {
+  background: #f8fbff;
+}
+
+.table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.table td,
+.table th {
+  overflow-wrap: anywhere;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 25px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: .75rem;
+  font-weight: 750;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+:where(.alert, [role="alert"]) {
+  border-radius: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+:where(.grid, .aal-kpi-grid, .record-layout, .form-grid, .weight-grid) > * {
+  min-width: 0;
+}
+
+:where(.kpi-value, .aal-hero-metric strong, .weight-card strong) {
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.aal-monthly-performance .table {
+  min-width: 1250px;
+}
+
+.aal-monthly-performance .section-heading {
+  margin-bottom: 14px;
+}
+
+.aal-monthly-performance .table tbody td:nth-child(n+5) {
+  white-space: nowrap;
+}
+
+:where(.empty-state, .empty, .no-results) {
+  padding: 28px 18px;
+  color: var(--aal-muted, #667085);
+  text-align: center;
+}
+
+:where(.actions, .page-actions) {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
+@media (min-width: 1600px) {
+  .page {
+    padding-inline: 36px;
+  }
+}
+
+@media (max-width: 900px) {
+  .page-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-head > .actions,
+  .page-head > .page-actions {
+    width: 100%;
+  }
+
+  .page-head > .actions :where(a, button),
+  .page-head > .page-actions :where(a, button) {
+    flex: 1 1 auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding-inline: 14px;
+    padding-block: 18px;
+  }
+
+  .page-title {
+    font-size: clamp(1.55rem, 7vw, 2rem);
+  }
+
+  :where(.grid.grid-2, .grid.grid-3, .grid.grid-4, .form-grid, .weight-grid) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .field-span-2 {
+    grid-column: auto !important;
+  }
+
+  :where(.card, .form-panel) {
+    border-radius: 12px;
+  }
+
+  :where(.actions, .page-actions) {
+    gap: 8px;
+  }
+
+  :where(.actions, .page-actions) > :where(button, a) {
+    max-width: 100%;
+  }
+
+  .table :where(th, td) {
+    padding: 9px 10px;
+  }
+
+  .register-overview {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

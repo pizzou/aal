@@ -11,12 +11,18 @@ import {
 } from "@/lib/api-client";
 import ReportCharts from "@/components/ReportCharts";
 
+function localDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 function firstOfMonth() {
   const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
+  return localDateInputValue(new Date(d.getFullYear(), d.getMonth(), 1));
 }
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateInputValue(new Date());
 }
 function money(n: number, c: string) {
   return `${c} ${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -142,6 +148,86 @@ export default function ReportsPage() {
             </div>
           </div>
           <ReportCharts report={report} />
+          <section
+            className="card aal-monthly-performance"
+            style={{ marginTop: 14 }}
+          >
+            <div className="section-heading">
+              <div>
+                <div className="eyebrow">MOTHERSHIP REPLACEMENT</div>
+                <h2 className="card-title">Monthly performance</h2>
+                <p className="page-subtitle">
+                  Database-derived equivalent of the workbook Monthly Summary.
+                  Legacy MOTHERSHIP billings and collections are included when
+                  no corresponding live invoice exists.
+                </p>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>Shipments</th>
+                    <th>Gross kg</th>
+                    <th>Chargeable kg</th>
+                    <th>Billed</th>
+                    <th>Collected</th>
+                    <th>Remaining</th>
+                    <th>Supplier paid</th>
+                    <th>Other expenses</th>
+                    <th>Net income</th>
+                    <th>Margin</th>
+                    <th>Completed</th>
+                    <th>Departed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.monthlyTrend.map((item) => (
+                    <tr key={item.month}>
+                      <td>
+                        {new Date(
+                          `${item.month}-02T12:00:00`,
+                        ).toLocaleDateString(undefined, {
+                          month: "short",
+                          year: "numeric",
+                        })}
+                      </td>
+                      <td>{item.shipments.toLocaleString()}</td>
+                      <td>
+                        {item.grossWeightKg.toLocaleString(undefined, {
+                          maximumFractionDigits: 3,
+                        })}
+                      </td>
+                      <td>
+                        {item.chargeableWeightKg.toLocaleString(undefined, {
+                          maximumFractionDigits: 3,
+                        })}
+                      </td>
+                      <td>{money(item.invoicedRevenue, report.currency)}</td>
+                      <td>{money(item.collectedRevenue, report.currency)}</td>
+                      <td>
+                        {money(item.outstandingReceivables, report.currency)}
+                      </td>
+                      <td>{money(item.supplierPayments, report.currency)}</td>
+                      <td>{money(item.otherExpenses, report.currency)}</td>
+                      <td>{money(item.netIncome, report.currency)}</td>
+                      <td>{item.profitMarginPercent.toFixed(2)}%</td>
+                      <td>{item.completed.toLocaleString()}</td>
+                      <td>{item.departed.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {report.monthlyTrend.length === 0 && (
+                    <tr>
+                      <td colSpan={13}>
+                        No monthly activity exists for the selected period.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
           <section className="grid grid-2" style={{ marginTop: 14 }}>
             <div className="card">
               <h2 className="card-title">Operations</h2>

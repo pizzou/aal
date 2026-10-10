@@ -60,6 +60,12 @@ public class VehicleService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Vehicle not found"));
     }
 
+    Vehicle getOwnedForUpdate(UUID vehicleId) {
+        UUID tenantId = TenantContext.getTenantId();
+        return vehicleRepository.findLockedByIdAndTenantId(vehicleId, tenantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Vehicle not found"));
+    }
+
     Vehicle save(Vehicle vehicle) {
         return vehicleRepository.save(vehicle);
     }

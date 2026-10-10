@@ -26,6 +26,7 @@ const statuses = [
   "IN_TRANSIT",
   "ARRIVED",
   "CUSTOMS",
+  "CUSTOMS_CLEARED",
   "OUT_FOR_DELIVERY",
   "DELIVERED",
   "COMPLETED",

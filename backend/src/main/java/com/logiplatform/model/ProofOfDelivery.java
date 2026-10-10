@@ -1,7 +1,7 @@
 package com.logiplatform.model;
 
 import jakarta.persistence.*; import java.time.Instant; import java.util.UUID;
-@Entity @Table(name="proof_of_delivery",uniqueConstraints=@UniqueConstraint(name="uk_pod_shipment",columnNames={"tenant_id","shipment_id"}))
+@Entity @Table(name="proof_of_delivery")
 public class ProofOfDelivery {
  @Id @GeneratedValue private UUID id; @Column(name="tenant_id",nullable=false) private UUID tenantId; @Column(name="shipment_id",nullable=false) private UUID shipmentId; @Column(name="trip_id") private UUID tripId;
  @Column(name="recipient_name") private String recipientName; @Column(name="recipient_phone") private String recipientPhone; @Column(name="signature_uri") private String signatureUri; @Column(name="photo_uri") private String photoUri; @Column(name="delivered_at",nullable=false) private Instant deliveredAt; @Column(name="latitude") private Double latitude; @Column(name="longitude") private Double longitude; @Column(name="failure_reason") private String failureReason; @Column(name="notes",columnDefinition="text") private String notes; @Column(name="created_at",nullable=false) private Instant createdAt=Instant.now();

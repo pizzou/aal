@@ -31,6 +31,16 @@ public class Shipment {
     @Column(nullable = false)
     private ShipmentStatus status = ShipmentStatus.PENDING;
 
+    /**
+     * Remembers the operational stage interrupted by ON_HOLD. Without this value,
+     * resuming a held shipment could jump straight from an in-transit leg to final-mile
+     * delivery and bypass the arrival checkpoint. Null is expected for legacy/imported
+     * ON_HOLD rows whose prior stage cannot be established safely.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status_before_hold", length = 40)
+    private ShipmentStatus statusBeforeHold;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "transport_mode", nullable = false)
     private TransportMode transportMode = TransportMode.ROAD;
@@ -264,6 +274,37 @@ public class Shipment {
             );
         }
 
+        ShipmentStatus current = this.status == null ? ShipmentStatus.PENDING : this.status;
+        if (current == newStatus) return; // idempotent retry; preserve hold context
+
+        if (current == ShipmentStatus.ON_HOLD) {
+            // Legacy holds have no trustworthy prior state. Permit only safe re-entry
+            // stages and cancellation; never resume directly to final-mile/delivered.
+            boolean allowedFromUnknownHold = newStatus == ShipmentStatus.PENDING
+                    || newStatus == ShipmentStatus.PLANNING
+                    || newStatus == ShipmentStatus.BOOKED
+                    || newStatus == ShipmentStatus.PICKED_UP
+                    || newStatus == ShipmentStatus.DEPARTED
+                    || newStatus == ShipmentStatus.IN_TRANSIT
+                    || newStatus == ShipmentStatus.ARRIVED
+                    || newStatus == ShipmentStatus.CUSTOMS
+                    || newStatus == ShipmentStatus.CUSTOMS_CLEARED
+                    || newStatus == ShipmentStatus.CANCELLED;
+            boolean allowedFromKnownHold = statusBeforeHold != null
+                    && statusBeforeHold.canTransitionTo(newStatus);
+            if (!(statusBeforeHold == null ? allowedFromUnknownHold : allowedFromKnownHold)) {
+                throw new IllegalStateException(
+                        "Invalid shipment status transition from ON_HOLD (previous stage: "
+                                + statusBeforeHold + ") -> " + newStatus);
+            }
+            statusBeforeHold = null;
+        } else {
+            if (!current.canTransitionTo(newStatus)) {
+                throw new IllegalStateException(
+                        "Invalid shipment status transition: " + current + " -> " + newStatus);
+            }
+            statusBeforeHold = newStatus == ShipmentStatus.ON_HOLD ? current : null;
+        }
         this.status = newStatus;
         this.updatedAt = Instant.now();
     }
@@ -290,7 +331,7 @@ public class Shipment {
                     ShipmentStatus.valueOf(
                             normalized
                     );
-
+            this.statusBeforeHold = null;
             this.updatedAt = Instant.now();
 
         } catch (IllegalArgumentException ignored) {
@@ -531,14 +572,11 @@ public class Shipment {
     public void updateFlightTracking(Instant newEtd, Instant newEta, Instant actualDeparture, Instant actualArrival, String providerStatus) {
         this.etd = newEtd;
         this.eta = newEta;
-        if (actualDeparture != null) {
-            this.actualDeparture = actualDeparture;
-            this.status = ShipmentStatus.IN_TRANSIT;
-        }
-        if (actualArrival != null) {
-            this.actualArrival = actualArrival;
-            this.status = ShipmentStatus.ARRIVED;
-        }
+        if (actualDeparture != null) this.actualDeparture = actualDeparture;
+        if (actualArrival != null) this.actualArrival = actualArrival;
+        // Provider schedule/actual-time persistence must not mutate status directly.
+        // ShipmentEtaTrackingService applies permitted changes via ShipmentService
+        // so timeline events and milestones stay synchronized.
         this.updatedAt = Instant.now();
     }
 

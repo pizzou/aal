@@ -62,6 +62,16 @@ public class DispatchStop {
     @Column(name = "actual_at")
     private Instant actualAt;
 
+    @Column(name = "arrived_at")
+    private Instant arrivedAt;
+
+    @Column(name = "departed_at")
+    private Instant departedAt;
+
+    @jakarta.persistence.Version
+    @Column(name = "version", nullable = false)
+    private long version;
+
     @Column(name = "status", nullable = false)
     private String status = "PLANNED";
 
@@ -169,7 +179,16 @@ public class DispatchStop {
     }
 
     public Instant getActualAt() {
-        return actualAt;
+        // Backward-compatible field for existing clients: latest stop action.
+        return departedAt != null ? departedAt : (arrivedAt != null ? arrivedAt : actualAt);
+    }
+
+    public Instant getArrivedAt() {
+        return arrivedAt;
+    }
+
+    public Instant getDepartedAt() {
+        return departedAt;
     }
 
     public String getStatus() {
@@ -193,21 +212,42 @@ public class DispatchStop {
     }
 
     public void arrive(Instant at) {
-        actualAt = at == null ? Instant.now() : at;
+        if ("ARRIVED".equals(status)) return; // idempotent retry; preserve the original arrival time
+        if (!"PLANNED".equals(status)) {
+            throw new IllegalStateException("Only a PLANNED stop can be marked ARRIVED (current: " + status + ")");
+        }
+        Instant occurredAt = at == null ? Instant.now() : at;
+        arrivedAt = occurredAt;
+        actualAt = occurredAt;
         status = "ARRIVED";
     }
 
     public void depart(Instant at) {
-        actualAt = at == null ? Instant.now() : at;
+        if ("COMPLETED".equals(status)) return; // idempotent retry; preserve the original departure time
+        if (!"ARRIVED".equals(status)) {
+            throw new IllegalStateException("A stop must be ARRIVED before it can be departed (current: " + status + ")");
+        }
+        Instant occurredAt = at == null ? Instant.now() : at;
+        departedAt = occurredAt;
+        actualAt = occurredAt;
         status = "COMPLETED";
     }
 
     public void skip(String reason) {
+        if (!"PLANNED".equals(status)) {
+            throw new IllegalStateException("Only a PLANNED stop can be skipped (current: " + status + ")");
+        }
+        if (reason == null || reason.isBlank()) {
+            throw new IllegalArgumentException("A skip reason is required");
+        }
         status = "SKIPPED";
-        notes = reason;
+        notes = reason.trim();
     }
 
     public void updateEta(Instant value) {
+        if (!"PLANNED".equals(status)) {
+            throw new IllegalStateException("ETA can only be changed while a stop is PLANNED");
+        }
         eta = value;
     }
 }

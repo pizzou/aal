@@ -26,18 +26,46 @@ public class ShipmentEtaTrackingService {
     @Transactional
     public AirCargoProviderPort.FlightStatus apply(UUID shipmentId, AirCargoProviderPort.FlightStatus status, String source){
         UUID tenant=TenantContext.getTenantId();
-        Shipment s=shipments.findByIdAndTenantId(shipmentId,tenant).orElseThrow(()->new IllegalArgumentException("Shipment not found"));
-        Instant newEtd=first(status.actualDeparture(),status.estimatedDeparture(),status.scheduledDeparture());
-        Instant newEta=first(status.actualArrival(),status.estimatedArrival(),status.scheduledArrival());
+        Shipment s=shipments.findLockedByIdAndTenantId(shipmentId,tenant).orElseThrow(()->new IllegalArgumentException("Shipment not found"));
         Instant oldEtd=s.getEtd(), oldEta=s.getEta();
-        boolean changed=!Objects.equals(oldEtd,newEtd)||!Objects.equals(oldEta,newEta);
+        Instant newEtd=first(status.actualDeparture(),status.estimatedDeparture(),status.scheduledDeparture(),oldEtd);
+        Instant newEta=first(status.actualArrival(),status.estimatedArrival(),status.scheduledArrival(),oldEta);
+        boolean departed = status.actualDeparture() != null && !Objects.equals(status.actualDeparture(), s.getActualDeparture());
+        boolean arrived = status.actualArrival() != null && !Objects.equals(status.actualArrival(), s.getActualArrival());
+        boolean changed = !Objects.equals(oldEtd, newEtd) || !Objects.equals(oldEta, newEta) || departed || arrived;
         if(changed){
-            boolean departed = status.actualDeparture() != null && s.getActualDeparture() == null;
-            boolean arrived = status.actualArrival() != null && s.getActualArrival() == null;
             s.updateFlightTracking(newEtd,newEta,status.actualDeparture(),status.actualArrival(),status.flightStatus());
             shipments.save(s);
-            if (departed) shipmentService.addTrackingEvent(shipmentId,new com.logiplatform.dto.ShipmentDtos.AddTrackingEventRequest("DEPARTED_ORIGIN",null,"Actual flight departure received from "+source, status.actualDeparture()));
-            if (arrived) shipmentService.addTrackingEvent(shipmentId,new com.logiplatform.dto.ShipmentDtos.AddTrackingEventRequest("ARRIVED_DESTINATION",null,"Actual flight arrival received from "+source, status.actualArrival()));
+            if (departed) {
+                Shipment current = shipments.findByIdAndTenantId(shipmentId, tenant).orElseThrow();
+                if (current.getStatus().canTransitionTo(ShipmentStatus.IN_TRANSIT)) {
+                    shipmentService.updateStatus(shipmentId,
+                            new com.logiplatform.dto.ShipmentDtos.UpdateStatusRequest("IN_TRANSIT"));
+                } else {
+                    shipmentService.addTrackingEvent(shipmentId,
+                            new com.logiplatform.dto.ShipmentDtos.AddTrackingEventRequest("EXCEPTION", s.getOriginAddress(),
+                                    "Carrier reported departure, but shipment state " + current.getStatus()
+                                            + " requires operational reconciliation", status.actualDeparture()));
+                }
+                shipmentService.recordExternalMilestone(shipmentId, TrackingEventType.DEPARTED_ORIGIN,
+                        status.actualDeparture(), s.getOriginAddress(),
+                        "Actual flight departure received from " + source);
+            }
+            if (arrived) {
+                Shipment current = shipments.findByIdAndTenantId(shipmentId, tenant).orElseThrow();
+                if (current.getStatus().canTransitionTo(ShipmentStatus.ARRIVED)) {
+                    shipmentService.updateStatus(shipmentId,
+                            new com.logiplatform.dto.ShipmentDtos.UpdateStatusRequest("ARRIVED"));
+                } else {
+                    shipmentService.addTrackingEvent(shipmentId,
+                            new com.logiplatform.dto.ShipmentDtos.AddTrackingEventRequest("EXCEPTION", s.getDestinationAddress(),
+                                    "Carrier reported arrival, but shipment state " + current.getStatus()
+                                            + " requires operational reconciliation", status.actualArrival()));
+                }
+                shipmentService.recordExternalMilestone(shipmentId, TrackingEventType.ARRIVED_DESTINATION,
+                        status.actualArrival(), s.getDestinationAddress(),
+                        "Actual flight arrival received from " + source);
+            }
             history.save(new ShipmentEtaHistory(tenant,shipmentId,source,status.providerEventId(),s.getFlightNumber(),status.flightStatus(),oldEtd,newEtd,oldEta,newEta,reason(status,oldEtd,oldEta),AirlineIntegrationAttemptService.hash(status.rawResponse())));
             String subject="Shipment ETA updated: "+s.getReferenceCode();
             String body="Shipment "+s.getReferenceCode()+" flight "+s.getFlightNumber()+" received a provider ETA update. New ETA: "+String.valueOf(newEta)+". Source: "+source+".";
@@ -46,7 +74,12 @@ public class ShipmentEtaTrackingService {
         }
         String fs=status.flightStatus()==null?"":status.flightStatus().toLowerCase(Locale.ROOT);
         if(fs.contains("cancel")){
-            if(s.getStatus()!=ShipmentStatus.CANCELLED){s.updateStatus(ShipmentStatus.CANCELLED);shipments.save(s);}
+            Shipment current = shipments.findByIdAndTenantId(shipmentId, tenant).orElseThrow();
+            if (current.getStatus() != ShipmentStatus.CANCELLED
+                    && current.getStatus().canTransitionTo(ShipmentStatus.CANCELLED)) {
+                shipmentService.updateStatus(shipmentId,
+                        new com.logiplatform.dto.ShipmentDtos.UpdateStatusRequest("CANCELLED"));
+            }
             shipmentService.addTrackingEvent(shipmentId,new com.logiplatform.dto.ShipmentDtos.AddTrackingEventRequest("EXCEPTION",null,"Flight cancellation reported by "+source+" for "+s.getFlightNumber(),Instant.now()));
         } else if(fs.contains("divert")){
             shipmentService.addTrackingEvent(shipmentId,new com.logiplatform.dto.ShipmentDtos.AddTrackingEventRequest("EXCEPTION",null,"Flight diversion reported by "+source+" for "+s.getFlightNumber(),Instant.now()));

@@ -15,6 +15,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -40,6 +41,9 @@ class ShipmentTenantIsolationTest extends TenantTestSupport {
 
     @Autowired
     private ShipmentService shipmentService;
+
+    @Autowired
+    private ShipmentRepository shipmentRepository;
 
     private static CreateShipmentRequest roadShipment(String ref) {
         return new CreateShipmentRequest(ref, "Kigali", "Nairobi", "ROAD", "Local Trucking Co", null);
@@ -104,7 +108,7 @@ class ShipmentTenantIsolationTest extends TenantTestSupport {
     }
 
     @Test
-    void createsWithAirCarrierDetailsAndBookedTrackingEvent() {
+    void createsWithAirCarrierDetailsAndCreatedTrackingEvent() {
         setTenant(UUID.randomUUID());
 
         ShipmentResponse shipment = shipmentService.create(new CreateShipmentRequest(
@@ -115,8 +119,8 @@ class ShipmentTenantIsolationTest extends TenantTestSupport {
         assertEquals("706-12345670", shipment.carrierReferenceNumber());
 
         List<TrackingEventResponse> history = shipmentService.trackingHistory(shipment.id());
-        assertEquals(1, history.size(), "A new shipment should start with exactly one BOOKED event");
-        assertEquals("BOOKED", history.get(0).eventType());
+        assertEquals(1, history.size(), "A new shipment record should start with exactly one CREATED event");
+        assertEquals("CREATED", history.get(0).eventType());
     }
 
     @Test
@@ -125,15 +129,21 @@ class ShipmentTenantIsolationTest extends TenantTestSupport {
         ShipmentResponse shipment = shipmentService.create(new CreateShipmentRequest(
                 "BOL-001", "Mombasa Port", "Rotterdam Port", "SEA", "Maersk", "MAEU1234567"));
 
+        Instant createdAt = shipmentRepository.findByIdAndTenantId(shipment.id(), TenantContext.getTenantId())
+                .orElseThrow().getCreatedAt();
+        Instant early = createdAt.plusMillis(100);
+        Instant late = early.plusMillis(1000);
+        // Insert in reverse order to prove history uses occurrence time, not insertion order.
         shipmentService.addTrackingEvent(shipment.id(), new AddTrackingEventRequest(
-                "DEPARTED_ORIGIN", "Mombasa Port", "Vessel departed", null));
+                "EXCEPTION", "Indian Ocean", "later event", late));
         shipmentService.addTrackingEvent(shipment.id(), new AddTrackingEventRequest(
-                "IN_TRANSIT", "Indian Ocean", null, null));
+                "EXCEPTION", "Mombasa Port", "earlier event", early));
 
         List<TrackingEventResponse> history = shipmentService.trackingHistory(shipment.id());
-        assertEquals(3, history.size()); // BOOKED + the two above
-        assertEquals("BOOKED", history.get(0).eventType());
-        assertEquals("IN_TRANSIT", history.get(2).eventType());
+        assertEquals(3, history.size()); // CREATED + the two observations
+        assertEquals("CREATED", history.get(0).eventType());
+        assertEquals("earlier event", history.get(1).notes());
+        assertEquals("later event", history.get(2).notes());
     }
 
     @Test

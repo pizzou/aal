@@ -15,6 +15,7 @@ const STATUSES = [
   "IN_TRANSIT",
   "ARRIVED",
   "CUSTOMS",
+  "CUSTOMS_CLEARED",
   "DELIVERED",
   "COMPLETED",
   "ON_HOLD",

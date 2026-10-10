@@ -606,6 +606,7 @@ export interface Shipment {
     | "IN_TRANSIT"
     | "ARRIVED"
     | "CUSTOMS"
+    | "CUSTOMS_CLEARED"
     | "OUT_FOR_DELIVERY"
     | "DELIVERED"
     | "COMPLETED"
@@ -1771,6 +1772,8 @@ export type DispatchStop = {
   plannedAt?: string | null;
   eta?: string | null;
   actualAt?: string | null;
+  arrivedAt?: string | null;
+  departedAt?: string | null;
   status: string;
   distanceFromPreviousKm?: number | null;
   plannedDurationMinutes?: number | null;
@@ -1968,6 +1971,11 @@ export const operationsApi = {
   departStop: (id: string) =>
     apiFetch<DispatchStop>(`/api/operations/stops/${id}/depart`, {
       method: "POST",
+    }),
+  skipStop: (id: string, reason: string) =>
+    apiFetch<DispatchStop>(`/api/operations/stops/${id}/skip`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
     }),
   route: (tripId: string) =>
     apiFetch<{

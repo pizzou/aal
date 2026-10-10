@@ -2,6 +2,8 @@ package com.logiplatform.repository;
 
 import com.logiplatform.model.Shipment;
 import com.logiplatform.model.ShipmentStatus;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +19,13 @@ import java.util.UUID;
 
 public interface ShipmentRepository extends JpaRepository<Shipment, UUID> {
     Optional<Shipment> findByIdAndTenantId(UUID id, UUID tenantId);
+
+    /** Serializes operational transitions and dispatch assignment for one tenant-owned shipment. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select s from Shipment s where s.id = :id and s.tenantId = :tenantId")
+    Optional<Shipment> findLockedByIdAndTenantId(
+            @Param("id") UUID id,
+            @Param("tenantId") UUID tenantId);
     Page<Shipment> findAllByTenantId(UUID tenantId, Pageable pageable);
 
     @Query("""

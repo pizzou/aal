@@ -12,6 +12,8 @@ import {
   GpsPosition,
   loadPlanningApi,
   LoadPlan,
+  DispatchStop,
+  operationsApi,
   Trip,
   tripsApi,
   Vehicle,
@@ -43,6 +45,18 @@ export default function DispatchFleetPage() {
     originAddress: "",
     destinationAddress: "",
   });
+  const [routeTripId, setRouteTripId] = useState("");
+  const [routeStops, setRouteStops] = useState<DispatchStop[]>([]);
+  const [stopForm, setStopForm] = useState({
+    sequenceNo: 1,
+    stopType: "HUB",
+    address: "",
+    shipmentId: "",
+    plannedAt: "",
+    eta: "",
+    notes: "",
+  });
+  const [skipReason, setSkipReason] = useState("");
   async function refresh() {
     try {
       const [v, d, t] = await Promise.all([
@@ -73,6 +87,32 @@ export default function DispatchFleetPage() {
       await refresh();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Operation failed");
+    }
+  }
+  async function refreshRouteStops(tripId: string) {
+    setRouteTripId(tripId);
+    setRouteStops([]);
+    try {
+      const items = await operationsApi.stops(tripId);
+      setRouteStops(items);
+      setStopForm((current) => ({
+        ...current,
+        sequenceNo: Math.max(0, ...items.map((item) => item.sequenceNo)) + 1,
+      }));
+    } catch (e) {
+      setError(
+        e instanceof ApiError ? e.message : "Unable to load route stops",
+      );
+    }
+  }
+  async function routeAction(fn: () => Promise<unknown>) {
+    try {
+      setError("");
+      await fn();
+      if (routeTripId) await refreshRouteStops(routeTripId);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Route operation failed");
     }
   }
   async function track(id: string) {
@@ -375,6 +415,12 @@ export default function DispatchFleetPage() {
                   <td>{t.shipmentIds.length}</td>
                   <td>
                     <div className="actions">
+                      <button
+                        className="btn"
+                        onClick={() => refreshRouteStops(t.id)}
+                      >
+                        Manage route
+                      </button>
                       {t.status === "PLANNED" && (
                         <button
                           className="btn"
@@ -406,6 +452,294 @@ export default function DispatchFleetPage() {
             </tbody>
           </table>
         </div>
+      </section>
+      <section className="card" style={{ marginTop: 14 }}>
+        <div className="page-head">
+          <div>
+            <h2 className="card-title">Route stops & execution</h2>
+            <div className="card-muted">
+              Record arrival and departure separately. Stops execute in
+              sequence, and any skipped stop requires an auditable reason.
+            </div>
+          </div>
+        </div>
+        <div className="field" style={{ maxWidth: 520 }}>
+          <label htmlFor="route-trip-select">Trip route</label>
+          <select
+            id="route-trip-select"
+            value={routeTripId}
+            onChange={(e) => {
+              const id = e.target.value;
+              if (!id) {
+                setRouteTripId("");
+                setRouteStops([]);
+              } else {
+                void refreshRouteStops(id);
+              }
+            }}
+          >
+            <option value="">Select a trip to manage stops…</option>
+            {trips.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.originAddress} → {t.destinationAddress} · {t.status}
+              </option>
+            ))}
+          </select>
+        </div>
+        {routeTripId &&
+          (() => {
+            const selectedRouteTrip = trips.find((t) => t.id === routeTripId);
+            if (!selectedRouteTrip)
+              return (
+                <p className="card-muted">
+                  Trip is no longer in the loaded list.
+                </p>
+              );
+            const canEditRoute = selectedRouteTrip.status === "PLANNED";
+            const canExecuteRoute = selectedRouteTrip.status === "IN_PROGRESS";
+            return (
+              <>
+                {canEditRoute && (
+                  <form
+                    className="form-grid"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void routeAction(async () => {
+                        await operationsApi.addStop({
+                          tripId: routeTripId,
+                          sequenceNo: Number(stopForm.sequenceNo),
+                          stopType: stopForm.stopType,
+                          address: stopForm.address.trim(),
+                          shipmentId: stopForm.shipmentId.trim() || undefined,
+                          plannedAt: stopForm.plannedAt
+                            ? new Date(stopForm.plannedAt).toISOString()
+                            : undefined,
+                          eta: stopForm.eta
+                            ? new Date(stopForm.eta).toISOString()
+                            : undefined,
+                          notes: stopForm.notes.trim() || undefined,
+                        });
+                        setStopForm((current) => ({
+                          ...current,
+                          address: "",
+                          shipmentId: "",
+                          plannedAt: "",
+                          eta: "",
+                          notes: "",
+                        }));
+                      });
+                    }}
+                  >
+                    <div className="field">
+                      <label>Sequence</label>
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        value={stopForm.sequenceNo}
+                        onChange={(e) =>
+                          setStopForm({
+                            ...stopForm,
+                            sequenceNo: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Stop type</label>
+                      <select
+                        value={stopForm.stopType}
+                        onChange={(e) =>
+                          setStopForm({ ...stopForm, stopType: e.target.value })
+                        }
+                      >
+                        <option value="PICKUP">Pickup</option>
+                        <option value="HUB">Hub / transfer</option>
+                        <option value="WAREHOUSE">Warehouse</option>
+                        <option value="CUSTOMS">Customs</option>
+                        <option value="PORT">Port</option>
+                        <option value="AIRPORT">Airport</option>
+                        <option value="DELIVERY">Delivery</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>Address / location</label>
+                      <input
+                        maxLength={500}
+                        required
+                        value={stopForm.address}
+                        onChange={(e) =>
+                          setStopForm({ ...stopForm, address: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Assigned shipment ID (optional)</label>
+                      <input
+                        value={stopForm.shipmentId}
+                        placeholder="Shipment UUID"
+                        onChange={(e) =>
+                          setStopForm({
+                            ...stopForm,
+                            shipmentId: e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Planned stop time (optional)</label>
+                      <input
+                        type="datetime-local"
+                        value={stopForm.plannedAt}
+                        onChange={(e) =>
+                          setStopForm({
+                            ...stopForm,
+                            plannedAt: e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label>ETA (optional)</label>
+                      <input
+                        type="datetime-local"
+                        value={stopForm.eta}
+                        onChange={(e) =>
+                          setStopForm({ ...stopForm, eta: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Notes (optional)</label>
+                      <input
+                        maxLength={4000}
+                        value={stopForm.notes}
+                        onChange={(e) =>
+                          setStopForm({ ...stopForm, notes: e.target.value })
+                        }
+                      />
+                    </div>
+                    <button className="btn btn-primary">Add stop</button>
+                  </form>
+                )}
+                {(canEditRoute || canExecuteRoute) && (
+                  <div
+                    className="field"
+                    style={{ maxWidth: 520, marginTop: 14 }}
+                  >
+                    <label>Required reason when skipping a stop</label>
+                    <input
+                      maxLength={1000}
+                      value={skipReason}
+                      onChange={(e) => setSkipReason(e.target.value)}
+                      placeholder="e.g. Road closure confirmed by dispatch"
+                    />
+                  </div>
+                )}
+                <div className="table-wrap" style={{ marginTop: 14 }}>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Stop</th>
+                        <th>Shipment</th>
+                        <th>Status</th>
+                        <th>Arrival</th>
+                        <th>Departure</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {routeStops.map((stop) => (
+                        <tr key={stop.id}>
+                          <td>{stop.sequenceNo}</td>
+                          <td>
+                            <strong>{stop.address}</strong>
+                            <small>{stop.stopType}</small>
+                          </td>
+                          <td>{stop.shipmentId || "All / unassigned"}</td>
+                          <td>
+                            <span className="status status-neutral">
+                              {stop.status}
+                            </span>
+                          </td>
+                          <td>
+                            {stop.arrivedAt
+                              ? new Date(stop.arrivedAt).toLocaleString()
+                              : "—"}
+                          </td>
+                          <td>
+                            {stop.departedAt
+                              ? new Date(stop.departedAt).toLocaleString()
+                              : "—"}
+                          </td>
+                          <td>
+                            <div className="actions">
+                              {canExecuteRoute && stop.status === "PLANNED" && (
+                                <button
+                                  className="btn"
+                                  onClick={() =>
+                                    void routeAction(() =>
+                                      operationsApi.arriveStop(stop.id),
+                                    )
+                                  }
+                                >
+                                  Arrive
+                                </button>
+                              )}
+                              {canExecuteRoute && stop.status === "ARRIVED" && (
+                                <button
+                                  className="btn btn-primary"
+                                  onClick={() =>
+                                    void routeAction(() =>
+                                      operationsApi.departStop(stop.id),
+                                    )
+                                  }
+                                >
+                                  Depart
+                                </button>
+                              )}
+                              {(canEditRoute || canExecuteRoute) &&
+                                stop.status === "PLANNED" && (
+                                  <button
+                                    className="btn"
+                                    disabled={!skipReason.trim()}
+                                    onClick={() =>
+                                      void routeAction(async () => {
+                                        await operationsApi.skipStop(
+                                          stop.id,
+                                          skipReason.trim(),
+                                        );
+                                        setSkipReason("");
+                                      })
+                                    }
+                                  >
+                                    Skip
+                                  </button>
+                                )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {routeStops.length === 0 && (
+                        <tr>
+                          <td colSpan={7}>
+                            No route stops have been planned for this trip.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                {!canEditRoute && !canExecuteRoute && (
+                  <p className="card-muted">
+                    This trip is {selectedRouteTrip.status}; route stops are
+                    read-only.
+                  </p>
+                )}
+              </>
+            );
+          })()}
       </section>
       {loadPlan && (
         <section className="card" style={{ marginTop: 14 }}>

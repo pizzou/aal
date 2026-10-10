@@ -6,6 +6,7 @@ import com.logiplatform.repository.ShipmentRepository;
 import com.logiplatform.model.ShipmentStatus;
 import com.logiplatform.model.ShipmentTrackingEvent;
 import com.logiplatform.repository.ShipmentTrackingEventRepository;
+import com.logiplatform.repository.ProofOfDeliveryRepository;
 import com.logiplatform.model.TrackingEventType;
 import com.logiplatform.model.TransportMode;
 
@@ -21,6 +22,8 @@ import java.time.Instant;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
+import java.util.Locale;
+import java.util.Map;
 import static com.logiplatform.dto.ShipmentDtos.*;
 import static com.logiplatform.dto.CommandCenterShipmentDtos.UpdateRequest;
 
@@ -36,6 +39,7 @@ public class ShipmentService {
     private final FinanceDocumentSequenceService documentSequences;
     private final BillingService billingService;
     private final ShipmentCreationIdempotencyService creationIdempotency;
+    private final ProofOfDeliveryRepository proofOfDeliveryRepository;
 
     public ShipmentService(ShipmentRepository shipmentRepository,
             ShipmentTrackingEventRepository trackingEventRepository,
@@ -45,7 +49,8 @@ public class ShipmentService {
             OperationsEventStreamService operationsEventStreamService,
             FinanceDocumentSequenceService documentSequences,
             BillingService billingService,
-            ShipmentCreationIdempotencyService creationIdempotency) {
+            ShipmentCreationIdempotencyService creationIdempotency,
+            ProofOfDeliveryRepository proofOfDeliveryRepository) {
         this.shipmentRepository = shipmentRepository;
         this.trackingEventRepository = trackingEventRepository;
         this.notificationService = notificationService;
@@ -55,6 +60,7 @@ public class ShipmentService {
         this.documentSequences = documentSequences;
         this.billingService = billingService;
         this.creationIdempotency = creationIdempotency;
+        this.proofOfDeliveryRepository = proofOfDeliveryRepository;
     }
 
     @Transactional
@@ -114,8 +120,8 @@ public class ShipmentService {
         // Every shipment's timeline starts here — this is what "high-end tracking" is
         // built out of: a consistent audit trail from booking to delivery.
         trackingEventRepository.save(new ShipmentTrackingEvent(
-                tenantId, saved.getId(), TrackingEventType.BOOKED, request.originAddress(),
-                "Shipment booked (" + mode + ")", Instant.now()));
+                tenantId, saved.getId(), TrackingEventType.CREATED, request.originAddress(),
+                "Shipment record created; booking confirmation is pending", Instant.now()));
         milestoneOrchestrationService.initialize(saved.getId(), mode.name(), request.originAddress(), request.destinationAddress());
 
         return ShipmentResponse.from(saved);
@@ -154,7 +160,7 @@ public class ShipmentService {
     private String normalizeOptionalShipmentStatus(String raw) {
         if (raw == null || raw.isBlank()) return "";
         try {
-            return ShipmentStatus.valueOf(raw.trim().toUpperCase()).name();
+            return ShipmentStatus.valueOf(raw.trim().toUpperCase(Locale.ROOT)).name();
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Invalid status: " + raw);
@@ -169,28 +175,33 @@ public class ShipmentService {
 
     @Transactional
     public ShipmentResponse updateStatus(UUID shipmentId, UpdateStatusRequest request) {
-        Shipment shipment = findOwned(shipmentId);
-
-        ShipmentStatus newStatus;
-        try {
-            newStatus = ShipmentStatus.valueOf(request.status().toUpperCase());
-        } catch (IllegalArgumentException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid status: " + request.status());
+        if (request == null || request.status() == null || request.status().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Shipment status is required");
         }
-
-        shipment.updateStatus(newStatus);
-        Shipment saved = shipmentRepository.save(shipment);
-        milestoneOrchestrationService.applyShipmentStatus(shipmentId, newStatus.name());
-        operationsEventStreamService.publish(TenantContext.getTenantId(), "shipment-status", java.util.Map.of("shipmentId", shipmentId, "reference", shipment.getReferenceCode(), "status", newStatus.name(), "at", Instant.now().toString()));
-
-        if (newStatus == ShipmentStatus.DELIVERED) {
-            notificationService.notify(shipmentId, shipment.getNotificationEmail(),
-                    "Your shipment " + shipment.getReferenceCode() + " has been delivered",
-                    "Good news — shipment " + shipment.getReferenceCode() + " (" + shipment.getOriginAddress()
-                            + " to " + shipment.getDestinationAddress() + ") has been marked delivered.");
-        }
-
+        Shipment shipment = findOwnedForUpdate(shipmentId);
+        ShipmentStatus newStatus = parseShipmentStatus(request.status());
+        Shipment saved = applyStatusTransition(shipment, newStatus);
         return ShipmentResponse.from(saved);
+    }
+
+    /** Applies an arrival received from dispatch at the leg destination. An intermediate arrival
+     * is tracked as a hub arrival and does not complete the shipment's final-destination milestone. */
+    @Transactional
+    public ShipmentResponse updateStatusFromTrip(UUID shipmentId, UpdateStatusRequest request,
+                                                 String physicalLocation, boolean finalDestinationArrival) {
+        if (request == null || request.status() == null || request.status().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Shipment status is required");
+        }
+        if (physicalLocation == null || physicalLocation.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trip arrival location is required");
+        }
+        Shipment shipment = findOwnedForUpdate(shipmentId);
+        ShipmentStatus newStatus = parseShipmentStatus(request.status());
+        if (newStatus != ShipmentStatus.ARRIVED) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trip arrival can only set shipment status to ARRIVED");
+        }
+        return ShipmentResponse.from(applyStatusTransition(
+                shipment, newStatus, physicalLocation.trim(), finalDestinationArrival));
     }
 
     @Transactional
@@ -200,7 +211,9 @@ public class ShipmentService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
         }
 
-        Shipment shipment = findOwned(shipmentId);
+        Shipment shipment = findOwnedForUpdate(shipmentId);
+        ShipmentStatus requestedStatus = request.shipmentStatus() == null || request.shipmentStatus().isBlank()
+                ? null : parseShipmentStatus(request.shipmentStatus());
         BigDecimal previousSupplierPaid = nz(shipment.getAmountPaidToSupply());
         BigDecimal requestedSupplierPaid = nz(request.amountPaidToSupply());
         if (previousSupplierPaid.signum() > 0 && request.currency() != null && shipment.getCurrency() != null
@@ -230,10 +243,12 @@ public class ShipmentService {
         if (request.dateOpened() != null) {
             shipment.setDateOpened(request.dateOpened());
         }
-        if (request.shipmentStatus() != null && !request.shipmentStatus().isBlank()) {
-            shipment.setOperationalStatus(request.shipmentStatus());
+        // Do not use the lenient workbook-import setter for interactive updates:
+        // user-driven state changes must pass the canonical lifecycle, evidence,
+        // timeline and milestone checks.
+        if (requestedStatus != null && requestedStatus != shipment.getStatus()) {
+            shipment = applyStatusTransition(shipment, requestedStatus);
         }
-
         Shipment saved = shipmentRepository.save(shipment);
 
        
@@ -255,16 +270,25 @@ public class ShipmentService {
     public TrackingEventResponse addTrackingEvent(UUID shipmentId, AddTrackingEventRequest request) {
         UUID tenantId = TenantContext.getTenantId();
         Shipment shipment = findOwned(shipmentId); // 404s if this shipment doesn't belong to the caller's tenant
+        if (request == null || request.eventType() == null || request.eventType().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tracking event type is required");
+        }
 
         TrackingEventType type;
         try {
-            type = TrackingEventType.valueOf(request.eventType().toUpperCase());
+            type = TrackingEventType.valueOf(request.eventType().trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Invalid eventType: " + request.eventType());
         }
 
-        Instant occurredAt = request.occurredAt() != null ? request.occurredAt() : Instant.now();
+        if (type != TrackingEventType.EXCEPTION) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "State-linked tracking events are generated by the shipment workflow; record an EXCEPTION or change shipment status instead");
+        }
+        Instant now = Instant.now();
+        Instant occurredAt = request.occurredAt() != null ? request.occurredAt() : now;
+        validateTrackingTime(shipment, occurredAt, now);
         ShipmentTrackingEvent event = trackingEventRepository.save(new ShipmentTrackingEvent(
                 tenantId, shipmentId, type, request.location(), request.notes(), occurredAt));
 
@@ -278,6 +302,38 @@ public class ShipmentService {
         return TrackingEventResponse.from(event);
     }
 
+    /**
+     * Stores a time-stamped milestone directly observed from a carrier integration.
+     * This is deliberately separate from user-authored events: provider observations
+     * preserve the carrier's timestamp while state changes remain governed by the
+     * canonical shipment state machine.
+     */
+    @Transactional
+    public TrackingEventResponse recordExternalMilestone(UUID shipmentId, TrackingEventType type,
+                                                          Instant occurredAt, String location, String notes) {
+        if (type != TrackingEventType.DEPARTED_ORIGIN && type != TrackingEventType.ARRIVED_DESTINATION) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported external milestone type");
+        }
+        Shipment shipment = findOwnedForUpdate(shipmentId);
+        Instant now = Instant.now();
+        Instant observedAt = occurredAt == null ? now : occurredAt;
+        validateTrackingTime(shipment, observedAt, now);
+        ShipmentTrackingEvent event = trackingEventRepository.save(new ShipmentTrackingEvent(
+                shipment.getTenantId(), shipment.getId(), type, location, notes, observedAt));
+        return TrackingEventResponse.from(event);
+    }
+
+    private static void validateTrackingTime(Shipment shipment, Instant occurredAt, Instant now) {
+        if (occurredAt.isAfter(now.plusSeconds(300))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Tracking events cannot be recorded more than five minutes in the future");
+        }
+        if (shipment.getCreatedAt() != null && occurredAt.isBefore(shipment.getCreatedAt())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Tracking events cannot predate shipment creation");
+        }
+    }
+
     @Transactional(readOnly = true)
     public List<TrackingEventResponse> trackingHistory(UUID shipmentId) {
         UUID tenantId = TenantContext.getTenantId();
@@ -289,21 +345,21 @@ public class ShipmentService {
 
     @Transactional
     public ShipmentResponse updateWeight(UUID shipmentId, UpdateWeightRequest request) {
-        Shipment shipment = findOwned(shipmentId);
+        Shipment shipment = findOwnedForUpdate(shipmentId);
         shipment.setWeightKg(request.weightKg());
         return ShipmentResponse.from(shipmentRepository.save(shipment));
     }
 
     @Transactional
     public ShipmentResponse updateNotificationEmail(UUID shipmentId, UpdateNotificationEmailRequest request) {
-        Shipment shipment = findOwned(shipmentId);
+        Shipment shipment = findOwnedForUpdate(shipmentId);
         shipment.setNotificationEmail(request.notificationEmail());
         return ShipmentResponse.from(shipmentRepository.save(shipment));
     }
 
     @Transactional
     public ShipmentResponse updateFlightNumber(UUID shipmentId, UpdateFlightNumberRequest request) {
-        Shipment shipment = findOwned(shipmentId);
+        Shipment shipment = findOwnedForUpdate(shipmentId);
         shipment.setFlightNumber(request.flightNumber());
         return ShipmentResponse.from(shipmentRepository.save(shipment));
     }
@@ -312,6 +368,101 @@ public class ShipmentService {
     public Page<NotificationResponse> notificationHistory(UUID shipmentId, Pageable pageable) {
         findOwned(shipmentId); // enforce ownership before delegating
         return notificationService.history(shipmentId, pageable).map(NotificationResponse::from);
+    }
+
+    private ShipmentStatus parseShipmentStatus(String raw) {
+        try {
+            return ShipmentStatus.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid status: " + raw);
+        }
+    }
+
+    /** Applies one canonical status transition and persists its side effects in the same transaction. */
+    private Shipment applyStatusTransition(Shipment shipment, ShipmentStatus newStatus) {
+        return applyStatusTransition(shipment, newStatus, null, true);
+    }
+
+    private Shipment applyStatusTransition(Shipment shipment, ShipmentStatus newStatus,
+                                           String locationOverride, boolean finalDestinationArrival) {
+        UUID tenantId = TenantContext.getTenantId();
+        ShipmentStatus previousStatus = shipment.getStatus();
+        if (previousStatus == newStatus) {
+            return shipment;
+        }
+        if (newStatus == ShipmentStatus.DELIVERED
+                && !proofOfDeliveryRepository.hasSuccessfulDeliveryEvidence(tenantId, shipment.getId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A successful proof of delivery must be recorded before marking a shipment DELIVERED");
+        }
+        try {
+            shipment.updateStatus(newStatus);
+        } catch (IllegalStateException ex) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, ex.getMessage());
+        }
+
+        Shipment saved = shipmentRepository.save(shipment);
+        Instant changedAt = Instant.now();
+        TrackingEventType eventType = newStatus == ShipmentStatus.ARRIVED && !finalDestinationArrival
+                ? TrackingEventType.ARRIVED_AT_HUB : trackingEventFor(newStatus);
+        String location = locationOverride != null ? locationOverride : switch (newStatus) {
+            case PENDING, PLANNING, BOOKED -> shipment.getOriginAddress();
+            case ARRIVED, CUSTOMS, CUSTOMS_CLEARED, OUT_FOR_DELIVERY, DELIVERED, COMPLETED -> shipment.getDestinationAddress();
+            default -> null;
+        };
+        String transitionNote = "Operational status changed from " + previousStatus + " to " + newStatus;
+        if (newStatus == ShipmentStatus.ARRIVED && !finalDestinationArrival) {
+            transitionNote += "; cargo has reached an intermediate trip destination, not final delivery";
+        }
+        trackingEventRepository.save(new ShipmentTrackingEvent(
+                tenantId, shipment.getId(), eventType, location, transitionNote, changedAt));
+
+        if (!(newStatus == ShipmentStatus.ARRIVED && !finalDestinationArrival)) {
+            milestoneOrchestrationService.applyShipmentStatus(shipment.getId(), newStatus.name());
+        }
+        operationsEventStreamService.publish(tenantId, "shipment-status", Map.of(
+                "shipmentId", shipment.getId(),
+                "reference", shipment.getReferenceCode(),
+                "previousStatus", previousStatus.name(),
+                "status", newStatus.name(),
+                "at", changedAt.toString()));
+
+        if (newStatus == ShipmentStatus.DELIVERED) {
+            notificationService.notify(shipment.getId(), shipment.getNotificationEmail(),
+                    "Your shipment " + shipment.getReferenceCode() + " has been delivered",
+                    "Proof of delivery has been recorded for shipment " + shipment.getReferenceCode()
+                            + " (" + shipment.getOriginAddress() + " to " + shipment.getDestinationAddress() + ").");
+        }
+        return saved;
+    }
+
+    private static TrackingEventType trackingEventFor(ShipmentStatus status) {
+        return switch (status) {
+            case PENDING -> TrackingEventType.PENDING;
+            case PLANNING -> TrackingEventType.PLANNING;
+            case BOOKED -> TrackingEventType.BOOKED;
+            case PICKED_UP -> TrackingEventType.PICKED_UP;
+            case DEPARTED -> TrackingEventType.DEPARTED_ORIGIN;
+            case IN_TRANSIT -> TrackingEventType.IN_TRANSIT;
+            case ARRIVED -> TrackingEventType.ARRIVED_DESTINATION;
+            case CUSTOMS -> TrackingEventType.CUSTOMS_HOLD;
+            case CUSTOMS_CLEARED -> TrackingEventType.CUSTOMS_CLEARED;
+            case OUT_FOR_DELIVERY -> TrackingEventType.OUT_FOR_DELIVERY;
+            case DELIVERED -> TrackingEventType.DELIVERED;
+            case COMPLETED -> TrackingEventType.COMPLETED;
+            case ON_HOLD -> TrackingEventType.ON_HOLD;
+            case CANCELLED -> TrackingEventType.CANCELLED;
+        };
+    }
+
+    /** Loads and locks a shipment for atomic dispatch/POD/status workflows. */
+    Shipment getOwnedForUpdate(UUID shipmentId) {
+        UUID tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
+        }
+        return shipmentRepository.findLockedByIdAndTenantId(shipmentId, tenantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shipment not found"));
     }
 
     private Shipment findOwned(UUID shipmentId) {

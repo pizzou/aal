@@ -45,6 +45,7 @@ import static com.logiplatform.dto.AuthDtos.*;
 class ReportingTest extends TenantTestSupport {
 
     @Autowired private ShipmentService shipmentService;
+    @Autowired private ProofOfDeliveryService proofOfDeliveryService;
     @Autowired private VehicleService vehicleService;
     @Autowired private DriverService driverService;
     @Autowired private TripService tripService;
@@ -70,7 +71,12 @@ class ReportingTest extends TenantTestSupport {
         setTenant(UUID.randomUUID());
         shipmentService.create(new CreateShipmentRequest("R1", "A", "B", "ROAD", null, null));
         ShipmentResponse s2 = shipmentService.create(new CreateShipmentRequest("R2", "A", "B", "ROAD", null, null));
-        shipmentService.updateStatus(s2.id(), new UpdateStatusRequest("DELIVERED"));
+        shipmentService.updateStatus(s2.id(), new UpdateStatusRequest("BOOKED"));
+        shipmentService.updateStatus(s2.id(), new UpdateStatusRequest("IN_TRANSIT"));
+        shipmentService.updateStatus(s2.id(), new UpdateStatusRequest("ARRIVED"));
+        shipmentService.updateStatus(s2.id(), new UpdateStatusRequest("OUT_FOR_DELIVERY"));
+        proofOfDeliveryService.create(new com.logiplatform.dto.OperationsDtos.PodRequest(
+                s2.id(), null, "Recipient", null, null, null, null, null, null, null, "Report test delivery"));
 
         var breakdown = reportingService.dashboard().shipmentsByStatus();
         assertTrue(breakdown.stream().anyMatch(s -> s.status().equals("PENDING") && s.count() == 1));

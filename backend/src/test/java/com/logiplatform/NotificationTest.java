@@ -43,6 +43,7 @@ import static com.logiplatform.dto.AuthDtos.*;
 class NotificationTest extends TenantTestSupport {
 
     @Autowired private ShipmentService shipmentService;
+    @Autowired private ProofOfDeliveryService proofOfDeliveryService;
 
     @AfterEach
     void clearTenant() {
@@ -55,7 +56,7 @@ class NotificationTest extends TenantTestSupport {
         ShipmentResponse shipment = shipmentService.create(new CreateShipmentRequest(
                 "NOTIF-001", "A", "B", "ROAD", null, null));
 
-        shipmentService.updateStatus(shipment.id(), new UpdateStatusRequest("DELIVERED"));
+        recordSuccessfulDelivery(shipment.id());
 
         var history = shipmentService.notificationHistory(shipment.id(), PageRequest.of(0, 10));
         assertEquals(1, history.getTotalElements());
@@ -71,7 +72,7 @@ class NotificationTest extends TenantTestSupport {
         shipmentService.updateNotificationEmail(shipment.id(),
                 new UpdateNotificationEmailRequest("customer@example.com"));
 
-        shipmentService.updateStatus(shipment.id(), new UpdateStatusRequest("DELIVERED"));
+        recordSuccessfulDelivery(shipment.id());
 
         var history = shipmentService.notificationHistory(shipment.id(), PageRequest.of(0, 10));
         assertEquals(1, history.getTotalElements());
@@ -85,6 +86,7 @@ class NotificationTest extends TenantTestSupport {
         ShipmentResponse shipment = shipmentService.create(new CreateShipmentRequest(
                 "NOTIF-003", "A", "B", "ROAD", null, null));
 
+        shipmentService.updateStatus(shipment.id(), new UpdateStatusRequest("BOOKED"));
         shipmentService.updateStatus(shipment.id(), new UpdateStatusRequest("IN_TRANSIT"));
 
         var history = shipmentService.notificationHistory(shipment.id(), PageRequest.of(0, 10));
@@ -113,7 +115,7 @@ class NotificationTest extends TenantTestSupport {
         setTenant(tenantA);
         ShipmentResponse shipment = shipmentService.create(new CreateShipmentRequest(
                 "NOTIF-005", "A", "B", "ROAD", null, null));
-        shipmentService.updateStatus(shipment.id(), new UpdateStatusRequest("DELIVERED"));
+        recordSuccessfulDelivery(shipment.id());
 
         setTenant(tenantB);
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
@@ -121,4 +123,15 @@ class NotificationTest extends TenantTestSupport {
         assertEquals(404, ex.getStatusCode().value(),
                 "Tenant B must not be able to read tenant A's shipment's notification history");
     }
+
+    private void recordSuccessfulDelivery(UUID shipmentId) {
+        shipmentService.updateStatus(shipmentId, new UpdateStatusRequest("BOOKED"));
+        shipmentService.updateStatus(shipmentId, new UpdateStatusRequest("IN_TRANSIT"));
+        shipmentService.updateStatus(shipmentId, new UpdateStatusRequest("ARRIVED"));
+        shipmentService.updateStatus(shipmentId, new UpdateStatusRequest("OUT_FOR_DELIVERY"));
+        proofOfDeliveryService.create(new com.logiplatform.dto.OperationsDtos.PodRequest(
+                shipmentId, null, "Recipient", null, null, null,
+                null, null, null, null, "Test delivery"));
+    }
+
 }

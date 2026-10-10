@@ -80,14 +80,15 @@ class PublicTrackingTest extends TenantTestSupport {
         setTenant(UUID.randomUUID());
         ShipmentResponse shipment = shipmentService.create(new CreateShipmentRequest(
                 "PUB-002", "Mombasa", "Kampala", "ROAD", null, null));
-        shipmentService.addTrackingEvent(shipment.id(),
-                new AddTrackingEventRequest("DEPARTED_ORIGIN", "Mombasa", null, null));
+        shipmentService.recordExternalMilestone(shipment.id(),
+                com.logiplatform.model.TrackingEventType.DEPARTED_ORIGIN, null,
+                "Mombasa", "Vessel departed");
 
         TenantContext.clear();
         PublicShipmentView view = publicTrackingService.findByToken(shipment.trackingToken());
 
-        assertEquals(2, view.events().size(), "BOOKED (from creation) + DEPARTED_ORIGIN");
-        assertEquals("BOOKED", view.events().get(0).eventType());
+        assertEquals(2, view.events().size(), "CREATED (from record creation) + DEPARTED_ORIGIN");
+        assertEquals("CREATED", view.events().get(0).eventType());
         assertEquals("DEPARTED_ORIGIN", view.events().get(1).eventType());
     }
 

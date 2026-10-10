@@ -149,6 +149,7 @@ public class PublicTrackingService {
                                                 JOIN shipments s
                                                     ON s.id = p.shipment_id
                                                 WHERE s.tracking_token = ?
+                                                  AND (p.failure_reason IS NULL OR btrim(p.failure_reason) = '')
                                                 ORDER BY p.delivered_at DESC
                                                 LIMIT 1
                                                 """,

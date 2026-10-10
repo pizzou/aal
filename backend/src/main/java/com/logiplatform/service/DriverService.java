@@ -49,6 +49,12 @@ public class DriverService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Driver not found"));
     }
 
+    Driver getOwnedForUpdate(UUID driverId) {
+        UUID tenantId = TenantContext.getTenantId();
+        return driverRepository.findLockedByIdAndTenantId(driverId, tenantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Driver not found"));
+    }
+
     Driver save(Driver driver) {
         return driverRepository.save(driver);
     }

@@ -87,9 +87,6 @@ public class ShipmentService {
             creationIdempotency.reserve(normalizedIdempotencyKey, requestHash);
         }
 
-        // The shipment reference is an AAL operational identifier, not an AWB.
-        // A real MAWB/HAWB belongs to AwbRecord and must come from an allocated
-        // airline/agent AWB range or a configured carrier integration.
         String reference = request.referenceCode() == null || request.referenceCode().isBlank()
                 ? nextShipmentReference()
                 : request.referenceCode().trim();
@@ -108,17 +105,14 @@ public class ShipmentService {
                 null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null,
                 "Outstanding", null, invoiceNumber, null, null, null, null, null, "USD");
-        // Flush the JPA INSERT before the JDBC idempotency row references the shipment.
-        // tenantJdbcTemplate uses a separate JDBC connection, so an unflushed JPA
-        // INSERT is not yet visible to PostgreSQL's foreign-key check.
+       
         Shipment saved = shipmentRepository.saveAndFlush(shipment);
 
         if (normalizedIdempotencyKey != null) {
             creationIdempotency.complete(normalizedIdempotencyKey, requestHash, saved.getId());
         }
 
-        // Every shipment's timeline starts here — this is what "high-end tracking" is
-        // built out of: a consistent audit trail from booking to delivery.
+        
         trackingEventRepository.save(new ShipmentTrackingEvent(
                 tenantId, saved.getId(), TrackingEventType.CREATED, request.originAddress(),
                 "Shipment record created; booking confirmation is pending", Instant.now()));
@@ -127,13 +121,7 @@ public class ShipmentService {
         return ShipmentResponse.from(saved);
     }
 
-    /**
-     * Backward-compatible shipment listing used by service-level callers and tests
-     * that only need pagination without filters.
-     *
-     * Keeping this overload preserves the original service API while the HTTP
-     * endpoint can use the richer filtered listing method below.
-     */
+    
     @Transactional(readOnly = true)
     public Page<ShipmentResponse> list(Pageable pageable) {
         return list(pageable, null, null, null);
@@ -178,14 +166,13 @@ public class ShipmentService {
         if (request == null || request.status() == null || request.status().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Shipment status is required");
         }
-        Shipment shipment = findOwnedForUpdate(shipmentId);
+        Shipment shipment = getOwnedForUpdate(shipmentId);
+
         ShipmentStatus newStatus = parseShipmentStatus(request.status());
         Shipment saved = applyStatusTransition(shipment, newStatus);
         return ShipmentResponse.from(saved);
     }
 
-    /** Applies an arrival received from dispatch at the leg destination. An intermediate arrival
-     * is tracked as a hub arrival and does not complete the shipment's final-destination milestone. */
     @Transactional
     public ShipmentResponse updateStatusFromTrip(UUID shipmentId, UpdateStatusRequest request,
                                                  String physicalLocation, boolean finalDestinationArrival) {
@@ -195,7 +182,8 @@ public class ShipmentService {
         if (physicalLocation == null || physicalLocation.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trip arrival location is required");
         }
-        Shipment shipment = findOwnedForUpdate(shipmentId);
+        Shipment shipment = getOwnedForUpdate(shipmentId);
+
         ShipmentStatus newStatus = parseShipmentStatus(request.status());
         if (newStatus != ShipmentStatus.ARRIVED) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trip arrival can only set shipment status to ARRIVED");
@@ -211,7 +199,8 @@ public class ShipmentService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
         }
 
-        Shipment shipment = findOwnedForUpdate(shipmentId);
+        Shipment shipment = getOwnedForUpdate(shipmentId);
+
         ShipmentStatus requestedStatus = request.shipmentStatus() == null || request.shipmentStatus().isBlank()
                 ? null : parseShipmentStatus(request.shipmentStatus());
         BigDecimal previousSupplierPaid = nz(shipment.getAmountPaidToSupply());
@@ -243,9 +232,7 @@ public class ShipmentService {
         if (request.dateOpened() != null) {
             shipment.setDateOpened(request.dateOpened());
         }
-        // Do not use the lenient workbook-import setter for interactive updates:
-        // user-driven state changes must pass the canonical lifecycle, evidence,
-        // timeline and milestone checks.
+       
         if (requestedStatus != null && requestedStatus != shipment.getStatus()) {
             shipment = applyStatusTransition(shipment, requestedStatus);
         }
@@ -302,19 +289,15 @@ public class ShipmentService {
         return TrackingEventResponse.from(event);
     }
 
-    /**
-     * Stores a time-stamped milestone directly observed from a carrier integration.
-     * This is deliberately separate from user-authored events: provider observations
-     * preserve the carrier's timestamp while state changes remain governed by the
-     * canonical shipment state machine.
-     */
+  
     @Transactional
     public TrackingEventResponse recordExternalMilestone(UUID shipmentId, TrackingEventType type,
                                                           Instant occurredAt, String location, String notes) {
         if (type != TrackingEventType.DEPARTED_ORIGIN && type != TrackingEventType.ARRIVED_DESTINATION) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported external milestone type");
         }
-        Shipment shipment = findOwnedForUpdate(shipmentId);
+        Shipment shipment = getOwnedForUpdate(shipmentId);
+
         Instant now = Instant.now();
         Instant observedAt = occurredAt == null ? now : occurredAt;
         validateTrackingTime(shipment, observedAt, now);
@@ -345,21 +328,23 @@ public class ShipmentService {
 
     @Transactional
     public ShipmentResponse updateWeight(UUID shipmentId, UpdateWeightRequest request) {
-        Shipment shipment = findOwnedForUpdate(shipmentId);
+        Shipment shipment = getOwnedForUpdate(shipmentId);
+
         shipment.setWeightKg(request.weightKg());
         return ShipmentResponse.from(shipmentRepository.save(shipment));
     }
 
     @Transactional
     public ShipmentResponse updateNotificationEmail(UUID shipmentId, UpdateNotificationEmailRequest request) {
-        Shipment shipment = findOwnedForUpdate(shipmentId);
+        Shipment shipment = getOwnedForUpdate(shipmentId);
+
         shipment.setNotificationEmail(request.notificationEmail());
         return ShipmentResponse.from(shipmentRepository.save(shipment));
     }
 
     @Transactional
     public ShipmentResponse updateFlightNumber(UUID shipmentId, UpdateFlightNumberRequest request) {
-        Shipment shipment = findOwnedForUpdate(shipmentId);
+        Shipment shipment = getOwnedForUpdate(shipmentId);
         shipment.setFlightNumber(request.flightNumber());
         return ShipmentResponse.from(shipmentRepository.save(shipment));
     }

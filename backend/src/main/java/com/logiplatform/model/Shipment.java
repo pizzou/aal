@@ -31,12 +31,7 @@ public class Shipment {
     @Column(nullable = false)
     private ShipmentStatus status = ShipmentStatus.PENDING;
 
-    /**
-     * Remembers the operational stage interrupted by ON_HOLD. Without this value,
-     * resuming a held shipment could jump straight from an in-transit leg to final-mile
-     * delivery and bypass the arrival checkpoint. Null is expected for legacy/imported
-     * ON_HOLD rows whose prior stage cannot be established safely.
-     */
+   
     @Enumerated(EnumType.STRING)
     @Column(name = "status_before_hold", length = 40)
     private ShipmentStatus statusBeforeHold;
@@ -48,15 +43,11 @@ public class Shipment {
     @Column(name = "carrier_name")
     private String carrierName;
 
-    /**
-     * AWB / BL / container / tracking reference.
-     */
+   
     @Column(name = "carrier_reference_number")
     private String carrierReferenceNumber;
 
-    /**
-     * Public tracking access token.
-     */
+   
     @Column(name = "tracking_token", nullable = false, updatable = false)
     private UUID trackingToken = UUID.randomUUID();
 
@@ -69,17 +60,10 @@ public class Shipment {
     @Column(name = "flight_number")
     private String flightNumber;
 
-    /**
-     * Date Opened from the AAL Command Center workbook.
-     */
     @Column(name = "date_opened")
     private LocalDate dateOpened;
 
-    /*
-     * ========================================================================
-     * AAL COMMAND CENTER / MOTHERSHIP FIELDS
-     * ========================================================================
-     */
+   
 
     @Column(name = "client_name")
     private String clientName;
@@ -144,11 +128,7 @@ public class Shipment {
     @Column(name = "actual_arrival")
     private Instant actualArrival;
 
-    /*
-     * ========================================================================
-     * FINANCIAL INPUTS
-     * ========================================================================
-     */
+    
 
     @Column(
             name = "supplier_cost",
@@ -212,7 +192,7 @@ public class Shipment {
     @Column(name = "airline_used")
     private String airlineUsed;
 
-    /** Canonical customer revenue / billed amount. */
+  
     @Column(
             name = "amount_billed_to_client",
             precision = 19,
@@ -278,8 +258,7 @@ public class Shipment {
         if (current == newStatus) return; // idempotent retry; preserve hold context
 
         if (current == ShipmentStatus.ON_HOLD) {
-            // Legacy holds have no trustworthy prior state. Permit only safe re-entry
-            // stages and cancellation; never resume directly to final-mile/delivered.
+         
             boolean allowedFromUnknownHold = newStatus == ShipmentStatus.PENDING
                     || newStatus == ShipmentStatus.PLANNING
                     || newStatus == ShipmentStatus.BOOKED
@@ -335,13 +314,7 @@ public class Shipment {
             this.updatedAt = Instant.now();
 
         } catch (IllegalArgumentException ignored) {
-            /*
-             * Do not corrupt the shipment because a spreadsheet contains a
-             * custom label unknown to the application.
-             *
-             * The original workbook value remains available through the
-             * imported operational record where applicable.
-             */
+          
         }
     }
 
@@ -537,11 +510,7 @@ public class Shipment {
         return invoiceNo;
     }
 
-    /**
-     * Assigns a system-generated invoice number only when the shipment does not
-     * already have one. This keeps invoice numbering stable across retries and
-     * allows imported legacy shipments to enter the canonical billing workflow.
-     */
+    
     public void assignInvoiceNoIfBlank(String generatedInvoiceNo) {
         if (this.invoiceNo != null && !this.invoiceNo.isBlank()) {
             return;
@@ -574,9 +543,7 @@ public class Shipment {
         this.eta = newEta;
         if (actualDeparture != null) this.actualDeparture = actualDeparture;
         if (actualArrival != null) this.actualArrival = actualArrival;
-        // Provider schedule/actual-time persistence must not mutate status directly.
-        // ShipmentEtaTrackingService applies permitted changes via ShipmentService
-        // so timeline events and milestones stay synchronized.
+      
         this.updatedAt = Instant.now();
     }
 
@@ -588,21 +555,6 @@ public class Shipment {
         return amountBilledToClient;
     }
 
-    /**
-     * Updates all fields represented by the AAL Command Center shipment
-     * worksheet.
-     *
-     * Calculated values are deliberately NOT accepted from the browser:
-     *
-     *   chargeable weight
-     *   amount remaining
-     *   total cost
-     *   gross profit
-     *   net income
-     *   margin
-     *
-     * are calculated by the server.
-     */
     public void updateCommandCenterFields(
             String clientName,
             String contact,
@@ -763,11 +715,7 @@ public class Shipment {
                 Instant.now();
     }
 
-    /**
-     * Controlled migration update for collection data coming from the
-     * Command Center invoice register. It intentionally does not expose a
-     * general-purpose setter to normal application code.
-     */
+  
     public void setImportedCollectionData(
             BigDecimal amountPaid,
             String importedPaymentStatus
@@ -821,12 +769,7 @@ public class Shipment {
         return gross.max(volume);
     }
 
-    /**
-     * MOTHERSHIP:
-     *
-     * AMOUNT REMAINING =
-     * AMOUNT BILLED TO CLIENT - AMOUNT PAID BY CLIENT
-     */
+   
     public BigDecimal getAmountRemaining() {
 
         if (amountBilledToClient == null) {
@@ -838,23 +781,13 @@ public class Shipment {
         );
     }
 
-    /**
-     * Command Center total cost.
-     *
-     * The workbook defines Total Cost as Supplier Cost + Other Cost.
-     * MOTHERSHIP Other Expenses remain separate for Net Income.
-     */
+  
     public BigDecimal getTotalCost() {
 
         return nz(supplierCost)
                 .add(nz(otherCost));
     }
 
-    /**
-     * Command Center gross profit:
-     *
-     * Client Revenue - Total Cost.
-     */
     public BigDecimal getGrossProfit() {
 
         if (amountBilledToClient == null) {
@@ -865,15 +798,6 @@ public class Shipment {
                 .subtract(getTotalCost());
     }
 
-    /**
-     * MOTHERSHIP Net Income logic:
-     *
-     * Amount Billed
-     * - Amount Paid To Supply
-     * - Other Expenses
-     *
-     * This intentionally follows the client's workbook.
-     */
     public BigDecimal getNetIncome() {
 
         if (amountBilledToClient == null) {

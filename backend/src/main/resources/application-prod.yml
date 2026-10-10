@@ -120,21 +120,22 @@ sms:
 
 document-security:
   clamav:
-    enabled: ${CLAMAV_ENABLED:false}
-    required: ${CLAMAV_REQUIRED:false}
+    enabled: ${CLAMAV_ENABLED:true}
+    required: ${CLAMAV_REQUIRED:true}
     host: ${CLAMAV_HOST:clamav}
     port: ${CLAMAV_PORT:3310}
     timeout-ms: ${CLAMAV_TIMEOUT_MS:15000}
     scanner-version: ${CLAMAV_SCANNER_VERSION:clamav}
 
 document-signature:
-  provider: ${DOCUMENT_SIGNATURE_PROVIDER:INTERNAL_AUDIT}
+  provider: ${DOCUMENT_SIGNATURE_PROVIDER:DISABLED}
   webhook-secret: ${DOCUMENT_SIGNATURE_WEBHOOK_SECRET:}
 
 paypal:
   base-url: ${PAYPAL_BASE_URL:https://api-m.paypal.com}
   client-id: ${PAYPAL_CLIENT_ID:}
   client-secret: ${PAYPAL_CLIENT_SECRET:}
+  allowed-return-origins: ${PAYPAL_ALLOWED_RETURN_ORIGINS:${SECURITY_CORS_ALLOWED_ORIGINS:${APP_FRONTEND_URL:https://aal-a.vercel.app},https://portal.africalogisticaviation.com}}
 
 integration:
   dcsa:

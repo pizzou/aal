@@ -55,25 +55,82 @@ public class DocumentSecurityService {
         validateMimeAndSignature(file);
 
         String checksum = sha256(file);
+        String storedChecksum = Objects.toString(document.get("checksum_sha256"), "").trim();
+        String storedMime = normalizeMime(Objects.toString(document.get("mime_type"), ""));
+        Object rawStoredSize = document.get("file_size_bytes");
+        Long storedSize = rawStoredSize instanceof Number number ? number.longValue() : null;
+        String submittedMime = normalizeMime(Objects.toString(file.getContentType(), ""));
+
+        // The scanner must verify the exact bytes already stored for this document.
+        // Previously, a caller could submit a different file and have its checksum
+        // written to the canonical record, falsely certifying a replacement upload.
+        if (storedChecksum.isBlank() || storedSize == null || storedMime.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Stored document metadata is incomplete; securely upload and persist the document before scanning");
+        }
+        if (!storedChecksum.equalsIgnoreCase(checksum)
+                || storedSize.longValue() != file.getSize()
+                || !storedMime.equals(submittedMime)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Submitted file does not match the stored document bytes, size and MIME type");
+        }
+
         try {
-            db.update("UPDATE cargo_documents SET checksum_sha256=?,file_size_bytes=?,mime_type=?,scan_status=?,updated_at=now() WHERE tenant_id=? AND shipment_id=? AND id=?",
-                    checksum,file.getSize(),file.getContentType(),"SCANNING",tenant,shipmentId,documentId);
-            ScanResult result = enabled ? scanClamAv(file.getInputStream()) : new ScanResult(required ? "UNAVAILABLE" : "NOT_CONFIGURED", "ClamAV is not enabled");
-            db.update("UPDATE cargo_documents SET scan_status=?,scanned_at=now(),scanner_version=?,updated_at=now() WHERE tenant_id=? AND id=?",result.status(),scannerVersion,tenant,documentId);
-            if (required && !"CLEAN".equals(result.status())) {
-                if (!"INFECTED".equals(result.status())) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, result.detail());
+            int started = db.update("""
+                    UPDATE cargo_documents SET scan_status='SCANNING',updated_at=now()
+                     WHERE tenant_id=? AND shipment_id=? AND id=?
+                       AND checksum_sha256=? AND file_size_bytes=?
+                       AND LOWER(SPLIT_PART(COALESCE(mime_type,''),';',1))=?
+                    """, tenant, shipmentId, documentId, storedChecksum, storedSize, storedMime);
+            if (started != 1) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Document changed before its security scan could start");
             }
-            return Map.of("documentId",documentId,"shipmentId",shipmentId,"checksumSha256",checksum,"status",result.status(),"detail",result.detail(),"scanner",scannerVersion,"scannedAt",Instant.now());
+
+            ScanResult result = enabled
+                    ? scanClamAv(file.getInputStream())
+                    : new ScanResult(required ? "UNAVAILABLE" : "NOT_CONFIGURED", "ClamAV is not enabled");
+            int finished = db.update("""
+                    UPDATE cargo_documents
+                       SET scan_status=?,scanned_at=now(),scanner_version=?,updated_at=now()
+                     WHERE tenant_id=? AND shipment_id=? AND id=?
+                       AND checksum_sha256=? AND file_size_bytes=?
+                       AND LOWER(SPLIT_PART(COALESCE(mime_type,''),';',1))=?
+                    """, result.status(), scannerVersion, tenant, shipmentId, documentId,
+                    storedChecksum, storedSize, storedMime);
+            if (finished != 1) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Document content changed during scanning; its result was not applied");
+            }
+            if (required && !"CLEAN".equals(result.status())) {
+                if (!"INFECTED".equals(result.status())) {
+                    throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, result.detail());
+                }
+            }
+            return Map.of("documentId",documentId,"shipmentId",shipmentId,"checksumSha256",checksum,
+                    "status",result.status(),"detail",result.detail(),"scanner",scannerVersion,"scannedAt",Instant.now());
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (Exception ex) {
-            db.update("UPDATE cargo_documents SET scan_status=?,scanned_at=now(),scanner_version=?,updated_at=now() WHERE tenant_id=? AND id=?","ERROR",scannerVersion,tenant,documentId);
+            db.update("""
+                    UPDATE cargo_documents SET scan_status='ERROR',scanned_at=now(),scanner_version=?,updated_at=now()
+                     WHERE tenant_id=? AND shipment_id=? AND id=?
+                       AND checksum_sha256=? AND file_size_bytes=?
+                       AND LOWER(SPLIT_PART(COALESCE(mime_type,''),';',1))=?
+                    """, scannerVersion, tenant, shipmentId, documentId, storedChecksum, storedSize, storedMime);
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Document security scan failed", ex);
         }
     }
 
+    private static String normalizeMime(String mime) {
+        if (mime == null) return "";
+        int separator = mime.indexOf(';');
+        String normalized = (separator >= 0 ? mime.substring(0, separator) : mime).trim().toLowerCase(Locale.ROOT);
+        return normalized;
+    }
+
     private static void validateMimeAndSignature(MultipartFile file) {
-        String mime=file.getContentType()==null?"":file.getContentType().toLowerCase(Locale.ROOT);
+        String mime=normalizeMime(file.getContentType());
         Set<String> allowed=Set.of("application/pdf","image/jpeg","image/png","image/tiff","text/plain","text/csv","application/xml","text/xml","application/zip","application/vnd.openxmlformats-officedocument.wordprocessingml.document","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.openxmlformats-officedocument.presentationml.presentation");
         if(!mime.isBlank()&&!allowed.contains(mime)) throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE,"Unsupported document MIME type");
         try(InputStream in=file.getInputStream()){byte[] h=in.readNBytes(16);boolean ok=sig(h,mime);if(!ok)throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE,"Document content does not match its declared type");}

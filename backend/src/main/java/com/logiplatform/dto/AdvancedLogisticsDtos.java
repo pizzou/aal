@@ -102,9 +102,9 @@ public final class AdvancedLogisticsDtos {
             @NotBlank String bankAccount,
             @NotNull LocalDate transactionDate,
             String reference,
-            @NotNull BigDecimal amount,
-            @NotBlank String currency,
-            @NotBlank String direction
+            @NotNull @DecimalMin(value = "0.0001") @Digits(integer = 15, fraction = 4) BigDecimal amount,
+            @NotBlank @Pattern(regexp = "(?i)[A-Z]{3}") String currency,
+            @NotBlank @Pattern(regexp = "(?i)CREDIT|CR|IN|INCOMING|DEPOSIT|RECEIPT|DEBIT|DR|OUT|OUTGOING|WITHDRAWAL|PAYMENT") String direction
     ) {}
 
     public record CarrierPerformanceRequest(

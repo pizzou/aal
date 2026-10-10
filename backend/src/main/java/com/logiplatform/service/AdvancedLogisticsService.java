@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.logiplatform.dto.AdvancedLogisticsDtos.*;
 import com.logiplatform.tenancy.TenantContext;
+import com.logiplatform.repository.CommercialPaymentRepository;
+import com.logiplatform.model.CommercialPayment;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -22,12 +24,21 @@ public class AdvancedLogisticsService {
     private final JdbcTemplate db;
     private final ObjectMapper json = new ObjectMapper();
     private final RateEngineService rateEngine;
+    private final BillingService billing;
+    private final CommercialPaymentRepository payments;
+    private final DocumentSignatureService documentSignatures;
 
     public AdvancedLogisticsService(
             @Qualifier("tenantJdbcTemplate") JdbcTemplate db,
-            RateEngineService rateEngine) {
+            RateEngineService rateEngine,
+            BillingService billing,
+            CommercialPaymentRepository payments,
+            DocumentSignatureService documentSignatures) {
         this.db = db;
         this.rateEngine = rateEngine;
+        this.billing = billing;
+        this.payments = payments;
+        this.documentSignatures = documentSignatures;
     }
 
     public Map<String,Object> capabilities() {
@@ -256,32 +267,121 @@ public class AdvancedLogisticsService {
         return one("SELECT * FROM finance_bank_transactions WHERE id=?",id);
     }
 
+    /**
+     * Reconciles an incoming bank receipt against an exact invoice reference.
+     * A transaction is not marked MATCHED until the canonical payment, invoice
+     * balance and balanced finance journal have been committed in the same DB
+     * transaction. Amount-only matching is deliberately prohibited because it
+     * can silently allocate a receipt to the wrong customer invoice.
+     */
     @Transactional
     public Map<String,Object> reconcileBankTransaction(UUID transactionId) {
-        Map<String,Object> tx = one("SELECT * FROM finance_bank_transactions WHERE id=?", transactionId);
-        if ("MATCHED".equalsIgnoreCase(Objects.toString(tx.get("status"),""))) return tx;
-        String reference = Objects.toString(tx.get("reference"), "");
+        UUID tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new IllegalStateException("Tenant context is required");
+        }
+        if (transactionId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bank transaction id is required");
+        }
+
+        Map<String,Object> tx = one(
+                "SELECT * FROM finance_bank_transactions WHERE tenant_id=? AND id=? FOR UPDATE",
+                tenantId, transactionId);
+        String currentStatus = Objects.toString(tx.get("status"), "UNMATCHED").toUpperCase(Locale.ROOT);
+        if ("MATCHED".equals(currentStatus)) {
+            UUID paymentId = tx.get("matched_payment_id") == null ? null : uuid(tx.get("matched_payment_id"));
+            UUID matchedInvoiceId = tx.get("matched_invoice_id") == null ? null : uuid(tx.get("matched_invoice_id"));
+            CommercialPayment existingPayment = paymentId == null ? null
+                    : payments.findByTenantIdAndId(tenantId, paymentId).orElse(null);
+            BigDecimal existingAmount = dec(tx.get("amount"));
+            String existingCurrency = normCurrency(Objects.toString(tx.get("currency"), ""));
+            boolean consistent = existingPayment != null
+                    && matchedInvoiceId != null
+                    && matchedInvoiceId.equals(existingPayment.getInvoiceId())
+                    && existingAmount.compareTo(existingPayment.getAmount()) == 0
+                    && existingCurrency.equalsIgnoreCase(existingPayment.getCurrency());
+            if (consistent) return tx;
+
+            // Preserve the bank evidence and flag any legacy/inconsistent match
+            // for manual review rather than silently changing a financial record.
+            db.update("UPDATE finance_bank_transactions SET status='REVIEW_REQUIRED' WHERE tenant_id=? AND id=?",
+                    tenantId, transactionId);
+            return Map.of("status", "REVIEW_REQUIRED", "reason", "MATCHED_PAYMENT_INVARIANT_FAILED",
+                    "transactionId", transactionId);
+        }
+
         BigDecimal amount = dec(tx.get("amount"));
-        Map<String,Object> invoice = null;
-        if (!reference.isBlank()) {
-            try {
-                invoice = one("SELECT * FROM commercial_invoices WHERE invoice_no=? AND invoice_amount-amount_paid>=?", reference, amount);
-            } catch (ResponseStatusException ignored) {}
+        String direction = Objects.toString(tx.get("direction"), "").trim().toUpperCase(Locale.ROOT);
+        if (amount.signum() <= 0 || !Set.of("CREDIT", "CR", "IN", "INCOMING", "DEPOSIT", "RECEIPT")
+                .contains(direction)) {
+            db.update("UPDATE finance_bank_transactions SET status='REVIEW_REQUIRED' WHERE tenant_id=? AND id=?",
+                    tenantId, transactionId);
+            return Map.of("status", "REVIEW_REQUIRED",
+                    "reason", amount.signum() <= 0 ? "NON_POSITIVE_BANK_AMOUNT" : "NOT_AN_INCOMING_RECEIPT",
+                    "transactionId", transactionId);
         }
-        if (invoice == null) {
-            try {
-                invoice = one("SELECT * FROM commercial_invoices WHERE currency=? AND invoice_amount-amount_paid=? ORDER BY due_date NULLS LAST LIMIT 1",
-                    tx.get("currency"), amount);
-            } catch (ResponseStatusException ignored) {}
+
+        String reference = Objects.toString(tx.get("reference"), "").trim();
+        if (reference.isBlank()) {
+            return Map.of("status", "UNMATCHED", "reason", "MISSING_INVOICE_REFERENCE", "transaction", tx);
         }
-        if (invoice == null) {
-            return Map.of("status","UNMATCHED","transaction",tx);
+
+        String currency = normCurrency(Objects.toString(tx.get("currency"), ""));
+        List<Map<String,Object>> candidates = db.queryForList("""
+                SELECT id, invoice_no, currency, invoice_amount, amount_paid,
+                       COALESCE(credit_note_amount,0) AS credit_note_amount,
+                       COALESCE(debit_note_amount,0) AS debit_note_amount,
+                       COALESCE(lifecycle_status,'ISSUED') AS lifecycle_status
+                  FROM commercial_invoices
+                 WHERE tenant_id=? AND UPPER(invoice_no)=UPPER(?) AND UPPER(currency)=UPPER(?)
+                 FOR UPDATE
+                """, tenantId, reference, currency);
+        if (candidates.size() != 1) {
+            return Map.of("status", "UNMATCHED", "reason", "INVOICE_REFERENCE_NOT_FOUND_OR_AMBIGUOUS",
+                    "transaction", tx);
         }
-        UUID matchId=UUID.randomUUID();
-        db.update("INSERT INTO finance_reconciliation_matches(id,tenant_id,bank_transaction_id,invoice_id,matched_amount) VALUES(?,?,?,?,?) ON CONFLICT(tenant_id,bank_transaction_id) DO UPDATE SET invoice_id=EXCLUDED.invoice_id,matched_amount=EXCLUDED.matched_amount,status='MATCHED'",
-            matchId,TenantContext.getTenantId(),transactionId,invoice.get("id"),amount);
-        db.update("UPDATE finance_bank_transactions SET matched_invoice_id=?,status='MATCHED' WHERE id=?",invoice.get("id"),transactionId);
-        return one("SELECT * FROM finance_bank_transactions WHERE id=?",transactionId);
+
+        Map<String,Object> invoice = candidates.get(0);
+        String lifecycle = Objects.toString(invoice.get("lifecycle_status"), "ISSUED").toUpperCase(Locale.ROOT);
+        if (Set.of("DRAFT", "VOID", "CANCELLED").contains(lifecycle)) {
+            return Map.of("status", "UNMATCHED", "reason", "INVOICE_NOT_PAYABLE", "transaction", tx);
+        }
+
+        BigDecimal balance = dec(invoice.get("invoice_amount"))
+                .add(dec(invoice.get("debit_note_amount")))
+                .subtract(dec(invoice.get("credit_note_amount")))
+                .subtract(dec(invoice.get("amount_paid")))
+                .max(BigDecimal.ZERO);
+        if (balance.signum() <= 0 || amount.compareTo(balance) > 0) {
+            return Map.of("status", "UNMATCHED", "reason", "AMOUNT_EXCEEDS_INVOICE_BALANCE",
+                    "invoiceBalance", balance, "transaction", tx);
+        }
+
+        UUID invoiceId = uuid(invoice.get("id"));
+        String paymentKey = "BANK_TXN:" + transactionId;
+        billing.recordPayment(invoiceId, amount, currency, paymentKey, "BANK_TXN:" + transactionId);
+        CommercialPayment payment = payments.findByTenantIdAndIdempotencyKey(tenantId, paymentKey)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Canonical payment was not persisted during bank reconciliation"));
+
+        db.update("""
+                INSERT INTO finance_reconciliation_matches
+                    (id, tenant_id, bank_transaction_id, invoice_id, payment_id, matched_amount, status)
+                VALUES (?, ?, ?, ?, ?, ?, 'MATCHED')
+                ON CONFLICT (tenant_id, bank_transaction_id) DO UPDATE SET
+                    invoice_id=EXCLUDED.invoice_id,
+                    payment_id=EXCLUDED.payment_id,
+                    matched_amount=EXCLUDED.matched_amount,
+                    status='MATCHED',
+                    matched_at=now()
+                """, UUID.randomUUID(), tenantId, transactionId, invoiceId, payment.getId(), amount);
+
+        db.update("""
+                UPDATE finance_bank_transactions
+                   SET matched_invoice_id=?, matched_payment_id=?, status='MATCHED'
+                 WHERE tenant_id=? AND id=?
+                """, invoiceId, payment.getId(), tenantId, transactionId);
+        return one("SELECT * FROM finance_bank_transactions WHERE tenant_id=? AND id=?", tenantId, transactionId);
     }
 
     @Transactional
@@ -324,13 +424,14 @@ public class AdvancedLogisticsService {
         return one("SELECT * FROM workflow_rules WHERE rule_code=?",r.ruleCode());
     }
 
+    /**
+     * All signature requests must pass the same malware-scan, provider and
+     * audit-state checks. Never create signature rows through this legacy API
+     * directly; that would bypass DocumentSignatureService's invariants.
+     */
     @Transactional
     public Map<String,Object> signature(DocumentSignatureRequest r) {
-        one("SELECT id FROM cargo_documents WHERE id=?",r.documentId());
-        UUID id=UUID.randomUUID();
-        db.update("INSERT INTO document_signature_requests(id,tenant_id,document_id,signer_name,signer_email) VALUES(?,?,?,?,?)",
-            id,TenantContext.getTenantId(),r.documentId(),r.signerName(),r.signerEmail());
-        return one("SELECT * FROM document_signature_requests WHERE id=?",id);
+        return documentSignatures.request(r.documentId(), r.signerName(), r.signerEmail());
     }
 
     @Transactional
@@ -377,6 +478,12 @@ public class AdvancedLogisticsService {
 
     private Check check(String code,boolean ok,String message){ return new Check(code,ok,message); }
     private record Check(String code,boolean ok,String message) {}
+    private static UUID uuid(Object value) {
+        if (value instanceof UUID id) return id;
+        if (value == null) throw new IllegalStateException("Database returned an empty UUID");
+        return UUID.fromString(value.toString());
+    }
+
     private void tenant(UUID shipmentId){ if(shipmentId==null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"shipmentId is required"); one("SELECT id FROM shipments WHERE id=?",shipmentId); }
     private void ensureQuote(UUID id){ one("SELECT id FROM commercial_quotes WHERE id=?",id); }
     private void ensureDeclaration(UUID id){ one("SELECT id FROM customs_declarations WHERE id=?",id); }

@@ -33,8 +33,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         "/api/auth/password/reset",
                         "/api/auth/csrf",
                         "/api/public/",
+                        "/api/finance/hardening/public/",
+                        "/api/document-security/signatures/webhook",
                         "/actuator/health",
-                        "/actuator/prometheus",
                         "/actuator/info");
 
         private final JwtService jwtService;

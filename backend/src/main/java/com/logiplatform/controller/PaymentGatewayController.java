@@ -37,7 +37,7 @@ public class PaymentGatewayController {
             @NotNull UUID invoiceId,
             @NotNull @Positive BigDecimal amount,
             @NotBlank @Pattern(regexp = "[A-Za-z]{3}") String currency,
-            String idempotencyKey,
+            @NotBlank @Size(max = 38) String idempotencyKey,
             String returnUrl,
             String cancelUrl) {}
 
@@ -45,5 +45,5 @@ public class PaymentGatewayController {
             @NotNull UUID invoiceId,
             @NotNull @Positive BigDecimal expectedAmount,
             @NotBlank @Pattern(regexp = "[A-Za-z]{3}") String currency,
-            String idempotencyKey) {}
+            @NotBlank @Size(max = 38) String idempotencyKey) {}
 }

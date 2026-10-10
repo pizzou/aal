@@ -12,6 +12,7 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -28,6 +29,7 @@ import java.util.Objects;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity(prePostEnabled = true, securedEnabled = true, jsr250Enabled = true)
 public class SecurityConfig {
 
     @Value("${security.cors.allowed-origins:http://localhost:3000}")
@@ -117,9 +119,12 @@ public class SecurityConfig {
 
                                 new AntPathRequestMatcher("/actuator/health"),
                                 new AntPathRequestMatcher("/actuator/health/**"),
-                                new AntPathRequestMatcher("/actuator/prometheus"),
                                 new AntPathRequestMatcher("/actuator/info"))
                         .permitAll()
+
+                        // Prometheus metrics expose operational topology and counters; do not publish them publicly.
+                        .requestMatchers(new AntPathRequestMatcher("/actuator/prometheus"))
+                        .hasRole("ADMIN")
 
                         /*
                          * SESSION MUST BE AUTHENTICATED.
@@ -137,6 +142,12 @@ public class SecurityConfig {
                         .requestMatchers(
                                 new AntPathRequestMatcher("/api/auth/register"))
                         .denyAll()
+
+
+                // Named public login/OTP/reset endpoints above remain public; every
+                // other authentication operation requires an established session.
+                .requestMatchers(new AntPathRequestMatcher("/api/auth/**"))
+                        .authenticated()
 
                         /*
                          * CUSTOMER
@@ -229,6 +240,62 @@ public class SecurityConfig {
                                 "SALES")
 
                         /*
+                         * PAYMENT PROVIDER OPERATIONS
+                         * Payment order creation/capture changes receivables and must be restricted
+                         * to staff responsible for finance. A valid login alone is insufficient.
+                         */
+                        .requestMatchers(new AntPathRequestMatcher("/api/payments/gateway/**"))
+                        .hasAnyRole("ADMIN", "MANAGER", "FINANCE")
+
+                        /*
+                         * DOCUMENT SECURITY
+                         * Provider webhooks are public at the transport layer only because the
+                         * service verifies the HMAC. All human-facing operations require staff roles.
+                         */
+                        .requestMatchers(new AntPathRequestMatcher("/api/document-security/signatures/webhook"))
+                        .permitAll()
+                        .requestMatchers(new AntPathRequestMatcher("/api/document-security/**"))
+                        .hasAnyRole("ADMIN", "MANAGER", "OPERATIONS", "FINANCE")
+
+                        /*
+                         * ADVANCED LOGISTICS DOMAIN
+                         */
+                        .requestMatchers(new AntPathRequestMatcher("/api/advanced-logistics/**"))
+                        .hasAnyRole("ADMIN", "MANAGER", "OPERATIONS", "FINANCE", "SALES", "DISPATCH", "WAREHOUSE", "AIR_CARGO")
+
+                        /*
+                         * ENTERPRISE CONTROL SURFACES
+                         */
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/enterprise-advanced/**"),
+                                new AntPathRequestMatcher("/api/enterprise-completion/**"),
+                                new AntPathRequestMatcher("/api/enterprise/**"))
+                        .hasAnyRole("ADMIN", "MANAGER", "OPERATIONS", "FINANCE")
+
+                        /*
+                         * AAL BUSINESS / CONTROL REPORTS
+                         */
+                        .requestMatchers(new AntPathRequestMatcher("/api/aal/business/**"))
+                        .hasAnyRole("ADMIN", "MANAGER", "FINANCE")
+
+                        /*
+                         * INTEGRATION CONFIGURATION
+                         */
+                        .requestMatchers(new AntPathRequestMatcher("/api/integrations/free/**"))
+                        .hasAnyRole("ADMIN", "MANAGER", "OPERATIONS", "FINANCE")
+
+                .requestMatchers(new AntPathRequestMatcher("/api/integrations/enterprise/**"))
+                        .hasAnyRole("ADMIN", "MANAGER", "OPERATIONS", "FINANCE")
+
+                // Health/readiness detail can disclose topology and configuration.
+                .requestMatchers(new AntPathRequestMatcher("/api/production/**"))
+                        .hasRole("ADMIN")
+
+                // Notifications are always scoped to the authenticated user's id.
+                .requestMatchers(new AntPathRequestMatcher("/api/notifications/**"))
+                        .authenticated()
+
+                        /*
                          * COMMERCIAL TASKS
                          */
                         .requestMatchers(
@@ -239,6 +306,12 @@ public class SecurityConfig {
                                 "OPERATIONS",
                                 "SALES",
                                 "FINANCE")
+
+                        // Catch additional, already-existing commercial operations
+                        // without granting access to all authenticated users. More
+                        // restrictive invoice/expense/quote/client rules above win.
+                        .requestMatchers(new AntPathRequestMatcher("/api/commercial/**"))
+                        .hasAnyRole("ADMIN", "MANAGER", "OPERATIONS", "FINANCE", "SALES")
 
                         /*
                          * COMMAND CENTER IMPORT
@@ -296,6 +369,12 @@ public class SecurityConfig {
                                 "OPERATIONS",
                                 "SALES")
 
+
+                // Unmodelled shipment mutations (notably arbitrary PUT/DELETE) must
+                // be implemented with explicit lifecycle and audit controls first.
+                .requestMatchers(new AntPathRequestMatcher("/api/shipments/**"))
+                        .denyAll()
+
                         /*
                          * OPERATIONS
                          */
@@ -307,6 +386,16 @@ public class SecurityConfig {
                                 "OPERATIONS",
                                 "DISPATCH",
                                 "WAREHOUSE")
+
+                        /*
+                         * LOGISTICS CONTROL TOWER AND CUSTOMER/QUOTE RATING ADMINISTRATION
+                         */
+                        .requestMatchers(new AntPathRequestMatcher("/api/logistics/**"))
+                        .hasAnyRole("ADMIN", "MANAGER", "OPERATIONS", "FINANCE", "SALES")
+                        .requestMatchers(
+                                new AntPathRequestMatcher("/api/rating/**"),
+                                new AntPathRequestMatcher("/api/rating/dynamic/**"))
+                        .hasAnyRole("ADMIN", "MANAGER", "OPERATIONS", "FINANCE", "SALES")
 
                         /*
                          * FLEET
@@ -378,8 +467,12 @@ public class SecurityConfig {
                         /*
                          * EVERYTHING ELSE
                          */
+                        // Safe-by-default: a new controller or endpoint cannot become
+                        // available to every logged-in role merely by being added to the codebase.
+                        .requestMatchers(new AntPathRequestMatcher("/api/**"))
+                        .denyAll()
                         .anyRequest()
-                        .authenticated())
+                        .denyAll())
 
                 /*
                  * JWT MUST RUN BEFORE AUTHORIZATION.

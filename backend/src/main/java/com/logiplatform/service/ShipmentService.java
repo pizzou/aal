@@ -239,7 +239,10 @@ public class ShipmentService {
         Shipment saved = shipmentRepository.save(shipment);
 
        
-        if (nz(saved.getAmountBilledToClient()).signum() > 0) {
+        BigDecimal billableClientRevenue = nz(saved.getAmountBilledToClient()).signum() > 0
+                ? saved.getAmountBilledToClient()
+                : saved.getClientRevenue();
+        if (nz(billableClientRevenue).signum() > 0) {
             billingService.billShipment(saved.getId(),
                     request.nextActionDate() != null ? request.nextActionDate() : java.time.LocalDate.now().plusDays(30),
                     request.ownerName());

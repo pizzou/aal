@@ -50,13 +50,19 @@ public class BillingService {
     @Transactional
     public CommercialInvoice createDraftInvoice(UUID shipmentId, LocalDate dueDate, String owner) {
         UUID tenantId=TenantContext.getTenantId();
-        Shipment shipment=shipments.findByIdAndTenantId(shipmentId,tenantId)
+        if (dueDate == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice due date is required");
+        }
+        Shipment shipment=shipments.findLockedByIdAndTenantId(shipmentId,tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Shipment not found"));
         CommercialInvoice existing=invoices.findByTenantIdAndShipmentId(tenantId,shipmentId).orElse(null);
         if(existing!=null) return existing;
 
-        BigDecimal amount=shipment.getAmountBilledToClient();
-        if(amount==null) amount=shipment.getClientRevenue();
+        BigDecimal amount = shipment.getAmountBilledToClient();
+        // Some legacy/imported shipments persist zero in amountBilledToClient
+        // while the governed client revenue is populated. Treat zero the same
+        // as an absent billed amount so those legitimate shipments can invoice.
+        if (amount == null || amount.signum() <= 0) amount = shipment.getClientRevenue();
         if(amount==null || amount.signum()<=0)
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,"Shipment has no billable client revenue");
 
@@ -85,9 +91,16 @@ public class BillingService {
             String owner) {
 
         UUID tenantId = TenantContext.getTenantId();
+        if (dueDate == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice due date is required");
+        }
 
+        // Serialize invoice creation/issue attempts for the same shipment. The
+        // unique tenant+shipment constraint remains the final database guard,
+        // while this row lock prevents concurrent requests from allocating
+        // competing invoice numbers or posting the same receivable twice.
         Shipment shipment = shipments
-                .findByIdAndTenantId(shipmentId, tenantId)
+                .findLockedByIdAndTenantId(shipmentId, tenantId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Shipment not found"));
@@ -117,8 +130,9 @@ public class BillingService {
         }
 
         BigDecimal amount = shipment.getAmountBilledToClient();
-
-        if (amount == null) {
+        // Zero is a common default for imported/older shipment records. If it
+        // is not billable, fall back to the actual governed client revenue.
+        if (amount == null || amount.signum() <= 0) {
             amount = shipment.getClientRevenue();
         }
 

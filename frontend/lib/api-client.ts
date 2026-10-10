@@ -658,6 +658,8 @@ export interface Shipment {
   totalCost: number | null;
 
   amountBilledToClient: number | null;
+  /** Governed customer revenue fallback for legacy shipments with a zero billed amount. */
+  clientRevenue?: number | null;
   amountPaidByClient: number | null;
   amountRemaining: number | null;
 

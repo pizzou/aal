@@ -634,18 +634,25 @@ export default function BillingPage() {
               >
                 <option value="">Select shipment…</option>
 
-                {shipments.map((shipment) => (
-                  <option key={shipment.id} value={shipment.id}>
-                    {shipment.referenceCode} —{" "}
-                    {shipment.clientName || "No client"} —{" "}
-                    {money(
-                      shipment.amountBilledToClient ??
-                        shipment.amountBilledToClient ??
-                        0,
-                      shipment.currency || "USD",
-                    )}
-                  </option>
-                ))}
+                {shipments.map((shipment) => {
+                  const billedAmount = shipment.amountBilledToClient;
+                  const billableAmount =
+                    billedAmount != null && billedAmount > 0
+                      ? billedAmount
+                      : (shipment.clientRevenue ?? 0);
+                  return (
+                    <option
+                      key={shipment.id}
+                      value={shipment.id}
+                      disabled={billableAmount <= 0}
+                    >
+                      {shipment.referenceCode} —{" "}
+                      {shipment.clientName || "No client"} —{" "}
+                      {money(billableAmount, shipment.currency || "USD")}
+                      {billableAmount <= 0 ? " — not billable" : ""}
+                    </option>
+                  );
+                })}
               </select>
             </label>
 
@@ -654,6 +661,7 @@ export default function BillingPage() {
 
               <input
                 type="date"
+                required
                 value={invoiceDueDate}
                 onChange={(event) => setInvoiceDueDate(event.target.value)}
               />

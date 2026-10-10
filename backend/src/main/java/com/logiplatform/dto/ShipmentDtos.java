@@ -107,6 +107,7 @@ public final class ShipmentDtos {
             BigDecimal totalCost,
 
             BigDecimal amountBilledToClient,
+            BigDecimal clientRevenue,
             BigDecimal amountPaidByClient,
             BigDecimal amountRemaining,
 
@@ -201,6 +202,8 @@ public final class ShipmentDtos {
                     shipment.getTotalCost(),
 
                     shipment.getAmountBilledToClient(),
+
+                    shipment.getClientRevenue(),
 
                     shipment.getAmountPaidByClient(),
 

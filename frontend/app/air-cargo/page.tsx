@@ -518,6 +518,9 @@ export default function AirCargoPage() {
           <Link className="btn" href="/air-cargo/bookings">
             <Icon name="file" size={15} /> Booking desk
           </Link>
+          <Link className="btn btn-primary" href="/air-cargo/awb">
+            <Icon name="file" size={15} /> Structured AWB
+          </Link>
         </div>
       </div>
 

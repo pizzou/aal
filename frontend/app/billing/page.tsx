@@ -79,6 +79,8 @@ export default function BillingPage() {
   const [invoiceShipment, setInvoiceShipment] = useState("");
   const [invoiceDueDate, setInvoiceDueDate] = useState("");
   const [invoiceOwner, setInvoiceOwner] = useState("");
+  const [invoiceTaxJurisdiction, setInvoiceTaxJurisdiction] = useState("");
+  const [invoiceTaxCode, setInvoiceTaxCode] = useState("");
 
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -219,6 +221,15 @@ export default function BillingPage() {
       setSaving(false);
       return;
     }
+    if (
+      Boolean(invoiceTaxJurisdiction.trim()) !== Boolean(invoiceTaxCode.trim())
+    ) {
+      setError(
+        "Enter both the configured tax jurisdiction and tax code, or leave both blank.",
+      );
+      setSaving(false);
+      return;
+    }
 
     // Open the tab synchronously in the click gesture so browser popup blockers
     // do not prevent the authenticated invoice PDF from being viewed/printed.
@@ -237,6 +248,8 @@ export default function BillingPage() {
           body: JSON.stringify({
             dueDate: invoiceDueDate,
             owner: invoiceOwner.trim() || undefined,
+            taxJurisdictionCode: invoiceTaxJurisdiction.trim() || undefined,
+            taxCode: invoiceTaxCode.trim() || undefined,
           }),
         },
       );
@@ -244,6 +257,8 @@ export default function BillingPage() {
       setInvoiceShipment("");
       setInvoiceOwner("");
       setInvoiceDueDate("");
+      setInvoiceTaxJurisdiction("");
+      setInvoiceTaxCode("");
       setSuccess(
         `Invoice ${created.invoiceNo || ""} created. Opening the customer-ready PDF…`,
       );
@@ -634,25 +649,19 @@ export default function BillingPage() {
               >
                 <option value="">Select shipment…</option>
 
-                {shipments.map((shipment) => {
-                  const billedAmount = shipment.amountBilledToClient;
-                  const billableAmount =
-                    billedAmount != null && billedAmount > 0
-                      ? billedAmount
-                      : (shipment.clientRevenue ?? 0);
-                  return (
-                    <option
-                      key={shipment.id}
-                      value={shipment.id}
-                      disabled={billableAmount <= 0}
-                    >
-                      {shipment.referenceCode} —{" "}
-                      {shipment.clientName || "No client"} —{" "}
-                      {money(billableAmount, shipment.currency || "USD")}
-                      {billableAmount <= 0 ? " — not billable" : ""}
-                    </option>
-                  );
-                })}
+                {shipments.map((shipment) => (
+                  <option key={shipment.id} value={shipment.id}>
+                    {shipment.referenceCode} —{" "}
+                    {shipment.clientName || "No client"} —{" "}
+                    {money(
+                      shipment.amountBilledToClient &&
+                        shipment.amountBilledToClient > 0
+                        ? shipment.amountBilledToClient
+                        : (shipment.clientRevenue ?? 0),
+                      shipment.currency || "USD",
+                    )}
+                  </option>
+                ))}
               </select>
             </label>
 
@@ -661,7 +670,6 @@ export default function BillingPage() {
 
               <input
                 type="date"
-                required
                 value={invoiceDueDate}
                 onChange={(event) => setInvoiceDueDate(event.target.value)}
               />
@@ -676,7 +684,33 @@ export default function BillingPage() {
                 placeholder="Responsible person"
               />
             </label>
+            <label className="field">
+              <span>Tax jurisdiction (optional)</span>
+              <input
+                value={invoiceTaxJurisdiction}
+                onChange={(event) =>
+                  setInvoiceTaxJurisdiction(event.target.value.toUpperCase())
+                }
+                placeholder="Configured jurisdiction code"
+                autoComplete="off"
+              />
+            </label>
+            <label className="field">
+              <span>Tax code (optional)</span>
+              <input
+                value={invoiceTaxCode}
+                onChange={(event) =>
+                  setInvoiceTaxCode(event.target.value.toUpperCase())
+                }
+                placeholder="Configured VAT/tax rule code"
+                autoComplete="off"
+              />
+            </label>
           </div>
+          <p className="form-hint">
+            Tax is applied only when both codes match an active, effective-dated
+            rule configured by your finance administrator.
+          </p>
 
           {invoiceShipment && (
             <div className="selected-shipment">
@@ -822,9 +856,10 @@ export default function BillingPage() {
                       <span>BILLABLE</span>
                       <strong>
                         {money(
-                          shipment.amountBilledToClient ??
-                            shipment.amountBilledToClient ??
-                            0,
+                          shipment.amountBilledToClient &&
+                            shipment.amountBilledToClient > 0
+                            ? shipment.amountBilledToClient
+                            : (shipment.clientRevenue ?? 0),
                           shipment.currency || "USD",
                         )}
                       </strong>

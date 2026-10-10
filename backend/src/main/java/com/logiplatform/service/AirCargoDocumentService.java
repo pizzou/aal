@@ -1,6 +1,8 @@
 package com.logiplatform.service;
 
 import com.logiplatform.model.AwbRecord;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.logiplatform.model.CargoDocument;
 import com.logiplatform.model.CustomsDeclaration;
 import com.logiplatform.repository.AwbRecordRepository;
@@ -27,6 +29,8 @@ import static com.logiplatform.dto.AirCargoDtos.DocumentRequest;
 
 @Service
 public class AirCargoDocumentService {
+
+    private static final ObjectMapper AWB_JSON_MAPPER = new ObjectMapper();
 
     private final AwbRecordRepository awbs;
     private final CargoDocumentRepository docs;
@@ -63,10 +67,15 @@ public class AirCargoDocumentService {
         UUID tenantId = TenantContext.getTenantId();
         shipments.findByIdAndTenantId(request.shipmentId(), tenantId)
                 .orElseThrow(() -> new IllegalArgumentException("Shipment not found"));
-        if (request.hawbNumber() != null && !request.hawbNumber().isBlank() && request.mawbNumber() != null && !request.mawbNumber().isBlank()) {
+        if ("HAWB".equalsIgnoreCase(request.awbType()) || (request.hawbNumber() != null && !request.hawbNumber().isBlank())) {
+            if (request.mawbNumber() == null || request.mawbNumber().isBlank()) {
+                throw new IllegalArgumentException("A HAWB requires its carrier-assigned parent MAWB number");
+            }
             awbs.findByTenantIdAndAwbNumber(tenantId, request.mawbNumber().trim())
                     .orElseThrow(() -> new IllegalArgumentException("Parent MAWB does not exist for this HAWB"));
         }
+        validateJsonArray(request.routingSegmentsJson(), "routingSegmentsJson");
+        validateJsonArray(request.cargoRatingLinesJson(), "cargoRatingLinesJson");
         AwbRecord awb = new AwbRecord(
                 tenantId,
                 request.shipmentId(),
@@ -88,8 +97,38 @@ public class AirCargoDocumentService {
                 request.hsCode(),
                 request.specialHandling(),
                 request.dangerousGoods());
+        awb.applyExtendedDetails(
+                request.airlinePrefix(), request.airlineSerial(),
+                request.shipperStreetAddress(), request.shipperPostalCode(), request.shipperContactName(), request.shipperPhone(), request.shipperEmail(), request.shipperTaxId(), request.shipperEoriNumber(),
+                request.consigneeStreetAddress(), request.consigneePostalCode(), request.consigneeContactName(), request.consigneePhone(), request.consigneeEmail(), request.consigneeTaxId(), request.consigneeEoriNumber(),
+                request.issuingAgentCity(), request.iataCargoAgentCode(), request.agentAccountNumber(), request.firstToAirport(), request.firstByCarrier(), request.secondToAirport(), request.secondByCarrier(),
+                request.currencyCode(), request.paymentTermsCode(), request.rateClass(), request.weightUnit(), request.ratePerKg(), request.freightCharge(),
+                request.lengthCm(), request.widthCm(), request.heightCm(), request.natureQuantityGoods(), request.declaredValueCarriage(), request.carriageValueCode(),
+                request.declaredValueCustoms(), request.customsValueCode(), request.insuranceAmount(), request.routingSegmentsJson(), request.cargoRatingLinesJson());
         awb.validateRecord();
         return AwbResponse.from(awbs.save(awb));
+    }
+
+    private static void validateJsonArray(String value, String fieldName) {
+        if (value == null || value.isBlank()) return;
+        try {
+            JsonNode node = AWB_JSON_MAPPER.readTree(value);
+            if (node == null || !node.isArray()) {
+                throw new IllegalArgumentException(fieldName + " must be a JSON array");
+            }
+            for (JsonNode item : node) {
+                if (!item.isObject()) throw new IllegalArgumentException(fieldName + " entries must be JSON objects");
+                if ("routingSegmentsJson".equals(fieldName)) {
+                    String to = item.path("to").asText("").trim().toUpperCase(java.util.Locale.ROOT);
+                    String by = item.path("by").asText("").trim().toUpperCase(java.util.Locale.ROOT);
+                    if (!to.matches("[A-Z]{3}") || !by.matches("[A-Z0-9]{2}")) {
+                        throw new IllegalArgumentException("Each routing segment requires a 3-letter 'to' airport and a 2-character 'by' carrier code");
+                    }
+                }
+            }
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalArgumentException(fieldName + " contains invalid JSON", ex);
+        }
     }
 
     @Transactional

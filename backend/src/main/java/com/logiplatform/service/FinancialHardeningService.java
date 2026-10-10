@@ -674,6 +674,8 @@ public class FinancialHardeningService {
                     ON CONFLICT(tenant_id,invoice_id,reminder_date,reminder_level)
                     DO UPDATE SET status='PENDING',recipient_email=EXCLUDED.recipient_email,error_detail=NULL,created_at=now()
                     WHERE finance_overdue_reminders.status='FAILED'
+                       OR (finance_overdue_reminders.status='PENDING'
+                           AND finance_overdue_reminders.created_at < now() - INTERVAL '15 minutes')
                     """,UUID.randomUUID(),tenant,id,LocalDate.now(),level,email);
                 if(claimed==0) continue;
                 try{

@@ -20,6 +20,8 @@ import java.util.Locale;
 import java.util.UUID;
 import com.logiplatform.security.TenantPrincipal;
 import org.springframework.security.core.context.SecurityContextHolder;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 
 @Service
 public class BillingService {
@@ -30,6 +32,10 @@ public class BillingService {
     private final FinancePostingService finance;
     private final FinanceDocumentSequenceService documentSequences;
     private final FinanceIncomeAllocationService incomeAllocations;
+    private final FinancialHardeningService financialHardening;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     public BillingService(
             ShipmentRepository shipments,
@@ -37,7 +43,8 @@ public class BillingService {
             CommercialPaymentRepository payments,
             FinancePostingService finance,
             FinanceDocumentSequenceService documentSequences,
-            FinanceIncomeAllocationService incomeAllocations) {
+            FinanceIncomeAllocationService incomeAllocations,
+            FinancialHardeningService financialHardening) {
 
         this.shipments = shipments;
         this.invoices = invoices;
@@ -45,18 +52,40 @@ public class BillingService {
         this.finance = finance;
         this.documentSequences = documentSequences;
         this.incomeAllocations = incomeAllocations;
+        this.financialHardening = financialHardening;
     }
 
     @Transactional
     public CommercialInvoice createDraftInvoice(UUID shipmentId, LocalDate dueDate, String owner) {
+        return createDraftInvoice(shipmentId, dueDate, owner, null, null);
+    }
+
+    @Transactional
+    public CommercialInvoice createDraftInvoice(UUID shipmentId, LocalDate dueDate, String owner,
+            String taxJurisdictionCode, String taxCode) {
         UUID tenantId=TenantContext.getTenantId();
         if (dueDate == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice due date is required");
         }
+        boolean hasJurisdiction = taxJurisdictionCode != null && !taxJurisdictionCode.isBlank();
+        boolean hasTaxCode = taxCode != null && !taxCode.isBlank();
+        if (hasJurisdiction != hasTaxCode) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Both tax jurisdiction code and tax code are required when applying tax");
+        }
         Shipment shipment=shipments.findLockedByIdAndTenantId(shipmentId,tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Shipment not found"));
         CommercialInvoice existing=invoices.findByTenantIdAndShipmentId(tenantId,shipmentId).orElse(null);
-        if(existing!=null) return existing;
+        if(existing!=null) {
+            if (hasJurisdiction && "DRAFT".equalsIgnoreCase(existing.getLifecycleStatus())) {
+                if (existing.getTaxCode() != null && !existing.getTaxCode().isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "A tax rule is already applied to this draft invoice");
+                }
+                financialHardening.applyTaxToDraftInvoice(existing.getId(), taxJurisdictionCode, taxCode, LocalDate.now());
+                entityManager.refresh(existing);
+            }
+            return existing;
+        }
 
         BigDecimal amount = shipment.getAmountBilledToClient();
         // Some legacy/imported shipments persist zero in amountBilledToClient
@@ -74,22 +103,39 @@ public class BillingService {
             shipments.save(shipment);
         }
 
-        CommercialInvoice invoice=invoices.saveAndFlush(new CommercialInvoice(
-                tenantId,invoiceNo,LocalDate.now(),
-                shipment.getClientName()!=null?shipment.getClientName():shipment.getContact(),
-                shipmentId,currency,amount,dueDate,owner));
+        CommercialInvoice invoice = new CommercialInvoice(
+                tenantId, invoiceNo, LocalDate.now(),
+                shipment.getClientName() != null ? shipment.getClientName() : shipment.getContact(),
+                shipmentId, currency, amount, dueDate, owner);
         invoice.changeLifecycleStatus("DRAFT");
-        invoices.updateLifecycleStatus(tenantId,invoice.getId(),"DRAFT");
+        invoice = invoices.saveAndFlush(invoice);
         invoices.insertLifecycleHistory(tenantId,invoice.getId(),null,"DRAFT","Draft invoice created",currentUser());
+        if (hasJurisdiction) {
+            financialHardening.applyTaxToDraftInvoice(invoice.getId(), taxJurisdictionCode, taxCode, LocalDate.now());
+            entityManager.refresh(invoice);
+        }
         return invoice;
+    }
+
+    @Transactional
+    public CommercialInvoice billShipment(UUID shipmentId, LocalDate dueDate, String owner) {
+        return billShipment(shipmentId, dueDate, owner, null, null);
     }
 
     @Transactional
     public CommercialInvoice billShipment(
             UUID shipmentId,
             LocalDate dueDate,
-            String owner) {
+            String owner,
+            String taxJurisdictionCode,
+            String taxCode) {
 
+        boolean hasJurisdiction = taxJurisdictionCode != null && !taxJurisdictionCode.isBlank();
+        boolean hasTaxCode = taxCode != null && !taxCode.isBlank();
+        if (hasJurisdiction != hasTaxCode) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Both tax jurisdiction code and tax code are required when applying tax");
+        }
         UUID tenantId = TenantContext.getTenantId();
         if (dueDate == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice due date is required");
@@ -116,6 +162,14 @@ public class BillingService {
 
         if (existing != null) {
             if ("DRAFT".equalsIgnoreCase(existing.getLifecycleStatus())) {
+                if (hasJurisdiction) {
+                    if (existing.getTaxCode() != null && !existing.getTaxCode().isBlank()) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                "A tax rule is already applied to this draft invoice");
+                    }
+                    financialHardening.applyTaxToDraftInvoice(existing.getId(), taxJurisdictionCode, taxCode, LocalDate.now());
+                    entityManager.refresh(existing);
+                }
                 if (existing.getTaxAmount() != null && existing.getTaxAmount().signum() > 0)
                     finance.postInvoiceWithTax(tenantId, existing.getId(), existing.getInvoiceAmount(), existing.getTaxAmount(),
                             existing.getCurrency(), existing.getInvoiceNo());
@@ -154,26 +208,34 @@ public class BillingService {
             shipments.save(shipment);
         }
 
-        CommercialInvoice invoice = invoices.saveAndFlush(
-                new CommercialInvoice(
-                        tenantId,
-                        invoiceNo,
-                        LocalDate.now(),
-                        shipment.getClientName() != null
-                                ? shipment.getClientName()
-                                : shipment.getContact(),
-                        shipmentId,
-                        currency,
-                        amount,
-                        dueDate,
-                        owner));
+        CommercialInvoice invoice = new CommercialInvoice(
+                tenantId,
+                invoiceNo,
+                LocalDate.now(),
+                shipment.getClientName() != null ? shipment.getClientName() : shipment.getContact(),
+                shipmentId,
+                currency,
+                amount,
+                dueDate,
+                owner);
+        // Persist every new invoice as a draft first. This makes tax application
+        // part of the same transaction and ensures the immutable-issued-document
+        // database guard never sees a financial edit after issuance.
+        invoice.changeLifecycleStatus("DRAFT");
+        invoice = invoices.saveAndFlush(invoice);
+        invoices.insertLifecycleHistory(tenantId, invoice.getId(), null, "DRAFT",
+                "Draft invoice created from shipment billing", currentUser());
 
+        if (hasJurisdiction) {
+            financialHardening.applyTaxToDraftInvoice(invoice.getId(), taxJurisdictionCode, taxCode, LocalDate.now());
+            entityManager.refresh(invoice);
+        }
         if (invoice.getTaxAmount() != null && invoice.getTaxAmount().signum() > 0)
             finance.postInvoiceWithTax(tenantId, invoice.getId(), invoice.getInvoiceAmount(), invoice.getTaxAmount(), currency, invoiceNo);
-        else finance.postInvoice(tenantId, invoice.getId(), amount, currency, invoiceNo);
+        else finance.postInvoice(tenantId, invoice.getId(), invoice.getInvoiceAmount(), currency, invoiceNo);
         invoice.changeLifecycleStatus("ISSUED");
         invoices.updateLifecycleStatus(tenantId, invoice.getId(), "ISSUED");
-        invoices.insertLifecycleHistory(tenantId, invoice.getId(), null, "ISSUED",
+        invoices.insertLifecycleHistory(tenantId, invoice.getId(), "DRAFT", "ISSUED",
                 "Invoice issued from shipment billing", currentUser());
 
         return invoice;

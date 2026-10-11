@@ -401,14 +401,14 @@ public class ReportingService {
         BigDecimal[] shipmentCosts = jdbc.queryForObject(
                 """
                         SELECT
-                            COALESCE(SUM(COALESCE(s.amount_paid_to_supply, s.supplier_cost, 0)), 0) AS supplier_cost,
+                            COALESCE(SUM(COALESCE(s.supplier_cost, s.amount_paid_to_supply, 0)), 0) AS supplier_cost,
 
-                            COALESCE(SUM(COALESCE(s.other_expenses, s.other_cost, 0)), 0) AS other_cost,
+                            COALESCE(SUM(COALESCE(s.other_cost, 0)), 0) AS other_cost,
 
                             COALESCE(SUM(
                                 COALESCE(s.amount_billed_to_client, 0)
-                                - COALESCE(s.amount_paid_to_supply, s.supplier_cost, 0)
-                                - COALESCE(s.other_expenses, s.other_cost, 0)
+                                - COALESCE(s.supplier_cost, s.amount_paid_to_supply, 0)
+                                - COALESCE(s.other_cost, 0)
                             ), 0) AS gross_profit
 
                         FROM shipments s
@@ -443,24 +443,23 @@ public class ReportingService {
 
         BigDecimal expenses = scalarMoney(
                 """
-                        SELECT COALESCE(
-                            SUM(
-                                COALESCE(
-                                    usd_equivalent,
-                                    original_amount
-                                )
-                            ),
-                            0
-                        )
-                        FROM expense_records
-                        WHERE tenant_id = ?
-                          AND expense_date BETWEEN ?::date AND ?::date
-                          AND UPPER(currency) = ?
+                        SELECT COALESCE(SUM(COALESCE(e.usd_equivalent, e.original_amount)), 0)
+                          FROM expense_records e
+                         WHERE e.tenant_id = ?
+                           AND e.expense_date BETWEEN ?::date AND ?::date
+                           AND UPPER(e.currency) = ?
                         """,
-                tenantId,
-                from,
-                to,
-                currency);
+                tenantId, from, to, currency);
+        BigDecimal shipmentOtherExpenses = scalarMoney(
+                """
+                        SELECT COALESCE(SUM(COALESCE(other_expenses, 0)), 0)
+                          FROM shipments
+                         WHERE tenant_id = ?
+                           AND UPPER(COALESCE(NULLIF(currency, ''), ?)) = ?
+                           AND COALESCE(date_opened, created_at::date) BETWEEN ?::date AND ?::date
+                        """,
+                tenantId, currency, currency, from, to);
+        expenses = expenses.add(shipmentOtherExpenses);
 
         BigDecimal invoiced = nz(invoiceTotals[0]).add(nz(legacyShipmentTotals[0]));
 
@@ -932,16 +931,11 @@ public class ReportingService {
                                      ) AS revenue,
 
                                      COALESCE(
-                                         SUM(COALESCE(amount_paid_to_supply, supplier_cost, 0)),
+                                         SUM(COALESCE(supplier_cost, amount_paid_to_supply, 0)),
                                          0
                                      ) AS supplier_cost,
 
-                                     COALESCE(
-                                         SUM(
-                                             COALESCE(other_expenses, other_cost, 0)
-                                         ),
-                                         0
-                                     ) AS other_cost
+                                     COALESCE(SUM(COALESCE(other_cost, 0)), 0) AS other_cost
 
                                  FROM shipments
                                  WHERE tenant_id = ?
@@ -1021,8 +1015,9 @@ public class ReportingService {
                                 GREATEST(COALESCE(amount_billed_to_client, 0)
                                          - COALESCE(amount_paid_by_client, 0), 0) AS outstanding,
                                 COALESCE(amount_billed_to_client, 0)
-                                  - COALESCE(amount_paid_to_supply, supplier_cost, 0)
-                                  - COALESCE(other_expenses, other_cost, 0) AS net_income
+                                  - COALESCE(supplier_cost, amount_paid_to_supply, 0)
+                                  - COALESCE(other_cost, 0)
+                                  - COALESCE(other_expenses, 0) AS net_income
                             FROM shipments
                             WHERE tenant_id = ?
                               AND UPPER(COALESCE(NULLIF(currency, ''), ?)) = ?
@@ -1080,11 +1075,12 @@ public class ReportingService {
                                                  GREATEST(COALESCE(gross_weight_kg,0),
                                                           COALESCE(volumetric_weight_kg,0)), 0)), 0) AS chargeable_weight,
                             COALESCE(SUM(COALESCE(amount_billed_to_client,0)),0) AS revenue,
-                            COALESCE(SUM(COALESCE(amount_paid_to_supply, supplier_cost, 0)),0) AS supplier_cost,
-                            COALESCE(SUM(COALESCE(other_expenses, other_cost, 0)),0) AS other_cost,
+                            COALESCE(SUM(COALESCE(supplier_cost, amount_paid_to_supply, 0)),0) AS supplier_cost,
+                            COALESCE(SUM(COALESCE(other_cost, 0)),0) AS other_cost,
                             COALESCE(SUM(COALESCE(amount_billed_to_client,0)
-                                - COALESCE(amount_paid_to_supply, supplier_cost, 0)
-                                - COALESCE(other_expenses, other_cost, 0)),0) AS net_income
+                                - COALESCE(supplier_cost, amount_paid_to_supply, 0)
+                                - COALESCE(other_cost, 0)
+                                - COALESCE(other_expenses, 0)),0) AS net_income
                         FROM shipments
                         WHERE tenant_id = ?
                           AND UPPER(COALESCE(NULLIF(currency, ''), ?)) = ?
@@ -1143,16 +1139,11 @@ public class ReportingService {
                                      ) AS revenue,
 
                                      COALESCE(
-                                         SUM(COALESCE(amount_paid_to_supply, supplier_cost, 0)),
+                                         SUM(COALESCE(supplier_cost, amount_paid_to_supply, 0)),
                                          0
                                      ) AS supplier_cost,
 
-                                     COALESCE(
-                                         SUM(
-                                             COALESCE(other_expenses, other_cost, 0)
-                                         ),
-                                         0
-                                     ) AS other_cost,
+                                     COALESCE(SUM(COALESCE(other_cost, 0)), 0) AS other_cost,
 
                                      COUNT(*) FILTER (
                                          WHERE EXISTS (
@@ -1277,10 +1268,10 @@ public class ReportingService {
 
                                      COALESCE(amount_billed_to_client, 0) AS revenue,
 
-                                     COALESCE(amount_paid_to_supply, supplier_cost, 0)
+                                     COALESCE(supplier_cost, amount_paid_to_supply, 0)
                                          AS supplier_cost,
 
-                                     COALESCE(other_expenses, other_cost, 0)
+                                     COALESCE(other_cost, 0)
                                          AS other_cost,
 
                                      status
@@ -1432,15 +1423,15 @@ public class ReportingService {
                                          COALESCE(SUM(COALESCE(chargeable_weight_kg,
                                              GREATEST(COALESCE(gross_weight_kg,0),
                                                       COALESCE(volumetric_weight_kg,0)), 0)), 0) AS chargeable_weight,
-                                         COALESCE(SUM(COALESCE(amount_paid_to_supply, supplier_cost, 0)), 0) AS supplier_payments,
-                                         COALESCE(SUM(COALESCE(other_expenses, other_cost, 0)), 0) AS other_expenses,
+                                         COALESCE(SUM(COALESCE(amount_paid_to_supply, 0)), 0) AS supplier_payments,
+                                         COALESCE(SUM(COALESCE(other_expenses, 0)), 0) AS other_expenses,
                                          COUNT(*) FILTER (WHERE status IN ('DELIVERED','COMPLETED')) AS completed,
                                          COUNT(*) FILTER (WHERE status = 'DEPARTED') AS departed,
 
                                          COALESCE(
                                              SUM(
                                                  COALESCE(amount_billed_to_client, 0)
-                                                 - COALESCE(supplier_cost, 0)
+                                                 - COALESCE(supplier_cost, amount_paid_to_supply, 0)
                                                  - COALESCE(other_cost, 0)
                                              ),
                                              0
@@ -1449,8 +1440,9 @@ public class ReportingService {
                                          COALESCE(
                                              SUM(
                                                  COALESCE(amount_billed_to_client,0)
-                                                 - COALESCE(amount_paid_to_supply, supplier_cost, 0)
-                                                 - COALESCE(other_expenses, other_cost, 0)
+                                                 - COALESCE(supplier_cost, amount_paid_to_supply, 0)
+                                                 - COALESCE(other_cost, 0)
+                                                 - COALESCE(other_expenses, 0)
                                              ),
                                              0
                                          ) AS net_income

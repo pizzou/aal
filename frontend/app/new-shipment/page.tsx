@@ -240,11 +240,21 @@ export default function NewShipmentPage() {
 
   const estimatedNetIncome = useMemo(() => {
     const revenue = numberOrUndefined(form.clientRevenue) ?? 0;
-    const supply = numberOrUndefined(form.amountPaidToSupply) ?? 0;
-    const expenses = numberOrUndefined(form.otherExpenses) ?? 0;
+    const supplierCost =
+      numberOrUndefined(form.supplierCost) ??
+      numberOrUndefined(form.amountPaidToSupply) ??
+      0;
+    const otherCost = numberOrUndefined(form.otherCost) ?? 0;
+    const otherExpenses = numberOrUndefined(form.otherExpenses) ?? 0;
 
-    return revenue - supply - expenses;
-  }, [form.clientRevenue, form.amountPaidToSupply, form.otherExpenses]);
+    return revenue - supplierCost - otherCost - otherExpenses;
+  }, [
+    form.clientRevenue,
+    form.supplierCost,
+    form.amountPaidToSupply,
+    form.otherCost,
+    form.otherExpenses,
+  ]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();

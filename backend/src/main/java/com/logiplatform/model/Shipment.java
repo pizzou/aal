@@ -784,7 +784,8 @@ public class Shipment {
   
     public BigDecimal getTotalCost() {
 
-        return nz(supplierCost)
+        BigDecimal supplierCostBasis = supplierCost != null ? supplierCost : nz(amountPaidToSupply);
+        return nz(supplierCostBasis)
                 .add(nz(otherCost));
     }
 
@@ -804,8 +805,7 @@ public class Shipment {
             return null;
         }
 
-        return amountBilledToClient
-                .subtract(nz(amountPaidToSupply))
+        return getGrossProfit()
                 .subtract(nz(otherExpenses));
     }
 

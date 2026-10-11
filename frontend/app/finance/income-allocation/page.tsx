@@ -1,102 +1,105 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import {
   ApiError,
   FinanceBankDestination,
-  FinanceProfitAllocationResult,
-  FinanceProfitRun,
-  FinanceProfitRule,
-  Shipment,
+  FinanceIncomeAllocationRule,
+  FinanceIncomeSource,
   financeIncomeConfigurationApi,
-  financeProfitAllocationApi,
-  shipmentsApi,
 } from "@/lib/api-client";
 
-type RuleDraft = { bankDestinationId: string; percentage: string };
+type SourceForm = { code: string; name: string; description: string };
+type BankForm = {
+  code: string;
+  name: string;
+  accountReference: string;
+  description: string;
+};
+type RuleForm = {
+  incomeSourceId: string;
+  bankDestinationId: string;
+  percentage: string;
+};
+const emptySource: SourceForm = { code: "", name: "", description: "" };
+const emptyBank: BankForm = {
+  code: "",
+  name: "",
+  accountReference: "",
+  description: "",
+};
+const emptyRule: RuleForm = {
+  incomeSourceId: "",
+  bankDestinationId: "",
+  percentage: "",
+};
+
 function messageFor(error: unknown) {
   return error instanceof ApiError || error instanceof Error
     ? error.message
-    : "Unable to complete profit distribution request.";
-}
-function money(n: number, currency: string) {
-  return `${currency} ${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    : "Unable to complete the income allocation request.";
 }
 
-export default function ProfitAllocationPage() {
+export default function IncomeAllocationPage() {
   const { accessToken, role, isLoading } = useAuth();
   const router = useRouter();
   const allowed = ["ADMIN", "MANAGER", "FINANCE"].includes(role || "");
+  const [sources, setSources] = useState<FinanceIncomeSource[]>([]);
   const [banks, setBanks] = useState<FinanceBankDestination[]>([]);
-  const [rules, setRules] = useState<FinanceProfitRule[]>([]);
-  const [drafts, setDrafts] = useState<RuleDraft[]>([]);
-  const [shipments, setShipments] = useState<Shipment[]>([]);
-  const [shipmentId, setShipmentId] = useState("");
-  const [result, setResult] = useState<FinanceProfitAllocationResult | null>(
-    null,
-  );
-  const [runs, setRuns] = useState<FinanceProfitRun[]>([]);
+  const [rules, setRules] = useState<FinanceIncomeAllocationRule[]>([]);
+  const [sourceForm, setSourceForm] = useState<SourceForm>(emptySource);
+  const [bankForm, setBankForm] = useState<BankForm>(emptyBank);
+  const [editingBankId, setEditingBankId] = useState<string | null>(null);
+  const [editingBankForm, setEditingBankForm] = useState<BankForm>(emptyBank);
+  const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
+  const [editingSourceForm, setEditingSourceForm] =
+    useState<SourceForm>(emptySource);
+  const [ruleForm, setRuleForm] = useState<RuleForm>(emptyRule);
+  const [editingRule, setEditingRule] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!accessToken || !allowed) return;
     setBusy(true);
     setError("");
     try {
-      const [nextBanks, nextRules, shipmentPage, nextRuns] = await Promise.all([
+      const [nextSources, nextBanks, nextRules] = await Promise.all([
+        financeIncomeConfigurationApi.sources(),
         financeIncomeConfigurationApi.banks(),
-        financeProfitAllocationApi.rules(),
-        shipmentsApi.list(),
-        financeProfitAllocationApi.runs(),
+        financeIncomeConfigurationApi.rules(),
       ]);
-      const activeBanks = nextBanks.filter((bank) => bank.active);
-      setBanks(activeBanks);
+      setSources(nextSources);
+      setBanks(nextBanks);
       setRules(nextRules);
-      setShipments(shipmentPage.content || []);
-      setRuns(nextRuns);
-      const activeRules = nextRules.filter((rule) => rule.active);
-      if (activeRules.length) {
-        setDrafts(
-          activeRules.map((rule) => ({
-            bankDestinationId: rule.bankDestinationId,
-            percentage: String(rule.percentage),
-          })),
-        );
-      } else {
-        // Pre-fill the customer-requested split only when matching destinations
-        // already exist. Nothing is inserted or activated until the user saves.
-        const access = activeBanks.find((bank) => /access/i.test(bank.name));
-        const equity = activeBanks.find((bank) => /equity/i.test(bank.name));
-        const bk = activeBanks.find((bank) =>
-          /bank of kigali|\bbk\b/i.test(`${bank.name} ${bank.code}`),
-        );
-        const suggested = [
-          access && { bankDestinationId: access.id, percentage: "40" },
-          equity && { bankDestinationId: equity.id, percentage: "40" },
-          bk && { bankDestinationId: bk.id, percentage: "20" },
-        ].filter(Boolean) as RuleDraft[];
-        setDrafts(
-          suggested.length
-            ? suggested
-            : [
-                {
-                  bankDestinationId: activeBanks[0]?.id || "",
-                  percentage: "100",
-                },
-              ],
-        );
-      }
+      setEditingRule(
+        Object.fromEntries(
+          nextRules.map((rule) => [rule.id, String(rule.percentage)]),
+        ),
+      );
+      setRuleForm((current) => ({
+        incomeSourceId: nextSources.some(
+          (source) => source.id === current.incomeSourceId && source.active,
+        )
+          ? current.incomeSourceId
+          : nextSources.find((source) => source.active)?.id || "",
+        bankDestinationId: nextBanks.some(
+          (bank) => bank.id === current.bankDestinationId && bank.active,
+        )
+          ? current.bankDestinationId
+          : nextBanks.find((bank) => bank.active)?.id || "",
+        percentage: current.percentage,
+      }));
     } catch (e) {
       setError(messageFor(e));
     } finally {
       setBusy(false);
     }
-  }
+  }, [accessToken, allowed]);
 
   useEffect(() => {
     if (!isLoading && (!accessToken || !allowed)) {
@@ -104,65 +107,31 @@ export default function ProfitAllocationPage() {
       return;
     }
     if (accessToken && allowed) void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, isLoading, role]);
+  }, [accessToken, allowed, isLoading, load, router]);
 
-  const totalPercent = useMemo(
-    () =>
-      drafts.reduce((total, row) => total + (Number(row.percentage) || 0), 0),
-    [drafts],
+  const activeSources = useMemo(
+    () => sources.filter((item) => item.active),
+    [sources],
+  );
+  const activeBanks = useMemo(
+    () => banks.filter((item) => item.active),
+    [banks],
   );
 
-  function updateDraft(index: number, field: keyof RuleDraft, value: string) {
-    setDrafts((current) =>
-      current.map((row, i) => (i === index ? { ...row, [field]: value } : row)),
-    );
-  }
-
-  async function saveRules(event: FormEvent) {
+  async function submitSource(event: FormEvent) {
     event.preventDefault();
     setError("");
     setMessage("");
-    const chosen = drafts.filter(
-      (row) => row.bankDestinationId && row.percentage.trim() !== "",
-    );
-    const total = chosen.reduce((sum, row) => sum + Number(row.percentage), 0);
-    if (!chosen.length) {
-      setError("Add at least one active bank destination.");
-      return;
-    }
-    if (
-      new Set(chosen.map((row) => row.bankDestinationId)).size !== chosen.length
-    ) {
-      setError("Each bank can appear only once.");
-      return;
-    }
-    if (Math.abs(total - 100) > 0.0001) {
-      setError(
-        `Profit shares must total exactly 100%. Current total: ${total.toFixed(2)}%.`,
-      );
-      return;
-    }
     setBusy(true);
     try {
-      const saved = await financeProfitAllocationApi.saveRules(
-        chosen.map((row) => ({
-          bankDestinationId: row.bankDestinationId,
-          percentage: Number(row.percentage),
-        })),
-      );
-      setRules(saved);
-      setDrafts(
-        saved
-          .filter((rule) => rule.active)
-          .map((rule) => ({
-            bankDestinationId: rule.bankDestinationId,
-            percentage: String(rule.percentage),
-          })),
-      );
-      setMessage(
-        "Profit allocation rules saved. Future distributions will use these percentages.",
-      );
+      await financeIncomeConfigurationApi.createSource({
+        code: sourceForm.code.trim().toUpperCase(),
+        name: sourceForm.name.trim(),
+        description: sourceForm.description.trim() || undefined,
+      });
+      setSourceForm(emptySource);
+      setMessage("Income source created.");
+      await load();
     } catch (e) {
       setError(messageFor(e));
     } finally {
@@ -170,24 +139,187 @@ export default function ProfitAllocationPage() {
     }
   }
 
-  async function allocate(event: FormEvent) {
+  async function submitBank(event: FormEvent) {
     event.preventDefault();
-    if (!shipmentId) {
-      setError("Select a shipment first.");
+    setError("");
+    setMessage("");
+    setBusy(true);
+    try {
+      await financeIncomeConfigurationApi.createBank({
+        code: bankForm.code.trim().toUpperCase(),
+        name: bankForm.name.trim(),
+        accountReference: bankForm.accountReference.trim() || undefined,
+        description: bankForm.description.trim() || undefined,
+      });
+      setBankForm(emptyBank);
+      setMessage("Bank destination created.");
+      await load();
+    } catch (e) {
+      setError(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitRule(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    const percentage = Number(ruleForm.percentage);
+    if (
+      !ruleForm.incomeSourceId ||
+      !ruleForm.bankDestinationId ||
+      !ruleForm.percentage.trim() ||
+      !Number.isFinite(percentage) ||
+      percentage < 0 ||
+      percentage > 100
+    ) {
+      setError(
+        "Choose an active source and bank, and enter a percentage from 0 to 100.",
+      );
+      return;
+    }
+    setBusy(true);
+    try {
+      await financeIncomeConfigurationApi.createRule({
+        incomeSourceId: ruleForm.incomeSourceId,
+        bankDestinationId: ruleForm.bankDestinationId,
+        percentage,
+      });
+      setRuleForm((current) => ({ ...current, percentage: "" }));
+      setMessage(
+        "Income allocation rule created. Ensure active rules for the source total exactly 100% before recording a payment.",
+      );
+      await load();
+    } catch (e) {
+      setError(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveSourceEdit(source: FinanceIncomeSource) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await financeIncomeConfigurationApi.updateSource(source.id, {
+        code: editingSourceForm.code.trim().toUpperCase(),
+        name: editingSourceForm.name.trim(),
+        description: editingSourceForm.description.trim(),
+        active: source.active,
+      });
+      setEditingSourceId(null);
+      setMessage("Income source updated.");
+      await load();
+    } catch (e) {
+      setError(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveBankEdit(bank: FinanceBankDestination) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await financeIncomeConfigurationApi.updateBank(bank.id, {
+        code: editingBankForm.code.trim().toUpperCase(),
+        name: editingBankForm.name.trim(),
+        accountReference: editingBankForm.accountReference.trim(),
+        description: editingBankForm.description.trim(),
+        active: bank.active,
+      });
+      setEditingBankId(null);
+      setMessage("Bank destination updated.");
+      await load();
+    } catch (e) {
+      setError(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleSource(source: FinanceIncomeSource) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await financeIncomeConfigurationApi.updateSource(source.id, {
+        code: source.code,
+        name: source.name,
+        description: source.description || "",
+        active: !source.active,
+      });
+      setMessage(
+        `Income source ${source.active ? "deactivated" : "activated"}.`,
+      );
+      await load();
+    } catch (e) {
+      setError(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleBank(bank: FinanceBankDestination) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await financeIncomeConfigurationApi.updateBank(bank.id, {
+        code: bank.code,
+        name: bank.name,
+        accountReference: bank.accountReference || "",
+        description: bank.description || "",
+        active: !bank.active,
+      });
+      setMessage(
+        `Bank destination ${bank.active ? "deactivated" : "activated"}.`,
+      );
+      await load();
+    } catch (e) {
+      setError(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveRule(rule: FinanceIncomeAllocationRule) {
+    const percentage = Number(editingRule[rule.id]);
+    if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+      setError("Rule percentage must be between 0 and 100.");
       return;
     }
     setBusy(true);
     setError("");
     setMessage("");
-    setResult(null);
     try {
-      const created =
-        await financeProfitAllocationApi.allocateShipment(shipmentId);
-      setResult(created);
-      setMessage(
-        "Profit distribution instructions created and recorded. No bank transfer was sent.",
-      );
-      setRuns(await financeProfitAllocationApi.runs());
+      await financeIncomeConfigurationApi.updateRule(rule.id, {
+        percentage,
+        active: rule.active,
+      });
+      setMessage("Income allocation rule updated.");
+      await load();
+    } catch (e) {
+      setError(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleRule(rule: FinanceIncomeAllocationRule) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await financeIncomeConfigurationApi.updateRule(rule.id, {
+        percentage: Number(editingRule[rule.id] ?? rule.percentage),
+        active: !rule.active,
+      });
+      setMessage(`Rule ${rule.active ? "deactivated" : "activated"}.`);
+      await load();
     } catch (e) {
       setError(messageFor(e));
     } finally {
@@ -232,17 +364,18 @@ export default function ProfitAllocationPage() {
           >
             FINANCE CONTROL
           </p>
-          <h1 style={{ margin: 0 }}>Profit Distribution</h1>
-          <p style={{ maxWidth: 760, lineHeight: 1.6 }}>
-            Calculate a shipment's net-income basis and create an auditable 100%
-            distribution instruction across configured bank destinations.
+          <h1 style={{ margin: 0 }}>Income Allocation & Bank Destinations</h1>
+          <p style={{ maxWidth: 800, lineHeight: 1.6 }}>
+            Manage real bank destinations, income sources and the percentage
+            rules used to allocate recorded customer receipts. Changes affect
+            future payment allocation snapshots; existing payment records are
+            not rewritten.
           </p>
         </div>
-        <Link className="btn" href="/finance/income-allocation">
-          Manage bank accounts
+        <Link className="btn" href="/finance/profit-allocation">
+          Open profit distribution
         </Link>
       </header>
-
       {error && (
         <div
           className="alert alert-error"
@@ -259,331 +392,565 @@ export default function ProfitAllocationPage() {
       )}
 
       <section className="card" style={{ padding: 24, marginBottom: 22 }}>
-        <h2 style={{ marginTop: 0 }}>Bank split rules</h2>
+        <h2 style={{ marginTop: 0 }}>Bank destinations</h2>
         <p>
-          Configure shares on <strong>net income/profit</strong>, not on
-          customer payments or gross revenue. Access Bank 40%, Equity 40%, and
-          Bank of Kigali 20% are suggested only when matching bank destinations
-          already exist; save to activate them.
+          Use verified account references only. Do not enter online banking
+          passwords, PINs, card numbers or API secrets here.
         </p>
-        {!banks.length && (
-          <p>
-            No active bank destinations are configured.{" "}
-            <Link href="/finance/income-allocation">
-              Add Access Bank, Equity Bank and Bank of Kigali under Income
-              Allocation
-            </Link>
-            , then return here.
-          </p>
-        )}
-        <form onSubmit={saveRules}>
-          <div style={{ overflowX: "auto" }}>
-            <table
-              className="data-table"
-              style={{ width: "100%", minWidth: 620 }}
-            >
-              <thead>
-                <tr>
-                  <th>Bank destination</th>
-                  <th>Profit share (%)</th>
-                  <th>Illustration on $100 net profit</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {drafts.map((row, index) => (
-                  <tr key={`${index}-${row.bankDestinationId}`}>
-                    <td>
-                      <select
-                        aria-label={`Bank destination ${index + 1}`}
-                        value={row.bankDestinationId}
-                        onChange={(e) =>
-                          updateDraft(
-                            index,
-                            "bankDestinationId",
-                            e.target.value,
-                          )
-                        }
-                        required
-                        style={{ width: "100%", minWidth: 220 }}
-                      >
-                        <option value="">Select a configured bank</option>
-                        {banks.map((bank) => (
-                          <option key={bank.id} value={bank.id}>
-                            {bank.name}
-                            {bank.accountReference
-                              ? ` · ${bank.accountReference}`
-                              : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <input
-                        aria-label={`Profit percentage ${index + 1}`}
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.0001"
-                        value={row.percentage}
-                        onChange={(e) =>
-                          updateDraft(index, "percentage", e.target.value)
-                        }
-                        required
-                        style={{ width: 130 }}
-                      />
-                    </td>
-                    <td>
-                      {money(
-                        (100 * (Number(row.percentage) || 0)) / 100,
-                        "USD",
-                      )}
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-small"
-                        onClick={() =>
-                          setDrafts((current) =>
-                            current.filter((_, i) => i !== index),
-                          )
-                        }
-                        disabled={busy || drafts.length <= 1}
-                      >
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {!drafts.length && (
-                  <tr>
-                    <td colSpan={4}>Add a bank to configure profit sharing.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              flexWrap: "wrap",
-              gap: 12,
-              justifyContent: "space-between",
-              marginTop: 16,
-            }}
-          >
-            <strong>
-              Total:{" "}
-              <span
-                style={{
-                  color:
-                    Math.abs(totalPercent - 100) < 0.0001
-                      ? "#16794b"
-                      : "#b42318",
-                }}
-              >
-                {totalPercent.toFixed(4)}%
-              </span>
-            </strong>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                className="btn"
-                disabled={busy || banks.length === 0}
-                onClick={() =>
-                  setDrafts((current) => [
-                    ...current,
-                    { bankDestinationId: "", percentage: "0" },
-                  ])
-                }
-              >
-                Add destination
-              </button>
-              <button
-                className="btn btn-primary"
-                type="submit"
-                disabled={
-                  busy ||
-                  !banks.length ||
-                  !drafts.length ||
-                  Math.abs(totalPercent - 100) >= 0.0001
-                }
-              >
-                {busy ? "Saving…" : "Save profit rules"}
-              </button>
-            </div>
+        <form
+          onSubmit={submitBank}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+            gap: 12,
+            marginBottom: 20,
+          }}
+        >
+          <label>
+            Bank code
+            <input
+              required
+              maxLength={80}
+              value={bankForm.code}
+              onChange={(e) =>
+                setBankForm({ ...bankForm, code: e.target.value })
+              }
+            />
+          </label>
+          <label>
+            Bank / destination name
+            <input
+              required
+              maxLength={160}
+              value={bankForm.name}
+              onChange={(e) =>
+                setBankForm({ ...bankForm, name: e.target.value })
+              }
+            />
+          </label>
+          <label>
+            Account reference (masked or internal)
+            <input
+              maxLength={160}
+              value={bankForm.accountReference}
+              onChange={(e) =>
+                setBankForm({ ...bankForm, accountReference: e.target.value })
+              }
+            />
+          </label>
+          <label>
+            Description
+            <input
+              maxLength={500}
+              value={bankForm.description}
+              onChange={(e) =>
+                setBankForm({ ...bankForm, description: e.target.value })
+              }
+            />
+          </label>
+          <div style={{ display: "flex", alignItems: "end" }}>
+            <button className="btn btn-primary" disabled={busy} type="submit">
+              {busy ? "Saving…" : "Add bank destination"}
+            </button>
           </div>
         </form>
+        <div style={{ overflowX: "auto" }}>
+          <table
+            className="data-table"
+            style={{ width: "100%", minWidth: 700 }}
+          >
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Destination</th>
+                <th>Account reference</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {banks.map((bank) => (
+                <tr key={bank.id}>
+                  <td>
+                    {editingBankId === bank.id ? (
+                      <input
+                        aria-label="Edit bank code"
+                        maxLength={80}
+                        value={editingBankForm.code}
+                        onChange={(e) =>
+                          setEditingBankForm({
+                            ...editingBankForm,
+                            code: e.target.value,
+                          })
+                        }
+                      />
+                    ) : (
+                      bank.code
+                    )}
+                  </td>
+                  <td>
+                    {editingBankId === bank.id ? (
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <input
+                          aria-label="Edit bank name"
+                          maxLength={160}
+                          value={editingBankForm.name}
+                          onChange={(e) =>
+                            setEditingBankForm({
+                              ...editingBankForm,
+                              name: e.target.value,
+                            })
+                          }
+                        />
+                        <input
+                          aria-label="Edit bank description"
+                          maxLength={500}
+                          value={editingBankForm.description}
+                          onChange={(e) =>
+                            setEditingBankForm({
+                              ...editingBankForm,
+                              description: e.target.value,
+                            })
+                          }
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        {bank.name}
+                        <div style={{ opacity: 0.7, fontSize: 12 }}>
+                          {bank.description}
+                        </div>
+                      </>
+                    )}
+                  </td>
+                  <td>
+                    {editingBankId === bank.id ? (
+                      <input
+                        aria-label="Edit account reference"
+                        maxLength={160}
+                        value={editingBankForm.accountReference}
+                        onChange={(e) =>
+                          setEditingBankForm({
+                            ...editingBankForm,
+                            accountReference: e.target.value,
+                          })
+                        }
+                      />
+                    ) : (
+                      bank.accountReference || "—"
+                    )}
+                  </td>
+                  <td>{bank.active ? "Active" : "Inactive"}</td>
+                  <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {editingBankId === bank.id ? (
+                      <>
+                        <button
+                          className="btn btn-small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void saveBankEdit(bank)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          className="btn btn-small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setEditingBankId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className="btn btn-small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setEditingBankId(bank.id);
+                            setEditingBankForm({
+                              code: bank.code,
+                              name: bank.name,
+                              accountReference: bank.accountReference || "",
+                              description: bank.description || "",
+                            });
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="btn btn-small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void toggleBank(bank)}
+                        >
+                          {bank.active ? "Deactivate" : "Activate"}
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {!banks.length && (
+                <tr>
+                  <td colSpan={5}>
+                    No bank destinations configured yet. Add the real
+                    destinations used by your finance team.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="card" style={{ padding: 24, marginBottom: 22 }}>
-        <h2 style={{ marginTop: 0 }}>Create distribution instructions</h2>
-        <p>
-          The calculation follows the current AAL net-income formula: billed
-          revenue minus supplier payments and other expenses. A distribution is
-          blocked if the result is zero/negative or the configured split is not
-          exactly 100%.
-        </p>
+        <h2 style={{ marginTop: 0 }}>Income sources</h2>
         <form
-          onSubmit={allocate}
+          onSubmit={submitSource}
           style={{
-            display: "flex",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
             gap: 12,
-            alignItems: "end",
-            flexWrap: "wrap",
+            marginBottom: 20,
           }}
         >
-          <label style={{ flex: "1 1 460px" }}>
-            Shipment
-            <select
-              value={shipmentId}
-              onChange={(e) => setShipmentId(e.target.value)}
+          <label>
+            Source code
+            <input
               required
-              style={{ display: "block", width: "100%", marginTop: 6 }}
+              maxLength={80}
+              value={sourceForm.code}
+              onChange={(e) =>
+                setSourceForm({ ...sourceForm, code: e.target.value })
+              }
+            />
+          </label>
+          <label>
+            Source name
+            <input
+              required
+              maxLength={160}
+              value={sourceForm.name}
+              onChange={(e) =>
+                setSourceForm({ ...sourceForm, name: e.target.value })
+              }
+            />
+          </label>
+          <label>
+            Description
+            <input
+              maxLength={500}
+              value={sourceForm.description}
+              onChange={(e) =>
+                setSourceForm({ ...sourceForm, description: e.target.value })
+              }
+            />
+          </label>
+          <div style={{ display: "flex", alignItems: "end" }}>
+            <button className="btn btn-primary" disabled={busy} type="submit">
+              {busy ? "Saving…" : "Add income source"}
+            </button>
+          </div>
+        </form>
+        <div style={{ overflowX: "auto" }}>
+          <table
+            className="data-table"
+            style={{ width: "100%", minWidth: 600 }}
+          >
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Source</th>
+                <th>Description</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sources.map((source) => (
+                <tr key={source.id}>
+                  <td>
+                    {editingSourceId === source.id ? (
+                      <input
+                        aria-label="Edit source code"
+                        maxLength={80}
+                        value={editingSourceForm.code}
+                        onChange={(e) =>
+                          setEditingSourceForm({
+                            ...editingSourceForm,
+                            code: e.target.value,
+                          })
+                        }
+                      />
+                    ) : (
+                      source.code
+                    )}
+                  </td>
+                  <td>
+                    {editingSourceId === source.id ? (
+                      <input
+                        aria-label="Edit source name"
+                        maxLength={160}
+                        value={editingSourceForm.name}
+                        onChange={(e) =>
+                          setEditingSourceForm({
+                            ...editingSourceForm,
+                            name: e.target.value,
+                          })
+                        }
+                      />
+                    ) : (
+                      source.name
+                    )}
+                  </td>
+                  <td>
+                    {editingSourceId === source.id ? (
+                      <input
+                        aria-label="Edit source description"
+                        maxLength={500}
+                        value={editingSourceForm.description}
+                        onChange={(e) =>
+                          setEditingSourceForm({
+                            ...editingSourceForm,
+                            description: e.target.value,
+                          })
+                        }
+                      />
+                    ) : (
+                      source.description || "—"
+                    )}
+                  </td>
+                  <td>{source.active ? "Active" : "Inactive"}</td>
+                  <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {editingSourceId === source.id ? (
+                      <>
+                        <button
+                          className="btn btn-small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void saveSourceEdit(source)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          className="btn btn-small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setEditingSourceId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className="btn btn-small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setEditingSourceId(source.id);
+                            setEditingSourceForm({
+                              code: source.code,
+                              name: source.name,
+                              description: source.description || "",
+                            });
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="btn btn-small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void toggleSource(source)}
+                        >
+                          {source.active ? "Deactivate" : "Activate"}
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {!sources.length && (
+                <tr>
+                  <td colSpan={5}>
+                    No income sources configured yet. Create a source before
+                    defining receipt-allocation rules.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="card" style={{ padding: 24, marginBottom: 22 }}>
+        <h2 style={{ marginTop: 0 }}>Receipt allocation rules</h2>
+        <p>
+          Active rules for each income source must total exactly 100% before the
+          payment is allocated. Configure each source independently; these rules
+          allocate recorded receipts, not shipment profit.
+        </p>
+        <form
+          onSubmit={submitRule}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+            gap: 12,
+            marginBottom: 20,
+          }}
+        >
+          <label>
+            Income source
+            <select
+              required
+              value={ruleForm.incomeSourceId}
+              onChange={(e) =>
+                setRuleForm({ ...ruleForm, incomeSourceId: e.target.value })
+              }
             >
-              <option value="">Select shipment</option>
-              {shipments.map((shipment) => (
-                <option key={shipment.id} value={shipment.id}>
-                  {shipment.referenceCode} ·{" "}
-                  {shipment.clientName || "Unassigned client"} ·{" "}
-                  {shipment.currency || "USD"}
+              <option value="">Select source</option>
+              {activeSources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.name} ({source.code})
                 </option>
               ))}
             </select>
           </label>
-          <button
-            className="btn btn-primary"
-            type="submit"
-            disabled={busy || !rules.some((rule) => rule.active) || !shipmentId}
-          >
-            {busy ? "Processing…" : "Calculate & allocate profit"}
-          </button>
+          <label>
+            Bank destination
+            <select
+              required
+              value={ruleForm.bankDestinationId}
+              onChange={(e) =>
+                setRuleForm({ ...ruleForm, bankDestinationId: e.target.value })
+              }
+            >
+              <option value="">Select destination</option>
+              {activeBanks.map((bank) => (
+                <option key={bank.id} value={bank.id}>
+                  {bank.name} ({bank.code})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Allocation percentage
+            <input
+              required
+              type="number"
+              min="0"
+              max="100"
+              step="0.0001"
+              value={ruleForm.percentage}
+              onChange={(e) =>
+                setRuleForm({ ...ruleForm, percentage: e.target.value })
+              }
+              placeholder="Enter actual percentage"
+            />
+          </label>
+          <div style={{ display: "flex", alignItems: "end" }}>
+            <button
+              className="btn btn-primary"
+              disabled={busy || !activeSources.length || !activeBanks.length}
+              type="submit"
+            >
+              Add allocation rule
+            </button>
+          </div>
         </form>
-        <p style={{ fontSize: 13, opacity: 0.8, marginBottom: 0 }}>
-          This records an instruction and audit snapshot only. It does not
-          transfer funds to a bank account. Actual transfers require a
-          bank-approved API/payment integration, credentials, authorization and
-          reconciliation.
-        </p>
-      </section>
-
-      {result && (
-        <section className="card" style={{ padding: 24, marginBottom: 22 }}>
-          <h2 style={{ marginTop: 0 }}>
-            Distribution preview · {result.shipmentReference}
-          </h2>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: 12,
-              marginBottom: 16,
-            }}
+        <div style={{ overflowX: "auto" }}>
+          <table
+            className="data-table"
+            style={{ width: "100%", minWidth: 800 }}
           >
-            <Metric
-              label="Billed revenue"
-              value={money(result.revenue, result.currency)}
-            />
-            <Metric
-              label="Supplier payments"
-              value={money(result.supplierPaid, result.currency)}
-            />
-            <Metric
-              label="Other expenses"
-              value={money(result.otherExpenses, result.currency)}
-            />
-            <Metric
-              label="Net profit to distribute"
-              value={money(result.netProfit, result.currency)}
-            />
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table className="data-table" style={{ width: "100%" }}>
-              <thead>
-                <tr>
-                  <th>Bank</th>
-                  <th>Account reference</th>
-                  <th>Share</th>
-                  <th>Amount</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.allocations.map((item) => (
-                  <tr key={item.bankDestinationId}>
-                    <td>{item.bankName}</td>
-                    <td>{item.accountReference || "Not configured"}</td>
-                    <td>{Number(item.percentage).toFixed(2)}%</td>
+            <thead>
+              <tr>
+                <th>Income source</th>
+                <th>Bank destination</th>
+                <th>Share (%)</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map((rule) => {
+                const source = sources.find(
+                  (item) => item.id === rule.incomeSourceId,
+                );
+                const bank = banks.find(
+                  (item) => item.id === rule.bankDestinationId,
+                );
+                return (
+                  <tr key={rule.id}>
                     <td>
-                      <strong>{money(item.amount, item.currency)}</strong>
-                    </td>
-                    <td>Instruction only</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p>
-            <strong>Audit run:</strong> {result.runId}
-          </p>
-        </section>
-      )}
-
-      <section className="card" style={{ padding: 24 }}>
-        <h2 style={{ marginTop: 0 }}>Recent distribution runs</h2>
-        {runs.length ? (
-          <div style={{ overflowX: "auto" }}>
-            <table className="data-table" style={{ width: "100%" }}>
-              <thead>
-                <tr>
-                  <th>Created</th>
-                  <th>Shipment</th>
-                  <th>Net profit</th>
-                  <th>Status</th>
-                  <th>Run ID</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((run) => (
-                  <tr key={run.runId}>
-                    <td>{new Date(run.createdAt).toLocaleString()}</td>
-                    <td>{run.shipmentReference}</td>
-                    <td>{money(run.netProfit, run.currency)}</td>
-                    <td>
-                      {run.transferStatus === "INSTRUCTIONS_ONLY"
-                        ? "Instruction only · not transferred"
-                        : run.transferStatus}
+                      {source
+                        ? `${source.name} (${source.code})`
+                        : "Unknown source"}
                     </td>
                     <td>
-                      <code>{run.runId}</code>
+                      {bank
+                        ? `${bank.name} (${bank.code})`
+                        : "Unknown destination"}
+                    </td>
+                    <td>
+                      <input
+                        aria-label={`Percentage for ${rule.id}`}
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.0001"
+                        value={editingRule[rule.id] ?? String(rule.percentage)}
+                        onChange={(e) =>
+                          setEditingRule((current) => ({
+                            ...current,
+                            [rule.id]: e.target.value,
+                          }))
+                        }
+                        style={{ width: 120 }}
+                      />
+                    </td>
+                    <td>{rule.active ? "Active" : "Inactive"}</td>
+                    <td style={{ display: "flex", gap: 8 }}>
+                      <button
+                        className="btn btn-small"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void saveRule(rule)}
+                      >
+                        Save
+                      </button>
+                      <button
+                        className="btn btn-small"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void toggleRule(rule)}
+                      >
+                        {rule.active ? "Deactivate" : "Activate"}
+                      </button>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p>No distribution runs have been created yet.</p>
-        )}
+                );
+              })}
+              {!rules.length && (
+                <tr>
+                  <td colSpan={5}>
+                    No receipt-allocation rules configured. Add rules after
+                    creating the relevant sources and destinations.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
+      <p style={{ fontSize: 13, opacity: 0.8 }}>
+        Bank account setup here stores destination metadata only. It does not
+        connect to online banking or execute transfers. Every actual payment
+        still needs to be recorded and reconciled through the billing workflow.
+      </p>
     </main>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      style={{
-        border: "1px solid var(--border, #ddd)",
-        borderRadius: 10,
-        padding: 14,
-      }}
-    >
-      <div style={{ fontSize: 12, opacity: 0.7 }}>{label}</div>
-      <strong style={{ display: "block", marginTop: 8, fontSize: 18 }}>
-        {value}
-      </strong>
-    </div>
   );
 }

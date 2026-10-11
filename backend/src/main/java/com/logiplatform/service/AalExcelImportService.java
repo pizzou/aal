@@ -449,13 +449,10 @@ public class AalExcelImportService {
                                                         ? "OPERATOR"
                                                         : "Owner");
 
-                        BigDecimal supplierCost = nz(
-                                        decimal(
-                                                        row,
-                                                        headerMap,
-                                                        monthly
-                                                                        ? "AMOUNT PAID TO SUPPLY"
-                                                                        : "Supplier Cost (USD)"));
+                        BigDecimal supplierCost = decimal(
+                                        row,
+                                        headerMap,
+                                        monthly ? "SUPPLIER COST" : "Supplier Cost (USD)");
 
                         /*
                          * Only the MOTHERSHIP workbook contains cumulative supplier
@@ -474,9 +471,7 @@ public class AalExcelImportService {
                         BigDecimal otherExpenses = decimal(
                                         row,
                                         headerMap,
-                                        monthly
-                                                        ? "OTHER EXPENSES"
-                                                        : "Other Cost (USD)");
+                                        monthly ? "OTHER EXPENSES" : "Other Expenses");
 
                         BigDecimal billed = decimal(
                                         row,

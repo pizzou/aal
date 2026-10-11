@@ -42,9 +42,9 @@ public class AalBusinessEngineService {
                    COALESCE(SUM(amount_billed_to_client),0) billed,
                    COALESCE(SUM(amount_paid_by_client),0) collected,
                    COALESCE(SUM(GREATEST(COALESCE(amount_billed_to_client,0)-COALESCE(amount_paid_by_client,0),0)),0) receivable,
-                   COALESCE(SUM(COALESCE(supplier_cost,0)+COALESCE(other_cost,0)),0) total_cost,
-                   COALESCE(SUM(COALESCE(amount_billed_to_client,0)-COALESCE(supplier_cost,0)-COALESCE(other_cost,0)),0) gross_profit,
-                   COALESCE(SUM(COALESCE(amount_billed_to_client,0)-COALESCE(amount_paid_to_supply,0)-COALESCE(other_expenses,0)),0) net_income
+                   COALESCE(SUM(COALESCE(supplier_cost,amount_paid_to_supply,0)+COALESCE(other_cost,0)+COALESCE(other_expenses,0)),0) total_cost,
+                   COALESCE(SUM(COALESCE(amount_billed_to_client,0)-COALESCE(supplier_cost,amount_paid_to_supply,0)-COALESCE(other_cost,0)),0) gross_profit,
+                   COALESCE(SUM(COALESCE(amount_billed_to_client,0)-COALESCE(supplier_cost,amount_paid_to_supply,0)-COALESCE(other_cost,0)-COALESCE(other_expenses,0)),0) net_income
               FROM shipments
              WHERE tenant_id=? AND date_opened>=? AND date_opened<=?
                AND UPPER(COALESCE(currency,?))=?
@@ -71,7 +71,7 @@ public class AalBusinessEngineService {
         return jdbc.queryForObject("""
             SELECT id,reference_code,currency,gross_weight_kg,volumetric_weight_kg,
                    GREATEST(COALESCE(gross_weight_kg,0),COALESCE(volumetric_weight_kg,0)) chargeable,
-                   COALESCE(supplier_cost,0) supplier_cost,COALESCE(other_cost,0) other_cost,
+                   COALESCE(supplier_cost,amount_paid_to_supply,0) supplier_cost,COALESCE(other_cost,0) other_cost,
                    COALESCE(amount_billed_to_client,0) billed,COALESCE(amount_paid_by_client,0) collected,
                    COALESCE(amount_paid_to_supply,0) supplier_paid,COALESCE(other_expenses,0) other_expenses,
                    payment_status
@@ -79,11 +79,11 @@ public class AalBusinessEngineService {
             """, (rs,n)-> {
                 BigDecimal supplier=nz(rs.getBigDecimal("supplier_cost")), other=nz(rs.getBigDecimal("other_cost"));
                 BigDecimal billed=nz(rs.getBigDecimal("billed")), collected=nz(rs.getBigDecimal("collected"));
-                BigDecimal supplierPaid=nz(rs.getBigDecimal("supplier_paid")), expenses=nz(rs.getBigDecimal("other_expenses"));
-                BigDecimal cost=supplier.add(other), profit=billed.subtract(cost), net=billed.subtract(supplierPaid).subtract(expenses);
+                BigDecimal expenses=nz(rs.getBigDecimal("other_expenses"));
+                BigDecimal cost=supplier.add(other), profit=billed.subtract(cost), net=profit.subtract(expenses);
                 return new ShipmentFinancial(rs.getObject("id",UUID.class),rs.getString("reference_code"),rs.getString("currency"),
                     rs.getBigDecimal("gross_weight_kg"),rs.getBigDecimal("volumetric_weight_kg"),rs.getBigDecimal("chargeable"),
-                    supplier,other,cost,billed,collected,billed.subtract(collected).max(BigDecimal.ZERO),supplierPaid,expenses,profit,
+                    supplier,other,cost,billed,collected,billed.subtract(collected).max(BigDecimal.ZERO),nz(rs.getBigDecimal("supplier_paid")),expenses,profit,
                     billed.signum()==0?BigDecimal.ZERO:pct(profit,billed),net,rs.getString("payment_status"));
             }, tenant,id);
     }
@@ -93,8 +93,8 @@ public class AalBusinessEngineService {
           SELECT TO_CHAR(date_trunc('month',date_opened),'YYYY-MM') AS month_label,COUNT(*) shipments,
                  COALESCE(SUM(amount_billed_to_client),0) revenue,COALESCE(SUM(amount_paid_by_client),0) collected,
                  COALESCE(SUM(GREATEST(COALESCE(amount_billed_to_client,0)-COALESCE(amount_paid_by_client,0),0)),0) receivable,
-                 COALESCE(SUM(COALESCE(supplier_cost,0)+COALESCE(other_cost,0)),0) cost,
-                 COALESCE(SUM(COALESCE(amount_billed_to_client,0)-COALESCE(supplier_cost,0)-COALESCE(other_cost,0)),0) gross_profit
+                 COALESCE(SUM(COALESCE(supplier_cost,amount_paid_to_supply,0)+COALESCE(other_cost,0)),0) cost,
+                 COALESCE(SUM(COALESCE(amount_billed_to_client,0)-COALESCE(supplier_cost,amount_paid_to_supply,0)-COALESCE(other_cost,0)),0) gross_profit
             FROM shipments WHERE tenant_id=? AND date_opened>=? AND date_opened<=? AND UPPER(COALESCE(currency,?))=?
            GROUP BY 1 ORDER BY 1""",
           (rs,n)->new Monthly(rs.getString("month_label"),rs.getLong("shipments"),nz(rs.getBigDecimal("revenue")),nz(rs.getBigDecimal("collected")),nz(rs.getBigDecimal("receivable")),nz(rs.getBigDecimal("cost")),nz(rs.getBigDecimal("gross_profit"))),tenant,start,end,currency,currency);
@@ -105,7 +105,7 @@ public class AalBusinessEngineService {
           SELECT COALESCE(origin_city_port,origin_address,'Unknown') origin,
                  COALESCE(destination_city_port,destination_address,'Unknown') destination,
                  COUNT(*) shipments,COALESCE(SUM(amount_billed_to_client),0) revenue,
-                 COALESCE(SUM(COALESCE(amount_billed_to_client,0)-COALESCE(supplier_cost,0)-COALESCE(other_cost,0)),0) gross_profit,
+                 COALESCE(SUM(COALESCE(amount_billed_to_client,0)-COALESCE(supplier_cost,amount_paid_to_supply,0)-COALESCE(other_cost,0)),0) gross_profit,
                  COUNT(*) FILTER (WHERE eta IS NOT NULL AND eta < (CURRENT_TIMESTAMP) AND status NOT IN ('DELIVERED','COMPLETED','CANCELLED')) delayed
             FROM shipments WHERE tenant_id=? AND date_opened>=? AND date_opened<=? AND UPPER(COALESCE(currency,?))=?
            GROUP BY 1,2 ORDER BY revenue DESC LIMIT 12""",

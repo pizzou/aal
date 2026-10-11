@@ -273,8 +273,8 @@ CompletableFuture<List<QuotationStatusMetric>> quotationFuture =
                             COALESCE(SUM(COALESCE(amount_billed_to_client, 0)),0) AS billed,
                             COALESCE(SUM(COALESCE(amount_paid_by_client,0)),0) AS collected,
                             COALESCE(SUM(GREATEST(COALESCE(amount_billed_to_client, 0) - COALESCE(amount_paid_by_client,0),0)),0) AS receivables,
-                            COALESCE(SUM(COALESCE(supplier_cost,0) + COALESCE(other_cost,0)),0) AS gross_cost,
-                            COALESCE(SUM(COALESCE(supplier_cost,0) + COALESCE(other_cost,0) + COALESCE(other_expenses,0)),0) AS operating_cost
+                            COALESCE(SUM(COALESCE(supplier_cost,amount_paid_to_supply,0) + COALESCE(other_cost,0)),0) AS gross_cost,
+                            COALESCE(SUM(COALESCE(supplier_cost,amount_paid_to_supply,0) + COALESCE(other_cost,0) + COALESCE(other_expenses,0)),0) AS operating_cost
                         FROM shipments
                         WHERE tenant_id = ?
                           AND date_opened IS NOT NULL
@@ -398,7 +398,7 @@ CompletableFuture<List<QuotationStatusMetric>> quotationFuture =
                         SELECT d::date AS day,
                                COUNT(s.id) AS shipments,
                                COALESCE(SUM(COALESCE(s.amount_billed_to_client, 0)),0) AS revenue,
-                               COALESCE(SUM(COALESCE(s.supplier_cost,0) + COALESCE(s.other_cost,0) + COALESCE(s.other_expenses,0)),0) AS operating_cost
+                               COALESCE(SUM(COALESCE(s.supplier_cost,s.amount_paid_to_supply,0) + COALESCE(s.other_cost,0) + COALESCE(s.other_expenses,0)),0) AS operating_cost
                         FROM generate_series(?::date - INTERVAL '6 days', ?::date, INTERVAL '1 day') d
                         LEFT JOIN shipments s
                           ON s.tenant_id = ?
@@ -570,7 +570,7 @@ CompletableFuture<List<QuotationStatusMetric>> quotationFuture =
 
                             (SELECT COALESCE(SUM(
                                       COALESCE(s.amount_billed_to_client,0)
-                                      - COALESCE(s.supplier_cost,0)
+                                      - COALESCE(s.supplier_cost,s.amount_paid_to_supply,0)
                                       - COALESCE(s.other_cost,0)
                                    ),0)
                                FROM shipments s
@@ -675,7 +675,7 @@ CompletableFuture<List<QuotationStatusMetric>> quotationFuture =
                             COALESCE(SUM(
                                 CASE WHEN UPPER(COALESCE(NULLIF(s.currency,''),?)) = ?
                                 THEN COALESCE(s.amount_billed_to_client,0)
-                                     - COALESCE(s.supplier_cost,0)
+                                     - COALESCE(s.supplier_cost,s.amount_paid_to_supply,0)
                                      - COALESCE(s.other_cost,0)
                                 ELSE 0 END
                             ),0) AS gross_profit

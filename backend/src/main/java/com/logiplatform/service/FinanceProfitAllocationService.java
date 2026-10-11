@@ -25,7 +25,7 @@ import java.util.*;
 public class FinanceProfitAllocationService {
     private static final BigDecimal HUNDRED = new BigDecimal("100.0000");
     private static final BigDecimal TOLERANCE = new BigDecimal("0.0001");
-    private static final String BASIS = "AAL net income: billed revenue minus supplier payments (falling back to supplier cost) and other expenses (falling back to other cost)";
+    private static final String BASIS = "Shipment profit basis: billed revenue minus supplier cost (falling back to supplier payments only when no supplier cost is recorded), other cost, and other expenses. Supplier payments are cash-flow data, not a substitute for a known cost basis. This is a financial allocation instruction, not a cash-transfer confirmation.";
 
     private final JdbcTemplate db;
     private final ShipmentRepository shipments;
@@ -115,23 +115,32 @@ public class FinanceProfitAllocationService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "Shipment has no positive billed revenue; invoice it before allocating profit");
         }
-        // Keep this calculation aligned with the operational reports and legacy
-        // workbook semantics: where cash-paid/expense values have not been entered,
-        // use the recorded supplier/other cost rather than silently treating them
-        // as zero and overstating distributable profit.
-        BigDecimal supplierPaid = nz(
-                shipment.getAmountPaidToSupply(),
-                nz(shipment.getSupplierCost(), BigDecimal.ZERO));
-        BigDecimal otherExpenses = nz(
-                shipment.getOtherExpenses(),
-                nz(shipment.getOtherCost(), BigDecimal.ZERO));
-        BigDecimal netProfit = revenue.subtract(supplierPaid).subtract(otherExpenses).setScale(4, RoundingMode.HALF_UP);
+        // Profit is based on the cost basis, not cash paid. Supplier payments are
+        // used only when no supplier cost was recorded. The two "other" fields are
+        // separate form fields and are both included in the profit calculation.
+        BigDecimal supplierCostBasis = nz(
+                shipment.getSupplierCost(),
+                nz(shipment.getAmountPaidToSupply(), BigDecimal.ZERO));
+        BigDecimal otherCostBasis = nz(shipment.getOtherCost(), BigDecimal.ZERO);
+        BigDecimal otherExpensesBasis = nz(shipment.getOtherExpenses(), BigDecimal.ZERO);
+        BigDecimal otherCostsAndExpenses = otherCostBasis.add(otherExpensesBasis);
+        if (supplierCostBasis.signum() < 0 || otherCostBasis.signum() < 0
+                || otherExpensesBasis.signum() < 0) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Negative supplier or other cost values must be corrected before profit allocation");
+        }
+        BigDecimal netProfit = revenue.subtract(supplierCostBasis).subtract(otherCostsAndExpenses)
+                .setScale(4, RoundingMode.HALF_UP);
         if (netProfit.signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "Shipment net income is not positive; no profit distribution instructions were created");
         }
-        String currency = shipment.getCurrency() == null || shipment.getCurrency().isBlank()
-                ? "USD" : shipment.getCurrency().trim().toUpperCase(Locale.ROOT);
+        String currency = shipment.getCurrency() == null
+                ? "" : shipment.getCurrency().trim().toUpperCase(Locale.ROOT);
+        if (!currency.matches("[A-Z]{3}")) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Shipment currency is missing or invalid; set the actual ISO 4217 currency before allocating profit");
+        }
 
         List<ActiveRule> activeRules = db.query("""
             SELECT r.bank_destination_id, b.code, b.name, b.account_reference, r.percentage
@@ -158,7 +167,7 @@ public class FinanceProfitAllocationService {
         // return an inaccurate old snapshot. Mutable bank configuration remains
         // intentionally excluded: retries return the originally approved split.
         String fingerprint = allocationFingerprint(tenant, shipment.getId(), currency,
-                revenue, supplierPaid, otherExpenses, netProfit);
+                revenue, supplierCostBasis, otherCostsAndExpenses, netProfit);
         List<String> priorFingerprints = db.query("""
             SELECT calculation_fingerprint
               FROM finance_profit_allocation_runs
@@ -184,7 +193,7 @@ public class FinanceProfitAllocationService {
             VALUES (?,?,?,?,?,?,?,?,?,?, 'INSTRUCTIONS_ONLY', ?, now())
             ON CONFLICT (tenant_id, shipment_id, calculation_fingerprint) DO NOTHING
             """, runId, tenant, shipment.getId(), shipment.getReferenceCode(), currency,
-                revenue, supplierPaid, otherExpenses, netProfit, BASIS, fingerprint);
+                revenue, supplierCostBasis, otherCostsAndExpenses, netProfit, BASIS, fingerprint);
         if (insertedRun == 0) {
             AllocationResult existing = findExistingAllocation(tenant, fingerprint);
             if (existing != null) return existing;
@@ -215,7 +224,7 @@ public class FinanceProfitAllocationService {
                     rule.accountReference(), rule.percentage(), amount, currency, "NOT_SENT"));
         }
         return new AllocationResult(runId, shipment.getId(), shipment.getReferenceCode(), currency,
-                revenue, supplierPaid, otherExpenses, netProfit, BASIS, "INSTRUCTIONS_ONLY", items);
+                revenue, supplierCostBasis, otherCostsAndExpenses, netProfit, BASIS, "INSTRUCTIONS_ONLY", items);
     }
 
     @Transactional(readOnly = true)

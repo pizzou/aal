@@ -22,6 +22,8 @@ import java.util.UUID;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import static com.logiplatform.dto.AirCargoDtos.AwbRequest;
 import static com.logiplatform.dto.AirCargoDtos.AwbResponse;
 import static com.logiplatform.dto.AirCargoDtos.CustomsRequest;
@@ -145,17 +147,27 @@ public class AirCargoDocumentService {
 
     @Transactional
     public Map<String, Object> createCustoms(CustomsRequest request) {
-        UUID tenantId = TenantContext.getTenantId();
+        UUID tenantId = requireTenant();
+        if (request == null) throw badRequest("Customs declaration details are required");
+        shipments.findLockedByIdAndTenantId(request.shipmentId(), tenantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shipment not found"));
+        String declarationType = required(request.declarationType(), "Declaration type", 80).toUpperCase(java.util.Locale.ROOT);
+        String authority = required(request.customsAuthority(), "Customs authority", 160);
+        String currency = required(request.currency(), "Currency", 3).toUpperCase(java.util.Locale.ROOT);
+        if (!currency.matches("[A-Z]{3}")) throw badRequest("Currency must be a 3-letter ISO currency code");
+        if (request.declaredValue() == null || request.declaredValue().signum() <= 0)
+            throw badRequest("Declared value must be positive");
+        if (customs.findAllByTenantIdAndShipmentIdOrderBySubmittedAtDesc(tenantId, request.shipmentId())
+                .stream().anyMatch(c -> declarationType.equalsIgnoreCase(c.getDeclarationType()))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A declaration of this type already exists for the shipment; update/version the existing declaration instead");
+        }
         CustomsDeclaration declaration = customs.save(new CustomsDeclaration(
-                tenantId,
-                request.shipmentId(),
-                request.declarationType(),
-                request.customsAuthority(),
-                request.brokerName(),
-                request.hsCodes(),
-                request.countryOfOrigin(),
-                request.declaredValue(),
-                request.currency()));
+                tenantId, request.shipmentId(), declarationType, authority,
+                normalizeBounded(request.brokerName(), "Broker name", 160),
+                normalizeBounded(request.hsCodes(), "HS codes", 4000),
+                normalizeBounded(request.countryOfOrigin(), "Country of origin", 80),
+                request.declaredValue(), currency));
         return map(declaration);
     }
 
@@ -169,13 +181,22 @@ public class AirCargoDocumentService {
 
     @Transactional
     public Map<String, Object> createDocument(DocumentRequest request) {
-        UUID tenant = TenantContext.getTenantId();
+        UUID tenant = requireTenant();
+        if (request == null) throw badRequest("Document details are required");
+        // Locking the tenant-owned shipment serializes version allocation for this
+        // shipment and prevents concurrent uploads from assigning the same version.
+        shipments.findLockedByIdAndTenantId(request.shipmentId(), tenant)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shipment not found"));
+        String documentType = required(request.documentType(), "Document type", 80).toUpperCase(java.util.Locale.ROOT);
+        String templateCode = required(request.templateCode(), "Template code", 100).toUpperCase(java.util.Locale.ROOT);
+        String fileUri = normalizeBounded(request.fileUri(), "File URI", 2000);
+        String contentHash = normalizeBounded(request.contentHash(), "Content hash", 128);
         List<CargoDocument> previous = docs.findAllByTenantIdAndShipmentIdOrderByCreatedAtDesc(tenant, request.shipmentId());
-        CargoDocument prior = previous.stream().filter(d -> d.getDocumentType().equalsIgnoreCase(request.documentType())).findFirst().orElse(null);
+        CargoDocument prior = previous.stream().filter(d -> d.getDocumentType().equalsIgnoreCase(documentType)).findFirst().orElse(null);
         int version = prior == null ? 1 : prior.getVersionNo() + 1;
-        CargoDocument document = new CargoDocument(tenant, request.shipmentId(), request.documentType(), request.templateCode(), request.fileUri(), request.contentHash());
+        CargoDocument document = new CargoDocument(tenant, request.shipmentId(), documentType, templateCode, fileUri, contentHash);
         UUID user = null; try { Object p = SecurityContextHolder.getContext().getAuthentication().getPrincipal(); if (p instanceof com.logiplatform.security.TenantPrincipal tp) user = tp.userId(); } catch (Exception ignored) {}
-        document.setLifecycle(version, prior == null ? null : prior.getId(), user, false, null, null, request.contentHash());
+        document.setLifecycle(version, prior == null ? null : prior.getId(), user, false, null, null, contentHash);
         CargoDocument saved = docs.save(document);
 
         Map<String, Object> response = new LinkedHashMap<>();
@@ -348,4 +369,29 @@ public class AirCargoDocumentService {
         response.put("submittedAt", declaration.getSubmittedAt());
         return response;
     }
+
+    private static UUID requireTenant() {
+        UUID tenant = TenantContext.getTenantId();
+        if (tenant == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
+        return tenant;
+    }
+
+    private static String required(String value, String label, int max) {
+        if (value == null || value.isBlank()) throw badRequest(label + " is required");
+        String normalized = value.trim();
+        if (normalized.length() > max) throw badRequest(label + " must not exceed " + max + " characters");
+        return normalized;
+    }
+
+    private static String normalizeBounded(String value, String label, int max) {
+        if (value == null || value.isBlank()) return null;
+        String normalized = value.trim();
+        if (normalized.length() > max) throw badRequest(label + " must not exceed " + max + " characters");
+        return normalized;
+    }
+
+    private static ResponseStatusException badRequest(String message) {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+    }
+
 }

@@ -372,69 +372,44 @@ public class ReportingService {
          */
         BigDecimal[] legacyShipmentTotals = jdbc.queryForObject(
                 """
-                SELECT
-                    COALESCE(SUM(s.amount_billed_to_client), 0) AS billed,
-                    COALESCE(SUM(s.amount_paid_by_client), 0) AS collected,
-                    COALESCE(SUM(GREATEST(COALESCE(s.amount_billed_to_client,0)
-                        - COALESCE(s.amount_paid_by_client,0), 0)), 0) AS outstanding
-                FROM shipments s
-                WHERE s.tenant_id = ?
-                  AND UPPER(COALESCE(NULLIF(s.currency,''), ?)) = ?
-                  AND COALESCE(s.date_opened, s.created_at::date) BETWEEN ?::date AND ?::date
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM commercial_invoices ci
-                      WHERE ci.tenant_id = s.tenant_id
-                        AND COALESCE(ci.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
-                        AND (ci.shipment_id = s.id
-                             OR ci.invoice_no = s.invoice_no
-                             OR ci.invoice_no = s.reference_code)
-                  )
-                """,
+                        SELECT
+                            COALESCE(SUM(s.amount_billed_to_client), 0) AS billed,
+                            COALESCE(SUM(s.amount_paid_by_client), 0) AS collected,
+                            COALESCE(SUM(GREATEST(COALESCE(s.amount_billed_to_client,0)
+                                - COALESCE(s.amount_paid_by_client,0), 0)), 0) AS outstanding
+                        FROM shipments s
+                        WHERE s.tenant_id = ?
+                          AND UPPER(COALESCE(NULLIF(s.currency,''), ?)) = ?
+                          AND COALESCE(s.date_opened, s.created_at::date) BETWEEN ?::date AND ?::date
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM commercial_invoices ci
+                              WHERE ci.tenant_id = s.tenant_id
+                                AND COALESCE(ci.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
+                                AND (ci.shipment_id = s.id
+                                     OR ci.invoice_no = s.invoice_no
+                                     OR ci.invoice_no = s.reference_code)
+                          )
+                        """,
                 (rs, rowNum) -> new BigDecimal[] {
-                    nz(rs.getBigDecimal("billed")),
-                    nz(rs.getBigDecimal("collected")),
-                    nz(rs.getBigDecimal("outstanding"))
+                        nz(rs.getBigDecimal("billed")),
+                        nz(rs.getBigDecimal("collected")),
+                        nz(rs.getBigDecimal("outstanding"))
                 },
                 tenantId, currency, currency, from, to);
 
         BigDecimal[] shipmentCosts = jdbc.queryForObject(
                 """
                         SELECT
-                            COALESCE(
-                                SUM(CASE
-                                    WHEN s.notes = 'Imported from AAL MOTHERSHIP'
-                                    THEN COALESCE(s.amount_paid_to_supply, 0)
-                                    ELSE COALESCE(s.supplier_cost, 0)
-                                END),
-                                0
-                            ) AS supplier_cost,
+                            COALESCE(SUM(COALESCE(s.amount_paid_to_supply, s.supplier_cost, 0)), 0) AS supplier_cost,
 
-                            COALESCE(
-                                SUM(CASE
-                                    WHEN s.notes = 'Imported from AAL MOTHERSHIP'
-                                    THEN COALESCE(s.other_expenses, 0)
-                                    ELSE COALESCE(s.other_cost, 0)
-                                END),
-                                0
-                            ) AS other_cost,
+                            COALESCE(SUM(COALESCE(s.other_expenses, s.other_cost, 0)), 0) AS other_cost,
 
-                            COALESCE(
-                                SUM(
-                                    COALESCE(s.amount_billed_to_client, 0)
-                                    - CASE
-                                        WHEN s.notes = 'Imported from AAL MOTHERSHIP'
-                                        THEN COALESCE(s.amount_paid_to_supply, 0)
-                                        ELSE COALESCE(s.supplier_cost, 0)
-                                      END
-                                    - CASE
-                                        WHEN s.notes = 'Imported from AAL MOTHERSHIP'
-                                        THEN COALESCE(s.other_expenses, 0)
-                                        ELSE COALESCE(s.other_cost, 0)
-                                      END
-                                ),
-                                0
-                            ) AS gross_profit
+                            COALESCE(SUM(
+                                COALESCE(s.amount_billed_to_client, 0)
+                                - COALESCE(s.amount_paid_to_supply, s.supplier_cost, 0)
+                                - COALESCE(s.other_expenses, s.other_cost, 0)
+                            ), 0) AS gross_profit
 
                         FROM shipments s
                         WHERE s.tenant_id = ?
@@ -656,37 +631,37 @@ public class ReportingService {
 
         BigDecimal[] legacy = jdbc.queryForObject(
                 """
-                SELECT
-                    COUNT(*) AS shipment_count,
-                    COUNT(*) FILTER (WHERE COALESCE(s.amount_paid_by_client,0) = 0
-                        AND COALESCE(s.amount_billed_to_client,0) > 0) AS unpaid_count,
-                    COUNT(*) FILTER (WHERE COALESCE(s.amount_paid_by_client,0) > 0
-                        AND COALESCE(s.amount_paid_by_client,0) < COALESCE(s.amount_billed_to_client,0)) AS partial_count,
-                    COALESCE(SUM(s.amount_billed_to_client),0) AS billed,
-                    COALESCE(SUM(s.amount_paid_by_client),0) AS collected,
-                    COALESCE(SUM(GREATEST(COALESCE(s.amount_billed_to_client,0)
-                        - COALESCE(s.amount_paid_by_client,0),0)),0) AS outstanding
-                FROM shipments s
-                WHERE s.tenant_id = ?
-                  AND UPPER(COALESCE(NULLIF(s.currency,''), ?)) = ?
-                  AND COALESCE(s.date_opened, s.created_at::date) <= ?::date
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM commercial_invoices ci
-                      WHERE ci.tenant_id = s.tenant_id
-                        AND COALESCE(ci.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
-                        AND (ci.shipment_id = s.id
-                             OR ci.invoice_no = s.invoice_no
-                             OR ci.invoice_no = s.reference_code)
-                  )
-                """,
+                        SELECT
+                            COUNT(*) AS shipment_count,
+                            COUNT(*) FILTER (WHERE COALESCE(s.amount_paid_by_client,0) = 0
+                                AND COALESCE(s.amount_billed_to_client,0) > 0) AS unpaid_count,
+                            COUNT(*) FILTER (WHERE COALESCE(s.amount_paid_by_client,0) > 0
+                                AND COALESCE(s.amount_paid_by_client,0) < COALESCE(s.amount_billed_to_client,0)) AS partial_count,
+                            COALESCE(SUM(s.amount_billed_to_client),0) AS billed,
+                            COALESCE(SUM(s.amount_paid_by_client),0) AS collected,
+                            COALESCE(SUM(GREATEST(COALESCE(s.amount_billed_to_client,0)
+                                - COALESCE(s.amount_paid_by_client,0),0)),0) AS outstanding
+                        FROM shipments s
+                        WHERE s.tenant_id = ?
+                          AND UPPER(COALESCE(NULLIF(s.currency,''), ?)) = ?
+                          AND COALESCE(s.date_opened, s.created_at::date) <= ?::date
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM commercial_invoices ci
+                              WHERE ci.tenant_id = s.tenant_id
+                                AND COALESCE(ci.lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')
+                                AND (ci.shipment_id = s.id
+                                     OR ci.invoice_no = s.invoice_no
+                                     OR ci.invoice_no = s.reference_code)
+                          )
+                        """,
                 (rs, rowNum) -> new BigDecimal[] {
-                    BigDecimal.valueOf(rs.getLong("shipment_count")),
-                    BigDecimal.valueOf(rs.getLong("unpaid_count")),
-                    BigDecimal.valueOf(rs.getLong("partial_count")),
-                    nz(rs.getBigDecimal("billed")),
-                    nz(rs.getBigDecimal("collected")),
-                    nz(rs.getBigDecimal("outstanding"))
+                        BigDecimal.valueOf(rs.getLong("shipment_count")),
+                        BigDecimal.valueOf(rs.getLong("unpaid_count")),
+                        BigDecimal.valueOf(rs.getLong("partial_count")),
+                        nz(rs.getBigDecimal("billed")),
+                        nz(rs.getBigDecimal("collected")),
+                        nz(rs.getBigDecimal("outstanding"))
                 },
                 tenantId, currency, currency, to);
 
@@ -951,23 +926,19 @@ public class ReportingService {
 
                                      COALESCE(
                                          SUM(
-                                             COALESCE(
-                                                 amount_billed_to_client,
-                                                 amount_billed_to_client,
-                                                 0
-                                             )
+                                             COALESCE(amount_billed_to_client, 0)
                                          ),
                                          0
                                      ) AS revenue,
 
                                      COALESCE(
-                                         SUM(COALESCE(supplier_cost,0)),
+                                         SUM(COALESCE(amount_paid_to_supply, supplier_cost, 0)),
                                          0
                                      ) AS supplier_cost,
 
                                      COALESCE(
                                          SUM(
-                                             COALESCE(other_cost,0)
+                                             COALESCE(other_expenses, other_cost, 0)
                                          ),
                                          0
                                      ) AS other_cost
@@ -1041,37 +1012,37 @@ public class ReportingService {
             String currency) {
         return jdbc.query(
                 """
-                WITH shipment_activity AS (
-                    SELECT
-                        COALESCE(NULLIF(TRIM(client_name), ''), 'Unknown') AS customer,
-                        COALESCE(date_opened, created_at::date) AS shipment_date,
-                        COALESCE(amount_billed_to_client, 0) AS revenue,
-                        COALESCE(amount_paid_by_client, 0) AS collected,
-                        GREATEST(COALESCE(amount_billed_to_client, 0)
-                                 - COALESCE(amount_paid_by_client, 0), 0) AS outstanding,
-                        COALESCE(amount_billed_to_client, 0)
-                          - COALESCE(amount_paid_to_supply, supplier_cost, 0)
-                          - COALESCE(other_expenses, other_cost, 0) AS net_income
-                    FROM shipments
-                    WHERE tenant_id = ?
-                      AND UPPER(COALESCE(NULLIF(currency, ''), ?)) = ?
-                      AND COALESCE(date_opened, created_at::date)
-                          BETWEEN ?::date AND ?::date
-                )
-                SELECT customer,
-                       COUNT(*) AS shipments,
-                       COUNT(DISTINCT shipment_date) AS distinct_shipment_days,
-                       MIN(shipment_date) AS first_shipment_date,
-                       MAX(shipment_date) AS last_shipment_date,
-                       SUM(revenue) AS revenue,
-                       SUM(collected) AS collected,
-                       SUM(outstanding) AS outstanding,
-                       SUM(net_income) AS net_income
-                FROM shipment_activity
-                GROUP BY customer
-                ORDER BY shipments DESC, revenue DESC, customer
-                LIMIT 200
-                """,
+                        WITH shipment_activity AS (
+                            SELECT
+                                COALESCE(NULLIF(TRIM(client_name), ''), 'Unknown') AS customer,
+                                COALESCE(date_opened, created_at::date) AS shipment_date,
+                                COALESCE(amount_billed_to_client, 0) AS revenue,
+                                COALESCE(amount_paid_by_client, 0) AS collected,
+                                GREATEST(COALESCE(amount_billed_to_client, 0)
+                                         - COALESCE(amount_paid_by_client, 0), 0) AS outstanding,
+                                COALESCE(amount_billed_to_client, 0)
+                                  - COALESCE(amount_paid_to_supply, supplier_cost, 0)
+                                  - COALESCE(other_expenses, other_cost, 0) AS net_income
+                            FROM shipments
+                            WHERE tenant_id = ?
+                              AND UPPER(COALESCE(NULLIF(currency, ''), ?)) = ?
+                              AND COALESCE(date_opened, created_at::date)
+                                  BETWEEN ?::date AND ?::date
+                        )
+                        SELECT customer,
+                               COUNT(*) AS shipments,
+                               COUNT(DISTINCT shipment_date) AS distinct_shipment_days,
+                               MIN(shipment_date) AS first_shipment_date,
+                               MAX(shipment_date) AS last_shipment_date,
+                               SUM(revenue) AS revenue,
+                               SUM(collected) AS collected,
+                               SUM(outstanding) AS outstanding,
+                               SUM(net_income) AS net_income
+                        FROM shipment_activity
+                        GROUP BY customer
+                        ORDER BY shipments DESC, revenue DESC, customer
+                        LIMIT 200
+                        """,
                 (rs, rowNum) -> new ClientActivity(
                         rs.getString("customer"),
                         rs.getLong("shipments"),
@@ -1096,33 +1067,33 @@ public class ReportingService {
             String currency) {
         return jdbc.query(
                 """
-                SELECT
-                    COALESCE(
-                        NULLIF(TRIM(destination_city_port), ''),
-                        NULLIF(TRIM(destination_country), ''),
-                        NULLIF(TRIM(destination_address), ''),
-                        'Unknown'
-                    ) AS destination,
-                    COUNT(*) AS shipments,
-                    COALESCE(SUM(COALESCE(gross_weight_kg, weight_kg, 0)), 0) AS gross_weight,
-                    COALESCE(SUM(COALESCE(chargeable_weight_kg,
-                                         GREATEST(COALESCE(gross_weight_kg,0),
-                                                  COALESCE(volumetric_weight_kg,0)), 0)), 0) AS chargeable_weight,
-                    COALESCE(SUM(COALESCE(amount_billed_to_client,0)),0) AS revenue,
-                    COALESCE(SUM(COALESCE(supplier_cost,0)),0) AS supplier_cost,
-                    COALESCE(SUM(COALESCE(other_cost,0)),0) AS other_cost,
-                    COALESCE(SUM(COALESCE(amount_billed_to_client,0)
-                        - COALESCE(amount_paid_to_supply, supplier_cost, 0)
-                        - COALESCE(other_expenses, other_cost, 0)),0) AS net_income
-                FROM shipments
-                WHERE tenant_id = ?
-                  AND UPPER(COALESCE(NULLIF(currency, ''), ?)) = ?
-                  AND COALESCE(date_opened, created_at::date)
-                      BETWEEN ?::date AND ?::date
-                GROUP BY 1
-                ORDER BY shipments DESC, revenue DESC, destination
-                LIMIT 200
-                """,
+                        SELECT
+                            COALESCE(
+                                NULLIF(TRIM(destination_city_port), ''),
+                                NULLIF(TRIM(destination_country), ''),
+                                NULLIF(TRIM(destination_address), ''),
+                                'Unknown'
+                            ) AS destination,
+                            COUNT(*) AS shipments,
+                            COALESCE(SUM(COALESCE(gross_weight_kg, weight_kg, 0)), 0) AS gross_weight,
+                            COALESCE(SUM(COALESCE(chargeable_weight_kg,
+                                                 GREATEST(COALESCE(gross_weight_kg,0),
+                                                          COALESCE(volumetric_weight_kg,0)), 0)), 0) AS chargeable_weight,
+                            COALESCE(SUM(COALESCE(amount_billed_to_client,0)),0) AS revenue,
+                            COALESCE(SUM(COALESCE(amount_paid_to_supply, supplier_cost, 0)),0) AS supplier_cost,
+                            COALESCE(SUM(COALESCE(other_expenses, other_cost, 0)),0) AS other_cost,
+                            COALESCE(SUM(COALESCE(amount_billed_to_client,0)
+                                - COALESCE(amount_paid_to_supply, supplier_cost, 0)
+                                - COALESCE(other_expenses, other_cost, 0)),0) AS net_income
+                        FROM shipments
+                        WHERE tenant_id = ?
+                          AND UPPER(COALESCE(NULLIF(currency, ''), ?)) = ?
+                          AND COALESCE(date_opened, created_at::date)
+                              BETWEEN ?::date AND ?::date
+                        GROUP BY 1
+                        ORDER BY shipments DESC, revenue DESC, destination
+                        LIMIT 200
+                        """,
                 (rs, rowNum) -> {
                     BigDecimal revenue = nz(rs.getBigDecimal("revenue"));
                     BigDecimal netIncome = nz(rs.getBigDecimal("net_income"));
@@ -1166,23 +1137,19 @@ public class ReportingService {
 
                                      COALESCE(
                                          SUM(
-                                             COALESCE(
-                                                 amount_billed_to_client,
-                                                 amount_billed_to_client,
-                                                 0
-                                             )
+                                             COALESCE(amount_billed_to_client, 0)
                                          ),
                                          0
                                      ) AS revenue,
 
                                      COALESCE(
-                                         SUM(COALESCE(supplier_cost,0)),
+                                         SUM(COALESCE(amount_paid_to_supply, supplier_cost, 0)),
                                          0
                                      ) AS supplier_cost,
 
                                      COALESCE(
                                          SUM(
-                                             COALESCE(other_cost,0)
+                                             COALESCE(other_expenses, other_cost, 0)
                                          ),
                                          0
                                      ) AS other_cost,
@@ -1308,16 +1275,12 @@ public class ReportingService {
                         ) AS chargeable_weight,
 
 
-                                     COALESCE(
-                                         amount_billed_to_client,
-                                         amount_billed_to_client,
-                                         0
-                                     ) AS revenue,
+                                     COALESCE(amount_billed_to_client, 0) AS revenue,
 
-                                     COALESCE(supplier_cost,0)
+                                     COALESCE(amount_paid_to_supply, supplier_cost, 0)
                                          AS supplier_cost,
 
-                                     COALESCE(other_cost,0)
+                                     COALESCE(other_expenses, other_cost, 0)
                                          AS other_cost,
 
                                      status
@@ -1336,11 +1299,7 @@ public class ReportingService {
                                    ) BETWEEN ?::date AND ?::date
 
                                  ORDER BY
-                                     COALESCE(
-                                         amount_billed_to_client,
-                                         amount_billed_to_client,
-                                         0
-                                     ) DESC,
+                                     COALESCE(amount_billed_to_client, 0) DESC,
                                      date_opened DESC
                                  LIMIT 500
                                  """,
@@ -1480,13 +1439,9 @@ public class ReportingService {
 
                                          COALESCE(
                                              SUM(
-                                                 COALESCE(
-                                                     amount_billed_to_client,
-                                                     amount_billed_to_client,
-                                                     0
-                                                 )
-                                                 - COALESCE(supplier_cost,0)
-                                                 - COALESCE(other_cost,0)
+                                                 COALESCE(amount_billed_to_client, 0)
+                                                 - COALESCE(supplier_cost, 0)
+                                                 - COALESCE(other_cost, 0)
                                              ),
                                              0
                                          ) AS gross_profit,

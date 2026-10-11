@@ -9,13 +9,19 @@ public final class CommercialDtos {
     private CommercialDtos() {
     }
 
-    public record QuoteRequest(@NotBlank String quoteId, @NotNull LocalDate quoteDate, String client, String route,
-            String serviceType, String commodity, @PositiveOrZero BigDecimal chargeableWeightKg,
-            @PositiveOrZero BigDecimal supplierCost, @PositiveOrZero BigDecimal otherCost,
-            @PositiveOrZero BigDecimal markupPercent, @PositiveOrZero BigDecimal quotedAmount, LocalDate validUntil,
-            String status, String owner, LocalDate followUpDate, String notes, String pricingMode, String customerEmail,
-            String customerContactName, String customerPhone, String currency, String incoterm, BigDecimal taxRate,
-            BigDecimal taxAmount, BigDecimal customsCost, BigDecimal insuranceCost, String customerCreditTerms) {
+    public record QuoteRequest(@NotBlank @Size(max = 80) String quoteId, @NotNull LocalDate quoteDate,
+            @NotBlank @Size(max = 200) String client, @NotBlank @Size(max = 300) String route,
+            @NotBlank @Size(max = 80) String serviceType, @Size(max = 300) String commodity,
+            @PositiveOrZero BigDecimal chargeableWeightKg, @PositiveOrZero BigDecimal supplierCost,
+            @PositiveOrZero BigDecimal otherCost, @PositiveOrZero BigDecimal markupPercent,
+            @PositiveOrZero BigDecimal quotedAmount, LocalDate validUntil, String status,
+            @Size(max = 160) String owner, LocalDate followUpDate, @Size(max = 4000) String notes,
+            @Size(max = 40) String pricingMode, @Email @Size(max = 254) String customerEmail,
+            @Size(max = 160) String customerContactName, @Size(max = 80) String customerPhone,
+            @Size(min = 3, max = 3) String currency, @Size(max = 20) String incoterm,
+            @DecimalMin("0.0") @DecimalMax("100.0") BigDecimal taxRate,
+            @PositiveOrZero BigDecimal taxAmount, @PositiveOrZero BigDecimal customsCost,
+            @PositiveOrZero BigDecimal insuranceCost, @Size(max = 1000) String customerCreditTerms) {
     }
 
     public record QuoteResponse(UUID id, String quoteId, LocalDate quoteDate, String client, String route,
@@ -61,9 +67,13 @@ public final class CommercialDtos {
             @NotBlank String idempotencyKey, String reference, UUID incomeSourceId) {
     }
 
-    public record ClientRequest(@NotBlank String clientId, String clientCompany, String contactPerson, String phone,
-            String email, String industry, String country, String city, String leadSource, String clientStatus,
-            String relationshipOwner, LocalDate nextFollowUp, String notes) {
+    public record ClientRequest(@NotBlank @Size(max = 80) String clientId,
+            @NotBlank @Size(max = 200) String clientCompany, @Size(max = 160) String contactPerson,
+            @Size(max = 80) String phone, @Email @Size(max = 254) String email,
+            @Size(max = 120) String industry, @Size(max = 120) String country,
+            @Size(max = 120) String city, @Size(max = 120) String leadSource,
+            @Size(max = 40) String clientStatus, @Size(max = 160) String relationshipOwner,
+            LocalDate nextFollowUp, @Size(max = 4000) String notes) {
     }
 
     public record ClientResponse(UUID id, String clientId, String clientCompany, String contactPerson, String phone,

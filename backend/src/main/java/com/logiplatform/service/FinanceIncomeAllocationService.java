@@ -72,7 +72,7 @@ public class FinanceIncomeAllocationService {
     public FinanceIncomeSource updateSource(UUID id, String code, String name,
                                             String description, boolean active) {
         UUID tenant = TenantContext.getTenantId();
-        FinanceIncomeSource source = sources.findByTenantIdAndId(tenant, id)
+        FinanceIncomeSource source = sources.findLockedByTenantIdAndId(tenant, id)
                 .orElseThrow(() -> notFound("Income source not found"));
         String c = required(code, "Source code");
         sources.findByTenantIdAndCode(tenant, c)
@@ -115,7 +115,7 @@ public class FinanceIncomeAllocationService {
     public FinanceIncomeAllocationRule createRule(UUID sourceId, UUID bankId,
                                                    BigDecimal percentage) {
         UUID tenant = TenantContext.getTenantId();
-        requireActiveSource(tenant, sourceId);
+        requireLockedActiveSource(tenant, sourceId);
         requireActiveBank(tenant, bankId);
         BigDecimal p = percentage(percentage);
         if (rules.findAllByTenantIdAndIncomeSourceIdAndActiveTrue(tenant, sourceId)
@@ -134,6 +134,7 @@ public class FinanceIncomeAllocationService {
         UUID tenant = TenantContext.getTenantId();
         FinanceIncomeAllocationRule rule = rules.findByTenantIdAndId(tenant, id)
                 .orElseThrow(() -> notFound("Allocation rule not found"));
+        requireLockedActiveSource(tenant, rule.getIncomeSourceId());
         BigDecimal p = percentage(percentage);
         rule.update(p, active);
         if (active) ensureRuleTotalNotOver100(tenant, rule.getIncomeSourceId());
@@ -145,7 +146,16 @@ public class FinanceIncomeAllocationService {
         if (payment.getIncomeSourceId() == null) return;
 
         UUID tenant = payment.getTenantId();
-        requireActiveSource(tenant, payment.getIncomeSourceId());
+        // A payment retry must not create a second set of allocation rows.
+        if (!allocations.findAllByTenantIdAndPaymentIdOrderByPercentageDesc(tenant, payment.getId()).isEmpty()) {
+            return;
+        }
+        // Lock the source row so this snapshot cannot race a concurrent rule edit
+        // or a second request attempting to snapshot the same payment.
+        requireLockedActiveSource(tenant, payment.getIncomeSourceId());
+        if (!allocations.findAllByTenantIdAndPaymentIdOrderByPercentageDesc(tenant, payment.getId()).isEmpty()) {
+            return;
+        }
 
         List<FinanceIncomeAllocationRule> activeRules =
                 rules.findAllByTenantIdAndIncomeSourceIdAndActiveTrue(
@@ -196,6 +206,13 @@ public class FinanceIncomeAllocationService {
 
     private void requireActiveSource(UUID tenant, UUID id) {
         if (id == null || sources.findByTenantIdAndId(tenant, id)
+                .filter(FinanceIncomeSource::isActive).isEmpty()) {
+            throw notFound("Active income source not found");
+        }
+    }
+
+    private void requireLockedActiveSource(UUID tenant, UUID id) {
+        if (id == null || sources.findLockedByTenantIdAndId(tenant, id)
                 .filter(FinanceIncomeSource::isActive).isEmpty()) {
             throw notFound("Active income source not found");
         }

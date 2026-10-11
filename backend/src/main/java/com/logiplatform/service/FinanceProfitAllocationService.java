@@ -104,7 +104,10 @@ public class FinanceProfitAllocationService {
     @Transactional
     public AllocationResult allocateShipment(UUID shipmentId) {
         UUID tenant = requireTenant();
-        Shipment shipment = shipments.findByIdAndTenantId(shipmentId, tenant)
+        // Serialize calculations per shipment. Without this lock, two concurrent
+        // recalculations with different cost snapshots could create two active
+        // distribution-instruction sets for the same shipment.
+        Shipment shipment = shipments.findLockedByIdAndTenantId(shipmentId, tenant)
                 .orElseThrow(() -> notFound("Shipment not found"));
 
         BigDecimal revenue = nz(shipment.getAmountBilledToClient(), shipment.getClientRevenue());
@@ -150,9 +153,28 @@ public class FinanceProfitAllocationService {
         }
 
         // Repeating the same allocation request must not create a second set of
-        // payout instructions. The fingerprint intentionally uses the shipment,
-        // currency and net profit, not mutable bank configuration.
-        String fingerprint = allocationFingerprint(tenant, shipment.getId(), currency, netProfit);
+        // instructions. Include every financial input in the fingerprint so an
+        // equal net-profit result with a changed revenue/cost breakdown cannot
+        // return an inaccurate old snapshot. Mutable bank configuration remains
+        // intentionally excluded: retries return the originally approved split.
+        String fingerprint = allocationFingerprint(tenant, shipment.getId(), currency,
+                revenue, supplierPaid, otherExpenses, netProfit);
+        List<String> priorFingerprints = db.query("""
+            SELECT calculation_fingerprint
+              FROM finance_profit_allocation_runs
+             WHERE tenant_id=? AND shipment_id=?
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1
+            """, (rs, row) -> rs.getString(1), tenant, shipment.getId());
+        if (!priorFingerprints.isEmpty()) {
+            if (!fingerprint.equals(priorFingerprints.get(0))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "An immutable profit-allocation snapshot already exists for this shipment with a different financial basis. Reconcile and approve a supersession/reversal workflow before recalculating.");
+            }
+            AllocationResult existing = findExistingAllocation(tenant, fingerprint);
+            if (existing != null) return existing;
+            throw new IllegalStateException("Existing profit allocation snapshot could not be loaded");
+        }
         UUID runId = UUID.randomUUID();
         int insertedRun = db.update("""
             INSERT INTO finance_profit_allocation_runs
@@ -243,14 +265,21 @@ public class FinanceProfitAllocationService {
                 h.transferStatus(), items);
     }
 
-    private static String allocationFingerprint(UUID tenant, UUID shipment, String currency, BigDecimal netProfit) {
-        String canonical = tenant + "|" + shipment + "|" + currency + "|" + netProfit.setScale(4, RoundingMode.HALF_UP).toPlainString();
+    private static String allocationFingerprint(UUID tenant, UUID shipment, String currency,
+            BigDecimal revenue, BigDecimal supplierPaid, BigDecimal otherExpenses, BigDecimal netProfit) {
+        String canonical = tenant + "|" + shipment + "|" + currency + "|"
+                + fingerprintAmount(revenue) + "|" + fingerprintAmount(supplierPaid) + "|"
+                + fingerprintAmount(otherExpenses) + "|" + fingerprintAmount(netProfit);
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(canonical.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("SHA-256 is unavailable for profit allocation idempotency", e);
         }
+    }
+
+    private static String fingerprintAmount(BigDecimal value) {
+        return nz(value, BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP).toPlainString();
     }
 
     private record AllocationHeader(UUID runId, UUID shipmentId, String shipmentReference,

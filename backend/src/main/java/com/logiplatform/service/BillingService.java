@@ -170,15 +170,12 @@ public class BillingService {
                     financialHardening.applyTaxToDraftInvoice(existing.getId(), taxJurisdictionCode, taxCode, LocalDate.now());
                     entityManager.refresh(existing);
                 }
-                if (existing.getTaxAmount() != null && existing.getTaxAmount().signum() > 0)
-                    finance.postInvoiceWithTax(tenantId, existing.getId(), existing.getInvoiceAmount(), existing.getTaxAmount(),
-                            existing.getCurrency(), existing.getInvoiceNo());
-                else finance.postInvoice(tenantId, existing.getId(), existing.getInvoiceAmount(),
-                        existing.getCurrency(), existing.getInvoiceNo());
-                existing.changeLifecycleStatus("ISSUED");
-                invoices.updateLifecycleStatus(tenantId, existing.getId(), "ISSUED");
-                invoices.insertLifecycleHistory(tenantId, existing.getId(), "DRAFT", "ISSUED",
-                        "Draft invoice issued by billing", currentUser());
+                // Use the shared lifecycle transition as the single posting and
+                // history boundary. Keeping a second copy here had allowed billing
+                // and the finance-hardening endpoint to drift apart.
+                financialHardening.transitionInvoice(existing.getId(), "ISSUED",
+                        "Draft invoice issued by shipment billing");
+                entityManager.refresh(existing);
             }
             return existing;
         }
@@ -230,14 +227,11 @@ public class BillingService {
             financialHardening.applyTaxToDraftInvoice(invoice.getId(), taxJurisdictionCode, taxCode, LocalDate.now());
             entityManager.refresh(invoice);
         }
-        if (invoice.getTaxAmount() != null && invoice.getTaxAmount().signum() > 0)
-            finance.postInvoiceWithTax(tenantId, invoice.getId(), invoice.getInvoiceAmount(), invoice.getTaxAmount(), currency, invoiceNo);
-        else finance.postInvoice(tenantId, invoice.getId(), invoice.getInvoiceAmount(), currency, invoiceNo);
-        invoice.changeLifecycleStatus("ISSUED");
-        invoices.updateLifecycleStatus(tenantId, invoice.getId(), "ISSUED");
-        invoices.insertLifecycleHistory(tenantId, invoice.getId(), "DRAFT", "ISSUED",
-                "Invoice issued from shipment billing", currentUser());
-
+        // One canonical lifecycle transition owns the ledger posting, status
+        // update and immutable lifecycle-history row for every invoice path.
+        financialHardening.transitionInvoice(invoice.getId(), "ISSUED",
+                "Invoice issued from shipment billing");
+        entityManager.refresh(invoice);
         return invoice;
     }
 

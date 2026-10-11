@@ -134,10 +134,10 @@ public final class OperationsDtos {
             UUID shipmentId,
             UUID tripId,
             UUID vehicleId,
-            @NotBlank String type,
-            @NotBlank String severity,
-            String owner,
-            @NotBlank String description) {
+            @NotBlank @Size(max = 80) String type,
+            @NotBlank @Size(max = 20) String severity,
+            @Size(max = 160) String owner,
+            @NotBlank @Size(max = 8000) String description) {
     }
 
     public record ExceptionResponse(
@@ -174,8 +174,8 @@ public final class OperationsDtos {
     }
 
     public record ResolveExceptionRequest(
-            @NotBlank String resolution,
-            String actionTaken) {
+            @NotBlank @Size(max = 4000) String resolution,
+            @Size(max = 4000) String actionTaken) {
     }
 
     public record WarehouseTaskRequest(

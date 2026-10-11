@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -130,21 +131,21 @@ public final class AirCargoDtos {
 
         public record CustomsRequest(
                         @NotNull UUID shipmentId,
-                        @NotBlank String declarationType,
-                        @NotBlank String customsAuthority,
-                        String brokerName,
-                        String hsCodes,
-                        String countryOfOrigin,
+                        @NotBlank @Size(max = 80) String declarationType,
+                        @NotBlank @Size(max = 160) String customsAuthority,
+                        @Size(max = 160) String brokerName,
+                        @Size(max = 4000) String hsCodes,
+                        @Size(max = 80) String countryOfOrigin,
                         @NotNull @Positive BigDecimal declaredValue,
-                        @NotBlank String currency) {
+                        @NotBlank @Size(min = 3, max = 3) String currency) {
         }
 
         public record DocumentRequest(
                         @NotNull UUID shipmentId,
-                        @NotBlank String documentType,
-                        @NotBlank String templateCode,
-                        String fileUri,
-                        String contentHash) {
+                        @NotBlank @Size(max = 80) String documentType,
+                        @NotBlank @Size(max = 100) String templateCode,
+                        @Size(max = 2000) String fileUri,
+                        @Size(max = 128) String contentHash) {
         }
 
         public record FlightResponse(

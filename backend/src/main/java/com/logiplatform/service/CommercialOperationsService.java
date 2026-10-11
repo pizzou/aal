@@ -73,10 +73,19 @@ public class CommercialOperationsService {
     public QuoteResponse createQuote(QuoteRequest r) {
 
         UUID tenantId = TenantContext.getTenantId();
+        if (r == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quotation details are required");
+        String quoteId = requiredText(r.quoteId(), "Quote ID", 80);
+        String clientName = requiredText(r.client(), "Customer", 200);
+        String route = requiredText(r.route(), "Route", 300);
+        String serviceType = requiredText(r.serviceType(), "Service type", 80);
+        if (r.quoteDate() == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quote date is required");
+        if (r.validUntil() != null && r.validUntil().isBefore(r.quoteDate())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quote expiry cannot be before the quote date");
+        }
 
         if (quotes.findByTenantIdAndQuoteId(
                 tenantId,
-                r.quoteId()).isPresent()) {
+                quoteId).isPresent()) {
 
             throw conflict("Quote exists");
         }
@@ -92,12 +101,12 @@ public class CommercialOperationsService {
 
         CommercialQuote quote = new CommercialQuote(
                 tenantId,
-                r.quoteId(),
+                quoteId,
                 r.quoteDate(),
-                r.client(),
-                r.route(),
-                r.serviceType(),
-                r.commodity(),
+                clientName,
+                route,
+                serviceType,
+                normalizeText(r.commodity()),
                 nz(r.chargeableWeightKg()),
                 supplier,
                 other,
@@ -105,12 +114,12 @@ public class CommercialOperationsService {
                 amount,
                 profit,
                 r.validUntil(),
-                r.status() == null ? "Draft" : r.status(),
-                r.owner(),
+                r.status() != null && "REQUESTED".equalsIgnoreCase(r.status().trim()) ? "REQUESTED" : "DRAFT",
+                normalizeText(r.owner()),
                 r.followUpDate(),
-                r.notes(),
-                r.pricingMode() == null ? "RULES_BASED" : r.pricingMode());
-        quote.setCustomerContact(r.customerEmail(), r.customerContactName(), r.customerPhone());
+                normalizeText(r.notes()),
+                r.pricingMode() == null || r.pricingMode().isBlank() ? "RULES_BASED" : r.pricingMode().trim().toUpperCase(Locale.ROOT));
+        quote.setCustomerContact(normalizeEmail(r.customerEmail()), normalizeText(r.customerContactName()), normalizeText(r.customerPhone()));
         quote.applyCommercialTerms(r.currency(), r.incoterm(), r.taxRate(), r.taxAmount(), r.customsCost(), r.insuranceCost(), r.customerCreditTerms());
         CommercialQuote saved = quotes.save(quote);
         quoteLifecycle.ensureInitialVersion(saved.getId());
@@ -394,28 +403,20 @@ public class CommercialOperationsService {
             ClientRequest r) {
 
         UUID tenantId = TenantContext.getTenantId();
+        if (r == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer details are required");
+        String clientId = requiredText(r.clientId(), "Client ID", 80);
+        String company = requiredText(r.clientCompany(), "Company legal/business name", 200);
+        String email = normalizeEmail(r.email());
 
-        if (clients.findByTenantIdAndClientId(tenantId, r.clientId()).isPresent()) throw conflict("Client exists");
-        if (r.clientCompany() != null && !r.clientCompany().isBlank() && clients.findFirstByTenantIdAndClientCompanyIgnoreCase(tenantId, r.clientCompany()).isPresent()) throw conflict("Client company already exists");
-        if (r.email() != null && !r.email().isBlank() && clients.findFirstByTenantIdAndEmailIgnoreCase(tenantId, r.email()).isPresent()) throw conflict("Client email already exists");
+        if (clients.findByTenantIdAndClientId(tenantId, clientId).isPresent()) throw conflict("Client ID already exists");
+        if (clients.findFirstByTenantIdAndClientCompanyIgnoreCase(tenantId, company).isPresent()) throw conflict("Client company already exists");
+        if (email != null && clients.findFirstByTenantIdAndEmailIgnoreCase(tenantId, email).isPresent()) throw conflict("Client email already exists");
 
-        return ClientResponse.from(
-                clients.save(
-                        new ClientRecord(
-                                tenantId,
-                                r.clientId(),
-                                r.clientCompany(),
-                                r.contactPerson(),
-                                r.phone(),
-                                r.email(),
-                                r.industry(),
-                                r.country(),
-                                r.city(),
-                                r.leadSource(),
-                                r.clientStatus(),
-                                r.relationshipOwner(),
-                                r.nextFollowUp(),
-                                r.notes())));
+        return ClientResponse.from(clients.save(new ClientRecord(
+                tenantId, clientId, company, normalizeText(r.contactPerson()), normalizeText(r.phone()), email,
+                normalizeText(r.industry()), normalizeText(r.country()), normalizeText(r.city()),
+                normalizeText(r.leadSource()), normalizeStatus(r.clientStatus(), "ACTIVE"),
+                normalizeText(r.relationshipOwner()), r.nextFollowUp(), normalizeText(r.notes()))));
     }
 
     @Transactional(readOnly = true)
@@ -569,6 +570,27 @@ public class CommercialOperationsService {
                 .stream()
                 .map(ExpenseResponse::from)
                 .toList();
+    }
+
+    private static String requiredText(String value, String label, int max) {
+        if (value == null || value.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, label + " is required");
+        String normalized = value.trim();
+        if (normalized.length() > max) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, label + " must not exceed " + max + " characters");
+        return normalized;
+    }
+
+    private static String normalizeText(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static String normalizeEmail(String value) {
+        String normalized = normalizeText(value);
+        return normalized == null ? null : normalized.toLowerCase(Locale.ROOT);
+    }
+
+    private static String normalizeStatus(String value, String fallback) {
+        String normalized = normalizeText(value);
+        return normalized == null ? fallback : normalized.toUpperCase(Locale.ROOT);
     }
 
     private static BigDecimal nz(

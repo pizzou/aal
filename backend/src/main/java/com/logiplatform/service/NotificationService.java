@@ -8,6 +8,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 
 import java.util.UUID;
 
@@ -36,6 +37,16 @@ public class NotificationService {
     public NotificationService(NotificationSenderPort senderPort, NotificationRepository notificationRepository) {
         this.senderPort = senderPort;
         this.notificationRepository = notificationRepository;
+    }
+
+    /**
+     * Delivers an operational notification after the business transaction has
+     * committed. REQUIRES_NEW is deliberate: after-commit callbacks must not
+     * try to write through the already-completed transaction.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void notifyAfterCommit(UUID shipmentId, String recipientEmail, String subject, String body) {
+        notify(shipmentId, recipientEmail, subject, body);
     }
 
     @Transactional

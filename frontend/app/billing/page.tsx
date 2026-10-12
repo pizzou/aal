@@ -68,6 +68,10 @@ function makeIdempotencyKey() {
 }
 
 export default function BillingPage() {
+  const [requestedShipmentId, setRequestedShipmentId] = useState("");
+  const [workflowAwbNumber, setWorkflowAwbNumber] = useState("");
+  const [workflowAwbStatus, setWorkflowAwbStatus] = useState("");
+  const [createdInvoice, setCreatedInvoice] = useState<Invoice | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [shipments, setShipments] = useState<Shipment[]>([]);
 
@@ -147,8 +151,24 @@ export default function BillingPage() {
   }
 
   useEffect(() => {
-    load();
+    const query = new URLSearchParams(window.location.search);
+    setRequestedShipmentId(query.get("shipmentId") || "");
+    setWorkflowAwbNumber(query.get("awbNumber") || "");
+    setWorkflowAwbStatus(query.get("awbStatus") || "");
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  useEffect(() => {
+    if (
+      requestedShipmentId &&
+      shipments.some((item) => item.id === requestedShipmentId)
+    ) {
+      setInvoiceShipment(requestedShipmentId);
+    }
+  }, [requestedShipmentId, shipments]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -231,15 +251,10 @@ export default function BillingPage() {
       return;
     }
 
-    // Open the tab synchronously in the click gesture so browser popup blockers
-    // do not prevent the authenticated invoice PDF from being viewed/printed.
-    const pdfTab = window.open("about:blank", "_blank");
-    if (pdfTab) {
-      pdfTab.document.title = "Preparing AAL invoice…";
-      pdfTab.document.body.innerHTML =
-        "<p style='font-family: sans-serif; padding: 24px'>Generating invoice PDF…</p>";
-    }
-
+    // Invoice creation is a financial transaction, not a PDF-viewer action.
+    // Keep the user on the billing register until the API confirms the saved
+    // invoice. This avoids navigating to a blank about:blank tab before the
+    // backend has even returned a result.
     try {
       const created = await apiFetch<Invoice>(
         `/api/billing/shipments/${invoiceShipment}/invoice`,
@@ -254,55 +269,23 @@ export default function BillingPage() {
         },
       );
 
+      if (!created?.id) {
+        throw new Error(
+          "The billing API did not return an invoice ID. Check the server response before retrying to avoid duplicate billing.",
+        );
+      }
+
+      setCreatedInvoice(created);
       setInvoiceShipment("");
       setInvoiceOwner("");
       setInvoiceDueDate("");
       setInvoiceTaxJurisdiction("");
       setInvoiceTaxCode("");
       setSuccess(
-        `Invoice ${created.invoiceNo || ""} created. Opening the customer-ready PDF…`,
+        `Invoice ${created.invoiceNo || ""} is available in the invoice register. Use View / Print or Download PDF when you are ready.`,
       );
       await load();
-
-      if (created.id) {
-        try {
-          const pdfPath = `/api/finance/documents/invoices/${created.id}/pdf`;
-          if (pdfTab) {
-            const blob = await fetchApiBlob(pdfPath);
-            const objectUrl = URL.createObjectURL(blob);
-            pdfTab.location.href = objectUrl;
-            window.setTimeout(
-              () => URL.revokeObjectURL(objectUrl),
-              5 * 60 * 1000,
-            );
-            setSuccess(
-              `Invoice ${created.invoiceNo || ""} created and opened. Use the PDF viewer’s Print control to print it.`,
-            );
-          } else {
-            // A popup blocker must not leave the user with an invoice they
-            // cannot open. The authenticated download path is the fallback.
-            await downloadApiFile(
-              pdfPath,
-              `invoice-${created.invoiceNo || created.id}.pdf`,
-            );
-            setSuccess(
-              `Invoice ${created.invoiceNo || ""} created and downloaded as a PDF. Open the downloaded file to print it.`,
-            );
-          }
-        } catch (pdfException) {
-          pdfTab?.close();
-          setError(
-            `Invoice ${created.invoiceNo || ""} was created, but its PDF could not be generated or downloaded: ${pdfException instanceof Error ? pdfException.message : "unknown PDF error"}. The invoice remains in the register; use View/Print after correcting the reported PDF/storage issue.`,
-          );
-        }
-      } else {
-        pdfTab?.close();
-        setError(
-          "The billing API did not return an invoice ID, so the PDF could not be opened. Refresh the invoice register and check the server logs.",
-        );
-      }
     } catch (exception) {
-      pdfTab?.close();
       setError(
         exception instanceof ApiError || exception instanceof Error
           ? exception.message
@@ -527,6 +510,80 @@ export default function BillingPage() {
 
       {success && (
         <div className="alert alert-success aal-alert">{success}</div>
+      )}
+
+      {workflowAwbNumber && (
+        <section className="workflow-completion-card" role="status">
+          <div className="workflow-completion-icon" aria-hidden="true">
+            ✓
+          </div>
+          <div className="workflow-completion-copy">
+            <strong>Air waybill step completed · {workflowAwbNumber}</strong>
+            <p>
+              {workflowAwbStatus.toUpperCase() === "DRAFT"
+                ? "The AAL House AWB draft was generated from shipment data. Confirm any missing legal parties, airport codes, weights and carrier MAWB before tendering it to an airline."
+                : "An AWB record is already available for this shipment."}
+            </p>
+            {requestedShipmentId && (
+              <Link
+                className="table-link"
+                href={`/shipments/${requestedShipmentId}`}
+              >
+                Open shipment documents and download the AWB PDF
+              </Link>
+            )}
+          </div>
+          <span
+            className={`status ${workflowAwbStatus.toUpperCase() === "DRAFT" ? "status-warning" : "status-success"}`}
+          >
+            {workflowAwbStatus || "ON FILE"}
+          </span>
+        </section>
+      )}
+
+      {createdInvoice && (
+        <section
+          className="workflow-completion-card invoice-created-panel"
+          role="status"
+        >
+          <div className="workflow-completion-icon" aria-hidden="true">
+            ✓
+          </div>
+          <div className="workflow-completion-copy">
+            <strong>Invoice {createdInvoice.invoiceNo} ready</strong>
+            <p>
+              {createdInvoice.client || "Customer"} ·{" "}
+              {money(createdInvoice.invoiceAmount, createdInvoice.currency)} ·
+              Due {createdInvoice.dueDate || "on receipt"}. The invoice is
+              saved; PDF actions are available below and do not affect invoice
+              creation.
+            </p>
+            {createdInvoice.shipmentId && (
+              <Link
+                className="table-link"
+                href={`/shipments/${createdInvoice.shipmentId}`}
+              >
+                Open linked shipment
+              </Link>
+            )}
+          </div>
+          <div className="actions">
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={() => void viewInvoice(createdInvoice)}
+            >
+              View / Print
+            </button>
+            <button
+              type="button"
+              className="btn btn-small btn-primary"
+              onClick={() => void downloadInvoice(createdInvoice)}
+            >
+              Download PDF
+            </button>
+          </div>
+        </section>
       )}
 
       {reconciliation && (

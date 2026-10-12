@@ -146,6 +146,57 @@ public class AwbRecord {
   validationStatus="VALID";updatedAt=Instant.now();
  }
  private static String normalizeAndValidateMawb(String value){String digits=value.replace("-","").replace(" ","");if(!digits.matches("\\d{11}"))throw new IllegalArgumentException("MAWB must contain 11 digits");int serial=Integer.parseInt(digits.substring(3,10));int check=Integer.parseInt(digits.substring(10));if(serial%7!=check)throw new IllegalArgumentException("MAWB check digit is invalid");return digits.substring(0,3)+"-"+digits.substring(3);}
+ /**
+  * Marks an automatically assembled AAL House Air Waybill as a draft.
+  *
+  * A house AWB can be prepared from shipment data before the airline has
+  * allocated the carrier MAWB. This method intentionally does not mark the
+  * document carrier-valid: incomplete airport codes remain TBD and the
+  * record cannot be submitted to a carrier until an authorized user completes
+  * and validates the legal/routing fields.
+  */
+ public void markDraftHouseAwb(){
+  if(awbNumber==null||awbNumber.isBlank()||shipmentId==null)throw new IllegalArgumentException("A draft AWB requires a shipment and internal reference");
+  if(!"HAWB".equalsIgnoreCase(awbType))throw new IllegalArgumentException("Only a House AWB can be created as an internal draft");
+  if(!awbNumber.startsWith("AAL-AWB-"))throw new IllegalArgumentException("Draft HAWB reference must be allocated by the AAL AWB sequence");
+  if(mawbNumber!=null&&!mawbNumber.isBlank())throw new IllegalArgumentException("A draft House AWB must not invent a carrier-assigned MAWB");
+  originAirport=normalizeDraftAirport(originAirport);
+  destinationAirport=normalizeDraftAirport(destinationAirport);
+  if(!"TBD".equals(originAirport)&&!"TBD".equals(destinationAirport)&&originAirport.equals(destinationAirport))
+   throw new IllegalArgumentException("AWB origin and destination must differ");
+  if(pieces!=null&&pieces<=0)throw new IllegalArgumentException("Piece count must be positive when supplied");
+  if(grossWeightKg!=null&&grossWeightKg.signum()<=0)throw new IllegalArgumentException("Gross weight must be positive when supplied");
+  if(chargeableWeightKg!=null&&chargeableWeightKg.signum()<=0)throw new IllegalArgumentException("Chargeable weight must be positive when supplied");
+  if(grossWeightKg!=null&&chargeableWeightKg!=null&&chargeableWeightKg.compareTo(grossWeightKg)<0)
+   chargeableWeightKg=grossWeightKg;
+  hawbNumber=hawbNumber==null||hawbNumber.isBlank()?awbNumber:hawbNumber.trim();
+  validationStatus="DRAFT";
+  submissionStatus="NOT_SUBMITTED";
+  cargoAcceptanceStatus="PENDING";
+  eawbStatus="NOT_READY";
+  updatedAt=Instant.now();
+ }
+ private static String normalizeDraftAirport(String value){
+  String candidate=blankToNull(value);
+  if(candidate==null)return "TBD";
+  candidate=candidate.toUpperCase(java.util.Locale.ROOT);
+  return candidate.matches("[A-Z]{3}")?candidate:"TBD";
+ }
+
+ public void updateDraftAirportCodes(String requestedOriginAirport, String requestedDestinationAirport) {
+  if (!"DRAFT".equals(validationStatus) || awbNumber == null || !awbNumber.startsWith("AAL-AWB-"))
+   throw new IllegalStateException("Only an internal AAL draft AWB can be updated from shipment data");
+  String nextOrigin = blankToNull(requestedOriginAirport) == null
+          ? normalizeDraftAirport(originAirport) : normalizeDraftAirport(requestedOriginAirport);
+  String nextDestination = blankToNull(requestedDestinationAirport) == null
+          ? normalizeDraftAirport(destinationAirport) : normalizeDraftAirport(requestedDestinationAirport);
+  if (!"TBD".equals(nextOrigin) && !"TBD".equals(nextDestination) && nextOrigin.equals(nextDestination))
+   throw new IllegalArgumentException("AWB origin and destination must differ");
+  originAirport = nextOrigin;
+  destinationAirport = nextDestination;
+  updatedAt = Instant.now();
+ }
+
  public void readyForSubmission(){if(!"VALID".equals(validationStatus))throw new IllegalStateException("AWB must be valid before submission");submissionStatus="READY_FOR_SUBMISSION";eawbStatus="READY";updatedAt=Instant.now();}
  public void submitted(String ref){if(!"VALID".equals(validationStatus))throw new IllegalStateException("AWB must be valid before submission");submissionStatus="SUBMITTED";carrierReference=ref;eawbStatus="SUBMITTED";updatedAt=Instant.now();}
  public void acceptance(String status,String reference,String oneRecord){cargoAcceptanceStatus=status;eawbStatus="ACCEPTED".equalsIgnoreCase(status)?"ACCEPTED":"REJECTED";if(reference!=null&&!reference.isBlank())carrierReference=reference;if(oneRecord!=null&&!oneRecord.isBlank())oneRecordReference=oneRecord;updatedAt=Instant.now();}

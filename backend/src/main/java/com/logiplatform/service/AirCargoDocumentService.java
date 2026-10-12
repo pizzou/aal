@@ -10,6 +10,12 @@ import com.logiplatform.repository.CargoDocumentRepository;
 import com.logiplatform.repository.CustomsDeclarationRepository;
 import com.logiplatform.repository.DocumentTemplateRepository;
 import com.logiplatform.repository.ShipmentRepository;
+import com.logiplatform.repository.ClientRecordRepository;
+import com.logiplatform.model.ClientRecord;
+import com.logiplatform.model.Shipment;
+import com.logiplatform.model.TransportMode;
+import com.logiplatform.service.FinanceDocumentSequenceService;
+import java.math.BigDecimal;
 import com.logiplatform.tenancy.TenantContext;
 import com.logiplatform.service.control.ReconciliationTaskService;
 import com.logiplatform.integration.control.ExternalOperationException;
@@ -43,6 +49,8 @@ public class AirCargoDocumentService {
     private final AirlineIntegrationAttemptService integrationAttempts;
     private final ShipmentRepository shipments;
     private final ReconciliationTaskService reconciliation;
+    private final ClientRecordRepository clients;
+    private final FinanceDocumentSequenceService documentSequences;
 
     public AirCargoDocumentService(
             AwbRecordRepository awbs,
@@ -52,7 +60,8 @@ public class AirCargoDocumentService {
             DocumentTemplateRepository templates,
             AirCargoProviderRegistry providers,
             AirlineIntegrationAttemptService integrationAttempts,
-            ShipmentRepository shipments, ReconciliationTaskService reconciliation) {
+            ShipmentRepository shipments, ReconciliationTaskService reconciliation,
+            ClientRecordRepository clients, FinanceDocumentSequenceService documentSequences) {
         this.awbs = awbs;
         this.docs = docs;
         this.customs = customs;
@@ -62,6 +71,121 @@ public class AirCargoDocumentService {
         this.integrationAttempts = integrationAttempts;
         this.shipments = shipments;
         this.reconciliation = reconciliation;
+        this.clients = clients;
+        this.documentSequences = documentSequences;
+    }
+
+    /**
+     * Creates an internal AAL House AWB draft from an existing shipment.
+     * Known customer, routing, cargo and commercial data is copied from the
+     * tenant-owned shipment/client records. The airline MAWB is never
+     * fabricated; unavailable legal/routing data is marked TBD and the record
+     * remains non-submittable until reviewed and completed.
+     */
+    @Transactional
+    public AwbResponse createDraftAwbFromShipment(UUID shipmentId, String requestedOriginAirport,
+            String requestedDestinationAirport) {
+        UUID tenantId = requireTenant();
+        Shipment shipment = shipments.findLockedByIdAndTenantId(shipmentId, tenantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shipment not found"));
+        if (shipment.getTransportMode() != TransportMode.AIR) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "An air waybill can only be generated for an AIR shipment");
+        }
+
+        var previous = awbs.findFirstByTenantIdAndShipmentIdOrderByCreatedAtDesc(tenantId, shipmentId);
+        if (previous.isPresent()) {
+            AwbRecord existing = previous.get();
+            if ("DRAFT".equalsIgnoreCase(existing.getValidationStatus())
+                    && existing.getAwbNumber() != null
+                    && existing.getAwbNumber().startsWith("AAL-AWB-")) {
+                // Let a user add/correct route codes on an existing draft
+                // without creating a duplicate AWB record for the shipment.
+                existing.updateDraftAirportCodes(requestedOriginAirport, requestedDestinationAirport);
+                return AwbResponse.from(awbs.save(existing));
+            }
+            return AwbResponse.from(existing);
+        }
+
+        String number = documentSequences.nextAwbNumber();
+        String clientName = firstNonBlank(shipment.getClientName(), shipment.getContact(), "Shipper to be confirmed");
+        ClientRecord client = clients.findFirstByTenantIdAndClientCompanyIgnoreCase(tenantId, clientName).orElse(null);
+        String shipperName = firstNonBlank(client == null ? null : client.getClientCompany(), shipment.getClientName(), clientName);
+        String shipperAddress = firstNonBlank(shipment.getOriginAddress(), clientAddress(client));
+        String consigneeAddress = firstNonBlank(shipment.getDestinationAddress());
+        String originCode = draftAirportCode(requestedOriginAirport, shipment.getOriginCityPort());
+        String destinationCode = draftAirportCode(requestedDestinationAirport, shipment.getDestinationCityPort());
+        String currency = firstNonBlank(shipment.getCurrency());
+        if (currency != null) {
+            currency = currency.toUpperCase(java.util.Locale.ROOT);
+            if (!currency.matches("[A-Z]{3}")) currency = null;
+        }
+
+        BigDecimal gross = positive(shipment.getGrossWeightKg());
+        if (gross == null && shipment.getWeightKg() != null && shipment.getWeightKg() > 0) {
+            gross = BigDecimal.valueOf(shipment.getWeightKg());
+        }
+        BigDecimal volumetric = positive(shipment.getVolumetricWeightKg());
+        BigDecimal chargeable = positive(shipment.getChargeableWeightKg());
+        if (chargeable == null) {
+            chargeable = gross;
+            if (volumetric != null && (chargeable == null || volumetric.compareTo(chargeable) > 0)) {
+                chargeable = volumetric;
+            }
+        }
+        if (gross != null && chargeable != null && chargeable.compareTo(gross) < 0) chargeable = gross;
+        Integer pieces = shipment.getPackages() != null && shipment.getPackages() > 0 ? shipment.getPackages() : null;
+        String goods = firstNonBlank(shipment.getCommodity(), shipment.getServiceType());
+        if (goods == null) goods = "Goods description to be confirmed";
+        BigDecimal freightCharge = positive(shipment.getAmountBilledToClient());
+        if (freightCharge == null) freightCharge = positive(shipment.getClientRevenue());
+        if (currency == null) freightCharge = null;
+
+        AwbRecord awb = new AwbRecord(
+                tenantId, shipmentId, number, "HAWB", null, number,
+                shipperName, shipperAddress,
+                "Consignee to be confirmed", consigneeAddress,
+                "Aviation Africa Logistics Ltd",
+                originCode, destinationCode, pieces, gross, chargeable, goods, null,
+                null, Boolean.FALSE);
+        awb.applyExtendedDetails(
+                null, null,
+                shipperAddress, null,
+                firstNonBlank(client == null ? null : client.getContactPerson(), shipment.getContact()),
+                client == null ? null : client.getPhone(),
+                firstNonBlank(client == null ? null : client.getEmail(), shipment.getNotificationEmail()),
+                null, null,
+                consigneeAddress, null, null, null, null, null, null,
+                null,
+                null, null, null, null, null, null,
+                currency, null, null, "K", null, freightCharge,
+                null, null, null, goods, null, null, null, null, null, null, null);
+        awb.markDraftHouseAwb();
+        return AwbResponse.from(awbs.save(awb));
+    }
+
+    private static String clientAddress(ClientRecord client) {
+        if (client == null) return null;
+        String city = firstNonBlank(client.getCity());
+        String country = firstNonBlank(client.getCountry());
+        if (city != null && country != null) return city + ", " + country;
+        return firstNonBlank(city, country);
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) if (value != null && !value.isBlank()) return value.trim();
+        return null;
+    }
+
+    private static BigDecimal positive(BigDecimal value) {
+        return value != null && value.signum() > 0 ? value : null;
+    }
+
+    private static String draftAirportCode(String requested, String shipmentCityPort) {
+        String value = firstNonBlank(requested, shipmentCityPort);
+        if (value == null) return "TBD";
+        String normalized = value.trim().toUpperCase(java.util.Locale.ROOT);
+        return normalized.matches("[A-Z]{3}") ? normalized : "TBD";
     }
 
     @Transactional
@@ -286,6 +410,10 @@ public class AirCargoDocumentService {
     public AwbResponse submitAwbToCarrier(UUID id) {
         AwbRecord awb = awbs.findByTenantIdAndId(TenantContext.getTenantId(), id)
                 .orElseThrow(() -> new IllegalArgumentException("AWB not found"));
+        if (!"VALID".equalsIgnoreCase(awb.getValidationStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A draft or unvalidated AWB cannot be sent to a carrier. Complete and validate the legal parties, airport codes, pieces, weights and carrier-issued MAWB first.");
+        }
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("awbNumber", awb.getAwbNumber());

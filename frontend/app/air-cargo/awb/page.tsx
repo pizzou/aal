@@ -1,63 +1,446 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
-import { apiFetch } from "@/lib/api-client";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { ApiError, Shipment, apiFetch, shipmentsApi } from "@/lib/api-client";
+import { useAuth } from "@/lib/auth-context";
 
-type AwbCreated = { id: string; shipmentId: string; awbNumber: string; validationStatus: string; submissionStatus: string };
-const fieldClass = "form-input";
+type AwbCreated = {
+  id: string;
+  shipmentId: string;
+  awbNumber: string;
+  hawbNumber?: string | null;
+  awbType: string;
+  validationStatus: string;
+  submissionStatus: string;
+};
 
-function Field({ label, name, required = false, type = "text", placeholder = "" }: { label: string; name: string; required?: boolean; type?: string; placeholder?: string }) {
-  return <label className="form-field"><span>{label}{required ? " *" : ""}</span><input className={fieldClass} name={name} type={type} required={required} placeholder={placeholder} /></label>;
+function airportSeed(value?: string | null): string {
+  const candidate = (value || "").trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(candidate) ? candidate : "";
 }
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return <section className="card" style={{ marginTop: 16 }}><h2 className="card-title">{title}</h2><div className="grid grid-2" style={{ gap: 12, marginTop: 12 }}>{children}</div></section>;
+
+function numberLabel(value?: number | null): string {
+  return value == null || !Number.isFinite(value)
+    ? "Not captured"
+    : value.toLocaleString(undefined, { maximumFractionDigits: 3 });
 }
 
 export default function StructuredAwbPage() {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [created, setCreated] = useState<AwbCreated | null>(null);
+  const router = useRouter();
+  const { accessToken, isLoading: authLoading } = useAuth();
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError(""); setCreated(null);
-    const form = new FormData(event.currentTarget);
-    const value = (key: string) => String(form.get(key) ?? "").trim();
-    const decimal = (key: string) => value(key) ? Number(value(key)) : null;
-    const integer = (key: string) => value(key) ? Number.parseInt(value(key), 10) : null;
-    const payload = {
-      shipmentId: value("shipmentId"), awbNumber: value("awbNumber"), awbType: value("awbType"), mawbNumber: value("mawbNumber") || null, hawbNumber: value("hawbNumber") || null,
-      shipperName: value("shipperName"), shipperAddress: value("shipperStreetAddress"), consigneeName: value("consigneeName"), consigneeAddress: value("consigneeStreetAddress"),
-      issuingAgent: value("issuingAgent"), originAirport: value("originAirport").toUpperCase(), destinationAirport: value("destinationAirport").toUpperCase(), pieces: integer("pieces"),
-      grossWeightKg: decimal("grossWeightKg"), chargeableWeightKg: decimal("chargeableWeightKg"), commodity: value("natureQuantityGoods"), hsCode: value("hsCode") || null, specialHandling: value("specialHandling") || null, dangerousGoods: value("dangerousGoods") === "true",
-      airlinePrefix: value("airlinePrefix") || null, airlineSerial: value("airlineSerial") || null,
-      shipperStreetAddress: value("shipperStreetAddress"), shipperPostalCode: value("shipperPostalCode"), shipperContactName: value("shipperContactName"), shipperPhone: value("shipperPhone"), shipperEmail: value("shipperEmail"), shipperTaxId: value("shipperTaxId"), shipperEoriNumber: value("shipperEoriNumber"),
-      consigneeStreetAddress: value("consigneeStreetAddress"), consigneePostalCode: value("consigneePostalCode"), consigneeContactName: value("consigneeContactName"), consigneePhone: value("consigneePhone"), consigneeEmail: value("consigneeEmail"), consigneeTaxId: value("consigneeTaxId"), consigneeEoriNumber: value("consigneeEoriNumber"),
-      issuingAgentCity: value("issuingAgentCity"), iataCargoAgentCode: value("iataCargoAgentCode"), agentAccountNumber: value("agentAccountNumber"), firstToAirport: value("firstToAirport"), firstByCarrier: value("firstByCarrier"), secondToAirport: value("secondToAirport"), secondByCarrier: value("secondByCarrier"),
-      currencyCode: value("currencyCode"), paymentTermsCode: value("paymentTermsCode"), rateClass: value("rateClass"), weightUnit: value("weightUnit"), ratePerKg: decimal("ratePerKg"), freightCharge: decimal("freightCharge"),
-      lengthCm: decimal("lengthCm"), widthCm: decimal("widthCm"), heightCm: decimal("heightCm"), natureQuantityGoods: value("natureQuantityGoods"), declaredValueCarriage: decimal("declaredValueCarriage"), carriageValueCode: value("carriageValueCode"), declaredValueCustoms: decimal("declaredValueCustoms"), customsValueCode: value("customsValueCode"), insuranceAmount: decimal("insuranceAmount"),
-      routingSegmentsJson: value("routingSegmentsJson") || null, cargoRatingLinesJson: value("cargoRatingLinesJson") || null,
+  const [shipments, setShipments] = useState<Shipment[]>([]);
+  const [shipmentId, setShipmentId] = useState("");
+  const [shipment, setShipment] = useState<Shipment | null>(null);
+  const [originAirport, setOriginAirport] = useState("");
+  const [destinationAirport, setDestinationAirport] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (authLoading || !accessToken) return;
+    let active = true;
+
+    async function loadContext() {
+      setLoading(true);
+      setError("");
+      try {
+        const requestedShipmentId =
+          new URLSearchParams(window.location.search).get("shipmentId") || "";
+        const result = await shipmentsApi.list({
+          page: 0,
+          size: 100,
+          mode: "AIR",
+        });
+        if (!active) return;
+        const airShipments = result.content.filter(
+          (item) => item.transportMode === "AIR",
+        );
+        setShipments(airShipments);
+
+        if (requestedShipmentId) {
+          const selected = await shipmentsApi.get(requestedShipmentId);
+          if (!active) return;
+          setShipment(selected);
+          setShipmentId(selected.id);
+          setOriginAirport(airportSeed(selected.originCityPort));
+          setDestinationAirport(airportSeed(selected.destinationCityPort));
+          if (!airShipments.some((item) => item.id === selected.id)) {
+            setShipments((current) => [selected, ...current]);
+          }
+        } else {
+          setShipment(null);
+          setShipmentId("");
+          setOriginAirport("");
+          setDestinationAirport("");
+        }
+      } catch (exception) {
+        if (active) {
+          setError(
+            exception instanceof Error
+              ? exception.message
+              : "Unable to load shipments for AWB preparation.",
+          );
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void loadContext();
+    return () => {
+      active = false;
     };
-    try {
-      const result = await apiFetch<AwbCreated>("/api/air-cargo/documents/awb", { method: "POST", body: JSON.stringify(payload) });
-      setCreated(result); event.currentTarget.reset();
-    } catch (e) { setError(e instanceof Error ? e.message : "Could not create the AWB record."); }
-    finally { setBusy(false); }
+  }, [accessToken, authLoading]);
+
+  const selectedShipment = useMemo(
+    () => shipment || shipments.find((item) => item.id === shipmentId) || null,
+    [shipment, shipments, shipmentId],
+  );
+
+  function selectShipment(nextId: string) {
+    setShipmentId(nextId);
+    const next = shipments.find((item) => item.id === nextId) || null;
+    setShipment(next);
+    setOriginAirport(airportSeed(next?.originCityPort));
+    setDestinationAirport(airportSeed(next?.destinationCityPort));
+    setError("");
   }
 
-  return <main className="page">
-    <div className="page-head"><div><div className="eyebrow">AIR CARGO DOCUMENTATION</div><h1 className="page-title">Structured Air Waybill</h1><p className="page-subtitle">Capture legal parties, carrier routing, cargo rating, customs values and insurance in structured shipment records.</p></div><Link className="btn btn-secondary" href="/air-cargo">Back to air cargo</Link></div>
-    {error && <div className="alert alert-error" role="alert">{error}</div>}
-    {created && <div className="alert alert-success" role="status">AWB record created: <strong>{created.awbNumber}</strong> · Validation: {created.validationStatus}. <Link href={`/shipments/${created.shipmentId}`}>Open record</Link> (use the shipment ID to open shipment documents).</div>}
-    <form onSubmit={submit}>
-      <Section title="1. Header & shipment tracking"><Field label="Shipment UUID" name="shipmentId" required placeholder="Existing shipment ID"/><label className="form-field"><span>AWB type *</span><select className={fieldClass} name="awbType" required defaultValue="MAWB"><option value="MAWB">Master AWB (MAWB)</option><option value="HAWB">House AWB (HAWB)</option></select></label><Field label="AWB number (MAWB requires 11 digits incl. check digit)" name="awbNumber" required/><Field label="Airline 3-digit prefix" name="airlinePrefix" placeholder="e.g. 459"/><Field label="8-digit serial incl. check digit" name="airlineSerial" placeholder="e.g. 00205774"/><Field label="Parent MAWB number (for HAWB)" name="mawbNumber"/><Field label="HAWB number" name="hawbNumber"/><Field label="Origin airport IATA code" name="originAirport" required placeholder="KGL"/><Field label="Destination airport IATA code" name="destinationAirport" required placeholder="LHR"/></Section>
-      <Section title="2. Shipper / consignor legal identification"><Field label="Company legal name" name="shipperName" required/><Field label="Street address" name="shipperStreetAddress" required/><Field label="Postal code" name="shipperPostalCode"/><Field label="Contact person" name="shipperContactName"/><Field label="Phone" name="shipperPhone"/><Field label="Email" name="shipperEmail" type="email"/><Field label="Tax ID" name="shipperTaxId"/><Field label="EORI number" name="shipperEoriNumber"/></Section>
-      <Section title="3. Consignee / importer legal identification"><Field label="Company legal name" name="consigneeName" required/><Field label="Street address" name="consigneeStreetAddress" required/><Field label="Postal code" name="consigneePostalCode"/><Field label="Contact person" name="consigneeContactName"/><Field label="Phone" name="consigneePhone"/><Field label="Email" name="consigneeEmail" type="email"/><Field label="Tax ID" name="consigneeTaxId"/><Field label="EORI number" name="consigneeEoriNumber"/></Section>
-      <Section title="4. Issuing carrier agent & routing"><Field label="Issuing agent / forwarder" name="issuingAgent"/><Field label="Agent city" name="issuingAgentCity"/><Field label="IATA cargo agent code" name="iataCargoAgentCode"/><Field label="Airline account number" name="agentAccountNumber"/><Field label="First transit airport (To)" name="firstToAirport" placeholder="NBO"/><Field label="First carrier (By, 2-character IATA code)" name="firstByCarrier" placeholder="WB"/><Field label="Second transit airport (To)" name="secondToAirport"/><Field label="Second carrier (By, 2-character IATA code)" name="secondByCarrier"/><label className="form-field"><span>Currency</span><select className={fieldClass} name="currencyCode" defaultValue="RWF"><option>RWF</option><option>GBP</option><option>USD</option><option>EUR</option></select></label><label className="form-field"><span>Freight payment terms</span><select className={fieldClass} name="paymentTermsCode" defaultValue="PPD"><option value="PPD">PPD — Prepaid</option><option value="COLL">COLL — Collect</option></select></label><Field label="Additional routing segments JSON (optional)" name="routingSegmentsJson" placeholder='[{"to":"NBO","by":"WB"}]'/></Section>
-      <Section title="5. Cargo rating matrix"><Field label="Number of pieces" name="pieces" required type="number"/><Field label="Gross weight (kg)" name="grossWeightKg" required type="number"/><Field label="Chargeable weight (kg, auto recalculated if dimensions entered)" name="chargeableWeightKg" required type="number"/><label className="form-field"><span>Weight unit</span><select className={fieldClass} name="weightUnit" defaultValue="K"><option value="K">K — Kilograms</option><option value="L">L — Pounds (display)</option></select></label><label className="form-field"><span>Rate class</span><select className={fieldClass} name="rateClass" defaultValue="G"><option value="G">G — General cargo</option><option value="C">C — Specific commodity</option><option value="R">R — Class rate</option><option value="M">M — Minimum charge</option><option value="N">N — Normal rate</option><option value="Q">Q — Quantity rate</option></select></label><Field label="Rate per kg" name="ratePerKg" type="number"/><Field label="Freight charge" name="freightCharge" type="number"/><Field label="Length (cm)" name="lengthCm" type="number"/><Field label="Width (cm)" name="widthCm" type="number"/><Field label="Height (cm)" name="heightCm" type="number"/><Field label="HS code" name="hsCode"/><Field label="Nature & quantity of goods" name="natureQuantityGoods" required/><Field label="Additional cargo rating lines JSON (optional)" name="cargoRatingLinesJson" placeholder='[{"pieces":2,"grossWeightKg":40,"rateClass":"G"}]'/><label className="form-field"><span>Dangerous goods</span><select className={fieldClass} name="dangerousGoods" defaultValue="false"><option value="false">No</option><option value="true">Yes — ensure DG documents are attached</option></select></label><Field label="Special handling instructions" name="specialHandling"/></Section>
-      <Section title="6. Valuation & insurance"><Field label="Declared value for carriage" name="declaredValueCarriage" type="number"/><label className="form-field"><span>Carriage value code</span><select className={fieldClass} name="carriageValueCode" defaultValue="NVD"><option value="NVD">NVD — No value declared</option><option value="DECLARED">Declared</option></select></label><Field label="Declared value for customs" name="declaredValueCustoms" type="number"/><label className="form-field"><span>Customs value code</span><select className={fieldClass} name="customsValueCode" defaultValue="NCV"><option value="NCV">NCV — No customs value</option><option value="DECLARED">Declared</option></select></label><Field label="Insurance amount / premium" name="insuranceAmount" type="number"/></Section>
-      <div style={{ display: "flex", gap: 12, marginTop: 18 }}><button className="btn btn-primary" type="submit" disabled={busy}>{busy ? "Saving AWB…" : "Save structured AWB"}</button><Link className="btn btn-secondary" href="/shipments">Open shipments</Link></div>
-      <p className="card-muted" style={{ marginTop: 12 }}>Only enter an airline MAWB assigned by the carrier. IATA agent codes and carrier account numbers must reflect your actual authorizations. This form stores routing and cargo-line JSON as supplied; it does not certify carrier acceptance or customs clearance.</p>
-    </form>
-  </main>;
+  async function generateFromShipment() {
+    if (!selectedShipment) {
+      setError("Select an air shipment before generating its AWB.");
+      return;
+    }
+    if (selectedShipment.transportMode !== "AIR") {
+      setError("An air waybill can only be generated for an AIR shipment.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    try {
+      const created = await apiFetch<AwbCreated>(
+        `/api/air-cargo/documents/awb/from-shipment/${encodeURIComponent(selectedShipment.id)}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            originAirport: originAirport.trim().toUpperCase() || undefined,
+            destinationAirport:
+              destinationAirport.trim().toUpperCase() || undefined,
+          }),
+        },
+      );
+
+      // The completed step becomes visible on the next screen; the shipment
+      // remains the source of truth and can be used to download the AWB PDF.
+      const query = new URLSearchParams({
+        shipmentId: selectedShipment.id,
+        awbNumber: created.awbNumber,
+        awbStatus: created.validationStatus || "DRAFT",
+      });
+      const hasBillableValue =
+        (selectedShipment.amountBilledToClient ?? 0) > 0 ||
+        (selectedShipment.clientRevenue ?? 0) > 0;
+      router.replace(
+        hasBillableValue
+          ? `/billing?${query.toString()}`
+          : `/shipments/${encodeURIComponent(selectedShipment.id)}?${query.toString()}&next=pricing`,
+      );
+    } catch (exception) {
+      setError(
+        exception instanceof ApiError || exception instanceof Error
+          ? exception.message
+          : "Unable to generate the AWB from this shipment.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const grossWeight =
+    selectedShipment?.grossWeightKg ?? selectedShipment?.weightKg ?? null;
+  const chargeableWeight =
+    selectedShipment?.chargeableWeightKg ??
+    (Math.max(grossWeight ?? 0, selectedShipment?.volumetricWeightKg ?? 0) ||
+      null);
+  const pieces = selectedShipment?.packages ?? null;
+  const billable =
+    (selectedShipment?.amountBilledToClient ?? 0) > 0 ||
+    (selectedShipment?.clientRevenue ?? 0) > 0;
+
+  return (
+    <main className="page awb-workflow-page">
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">AIR CARGO · DOCUMENT WORKFLOW</div>
+          <h1 className="page-title">Generate an air waybill</h1>
+          <p className="page-subtitle">
+            Select a shipment and create an AAL House Air Waybill using the
+            customer, route, cargo and commercial information already recorded
+            in the platform.
+          </p>
+        </div>
+        <div className="actions">
+          <Link
+            className="btn btn-secondary"
+            href={
+              selectedShipment
+                ? `/shipments/${selectedShipment.id}`
+                : "/shipments"
+            }
+          >
+            Back to shipment
+          </Link>
+          <Link className="btn" href="/air-cargo">
+            Air cargo workspace
+          </Link>
+        </div>
+      </div>
+
+      <div className="workflow-steps" aria-label="Shipment creation workflow">
+        <div className="workflow-step is-complete">
+          <span>1</span>
+          <div>
+            <strong>Shipment</strong>
+            <small>Recorded</small>
+          </div>
+        </div>
+        <div className="workflow-connector is-active" />
+        <div className="workflow-step is-current">
+          <span>2</span>
+          <div>
+            <strong>Air waybill</strong>
+            <small>Generate from shipment</small>
+          </div>
+        </div>
+        <div className="workflow-connector" />
+        <div className={`workflow-step ${billable ? "" : "is-pending"}`}>
+          <span>3</span>
+          <div>
+            <strong>Invoice</strong>
+            <small>{billable ? "Next step" : "Pricing may be needed"}</small>
+          </div>
+        </div>
+      </div>
+
+      {error && (
+        <div className="alert alert-error" role="alert">
+          {error}
+        </div>
+      )}
+
+      <div className="awb-workflow-grid">
+        <section className="card awb-selection-card">
+          <div className="section-heading">
+            <div className="section-number">02</div>
+            <div>
+              <h2>Select shipment</h2>
+              <p>
+                Existing records are loaded here. No shipment UUID or customer
+                details need to be retyped.
+              </p>
+            </div>
+          </div>
+
+          <label className="form-field">
+            <span>Air shipment</span>
+            <select
+              className="form-input"
+              value={shipmentId}
+              onChange={(event) => selectShipment(event.target.value)}
+              disabled={loading || saving}
+              required
+            >
+              <option value="">Choose an air shipment…</option>
+              {shipments.map((item) => (
+                <option value={item.id} key={item.id}>
+                  {item.referenceCode} ·{" "}
+                  {item.clientName || "Client not captured"} ·{" "}
+                  {item.originCityPort || item.originAddress} →{" "}
+                  {item.destinationCityPort || item.destinationAddress}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {loading && (
+            <p className="form-hint" role="status">
+              Loading tenant shipments…
+            </p>
+          )}
+          {!loading && shipments.length === 0 && (
+            <div className="empty-state">
+              <strong>No air shipments found</strong>
+              <p>
+                Create an AIR shipment first. Once it is saved, this step will
+                prefill the AWB from it.
+              </p>
+              <Link className="btn btn-primary" href="/new-shipment">
+                Create shipment
+              </Link>
+            </div>
+          )}
+
+          {selectedShipment && (
+            <div className="awb-shipment-summary">
+              <div className="awb-summary-topline">
+                <div>
+                  <span className="summary-kicker">SHIPMENT REFERENCE</span>
+                  <strong className="awb-reference">
+                    {selectedShipment.referenceCode}
+                  </strong>
+                </div>
+                <span className="status status-neutral">
+                  {selectedShipment.status.replaceAll("_", " ")}
+                </span>
+              </div>
+              <div className="awb-party-columns">
+                <div>
+                  <span className="summary-kicker">
+                    CUSTOMER / SHIPPER SOURCE
+                  </span>
+                  <strong>
+                    {selectedShipment.clientName || "Shipper to be confirmed"}
+                  </strong>
+                  <p>
+                    {selectedShipment.contact || "No contact person captured"}
+                  </p>
+                  <p>
+                    {selectedShipment.originAddress ||
+                      "Origin address not captured"}
+                  </p>
+                </div>
+                <div>
+                  <span className="summary-kicker">
+                    CONSIGNEE / DESTINATION SOURCE
+                  </span>
+                  <strong>Consignee details</strong>
+                  <p>
+                    {selectedShipment.destinationAddress ||
+                      "Destination address not captured"}
+                  </p>
+                  <p>
+                    {selectedShipment.destinationCityPort ||
+                      selectedShipment.destinationCountry ||
+                      "Destination port not captured"}
+                  </p>
+                </div>
+              </div>
+              <div className="awb-facts-grid">
+                <div>
+                  <span>Pieces</span>
+                  <strong>{numberLabel(pieces)}</strong>
+                </div>
+                <div>
+                  <span>Gross weight</span>
+                  <strong>
+                    {numberLabel(grossWeight)}
+                    {grossWeight == null ? "" : " kg"}
+                  </strong>
+                </div>
+                <div>
+                  <span>Chargeable weight</span>
+                  <strong>
+                    {numberLabel(chargeableWeight)}
+                    {chargeableWeight == null ? "" : " kg"}
+                  </strong>
+                </div>
+                <div>
+                  <span>Commodity</span>
+                  <strong>
+                    {selectedShipment.commodity || "To be confirmed"}
+                  </strong>
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="card awb-generation-card">
+          <div className="section-heading">
+            <div className="section-number">03</div>
+            <div>
+              <h2>Generate document</h2>
+              <p>
+                The system fills the AWB from shipment data; only confirm
+                airport codes if they were not recorded as IATA codes.
+              </p>
+            </div>
+          </div>
+
+          <div className="form-grid">
+            <label className="field">
+              <span>Origin airport IATA code</span>
+              <input
+                value={originAirport}
+                onChange={(event) =>
+                  setOriginAirport(event.target.value.toUpperCase().slice(0, 3))
+                }
+                placeholder="Auto from shipment, e.g. KGL"
+                maxLength={3}
+                autoCapitalize="characters"
+              />
+              <small>
+                {airportSeed(selectedShipment?.originCityPort)
+                  ? "Prefilled from the shipment port"
+                  : "Not captured as a 3-letter airport code"}
+              </small>
+            </label>
+            <label className="field">
+              <span>Destination airport IATA code</span>
+              <input
+                value={destinationAirport}
+                onChange={(event) =>
+                  setDestinationAirport(
+                    event.target.value.toUpperCase().slice(0, 3),
+                  )
+                }
+                placeholder="Auto from shipment, e.g. NBO"
+                maxLength={3}
+                autoCapitalize="characters"
+              />
+              <small>
+                {airportSeed(selectedShipment?.destinationCityPort)
+                  ? "Prefilled from the shipment port"
+                  : "Not captured as a 3-letter airport code"}
+              </small>
+            </label>
+          </div>
+
+          <div className="awb-draft-notice">
+            <strong>Document integrity</strong>
+            <p>
+              AAL can generate its internal House AWB reference automatically.
+              The airline-issued Master AWB number is never fabricated. Where
+              the shipment has no confirmed airport code, consignee legal
+              identity, weight or pieces, the PDF is clearly marked DRAFT and
+              cannot be tendered to a carrier until completed.
+            </p>
+          </div>
+
+          <button
+            className="btn btn-primary btn-large btn-block"
+            type="button"
+            onClick={generateFromShipment}
+            disabled={!selectedShipment || loading || saving}
+          >
+            {saving
+              ? "Generating AWB…"
+              : billable
+                ? "Generate AWB → Continue to invoice"
+                : "Generate AWB → Review shipment pricing"}
+          </button>
+          <p className="form-hint">
+            Creation is tenant-scoped and idempotent: generating again for the
+            same shipment returns its existing AWB record instead of creating
+            duplicates.
+          </p>
+        </section>
+      </div>
+    </main>
+  );
 }

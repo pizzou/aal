@@ -148,7 +148,12 @@ public class AwbDocumentService {
             PDPage first = new PDPage(PDRectangle.A4); document.addPage(first);
             try (PDPageContentStream cs = new PDPageContentStream(document, first)) {
                 float y = 800f;
-                drawText(cs, PDType1Font.HELVETICA_BOLD, 15, margin, y, "AIR WAYBILL / AAL CARGO DOCUMENT"); y -= 22;
+                drawText(cs, PDType1Font.HELVETICA_BOLD, 15, margin, y, "AIR WAYBILL / AAL CARGO DOCUMENT");
+                if ("DRAFT".equalsIgnoreCase(a.getValidationStatus())) {
+                    drawTextRightAligned(cs, PDType1Font.HELVETICA_BOLD, 8, pageWidth - margin, y,
+                            "DRAFT - NOT CARRIER ISSUED");
+                }
+                y -= 22;
                 String prefix = a.getAirlinePrefix() == null ? "___" : a.getAirlinePrefix();
                 String serial = a.getAirlineSerial() == null ? "________" : a.getAirlineSerial();
                 drawBox(cs, "AIRLINE PREFIX", prefix, margin, y, 70); drawBox(cs, "8-DIGIT SERIAL", serial, margin + 78, y, 110);
@@ -185,7 +190,12 @@ public class AwbDocumentService {
             PDPage second = new PDPage(PDRectangle.A4); document.addPage(second);
             try (PDPageContentStream cs = new PDPageContentStream(document, second)) {
                 float y = 800f;
-                drawText(cs, PDType1Font.HELVETICA_BOLD, 15, margin, y, "CARGO RATING / VALUATION DETAILS"); y -= 30;
+                drawText(cs, PDType1Font.HELVETICA_BOLD, 15, margin, y, "CARGO RATING / VALUATION DETAILS");
+                if ("DRAFT".equalsIgnoreCase(a.getValidationStatus())) {
+                    drawTextRightAligned(cs, PDType1Font.HELVETICA_BOLD, 8, pageWidth - margin, y,
+                            "DRAFT - REVIEW REQUIRED");
+                }
+                y -= 30;
                 drawBox(cs, "Number of pieces", safe(a.getPieces()), margin, y, 115);
                 drawBox(cs, "Gross weight (kg)", safe(a.getGrossWeightKg()), margin + 125, y, 120);
                 drawBox(cs, "Chargeable weight (kg)", safe(a.getChargeableWeightKg()), margin + 255, y, 140);
@@ -208,11 +218,20 @@ public class AwbDocumentService {
                 drawBox(cs, "Declared value for customs", safe(a.getDeclaredValueCustoms()), margin + 310, y, 150); y -= 44;
                 drawBox(cs, "Customs value code (NCV)", safe(a.getCustomsValueCode()), margin, y, 180);
                 drawBox(cs, "Insurance amount / premium", safe(a.getInsuranceAmount()), margin + 190, y, 190);
-                drawBox(cs, "Dangerous goods", Boolean.TRUE.equals(a.getDangerousGoods()) ? "YES - see declaration" : "NO", margin + 390, y, 90); y -= 54;
+                String dangerousGoodsValue = "DRAFT".equalsIgnoreCase(a.getValidationStatus())
+                        ? "NOT VERIFIED - CONFIRM"
+                        : Boolean.TRUE.equals(a.getDangerousGoods()) ? "YES - see declaration" : "NO";
+                drawBox(cs, "Dangerous goods", dangerousGoodsValue, margin + 390, y,
+                        pageWidth - margin - (margin + 390)); y -= 54;
                 drawText(cs, PDType1Font.HELVETICA, 8, margin, y, "Routing segments and cargo rating lines may be supplied as structured JSON and are retained with this AWB record."); y -= 35;
                 drawText(cs, PDType1Font.HELVETICA, 8, margin, y, "Shipper / agent signature: __________________________");
                 drawText(cs, PDType1Font.HELVETICA, 8, rightX, y, "Issuing carrier signature: __________________________"); y -= 25;
-                drawText(cs, PDType1Font.HELVETICA_OBLIQUE, 7, margin, y, "Generated from AAL system records. Carrier-issued MAWB numbers and agent accreditation must be verified with the issuing carrier/IATA.");
+                drawText(cs, PDType1Font.HELVETICA_OBLIQUE, 7, margin, y,
+                        "Generated from AAL system records. Carrier-issued MAWB numbers and agent accreditation must be verified with the issuing carrier/IATA.");
+                if ("DRAFT".equalsIgnoreCase(a.getValidationStatus())) {
+                    drawText(cs, PDType1Font.HELVETICA_BOLD, 7, margin, 24,
+                            "DRAFT ONLY - confirm consignee legal identity, airport codes, weights and carrier MAWB before use.");
+                }
             }
             ByteArrayOutputStream out = new ByteArrayOutputStream(); document.save(out); return out.toByteArray();
         } catch (IOException ex) {

@@ -1,6 +1,10 @@
 package com.logiplatform.dto;
 
 import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -11,13 +15,19 @@ public final class CommandCenterShipmentDtos {
     private CommandCenterShipmentDtos() {
     }
 
+    /** Dedicated partial pricing update used by the guided shipment workflow. */
+    public record UpdatePricingRequest(
+            @NotNull @DecimalMin(value = "0.01", message = "Client revenue must be greater than zero")
+            BigDecimal clientRevenue,
+            @NotNull @PositiveOrZero BigDecimal supplierCost,
+            @NotNull @PositiveOrZero BigDecimal otherCost,
+            @NotNull @PositiveOrZero BigDecimal otherExpenses,
+            @NotBlank @Pattern(regexp = "(?i)[A-Z]{3}", message = "Currency must be a 3-letter ISO code")
+            String currency
+    ) {}
+
     /**
-     * Complete operational update contract based on:
-     *
-     * AAL MOTHERSHIP
-     * +
-     * AAL Command Center
-     *
+     * Complete operational update contract based on the AAL workbooks.
      * Calculated fields are deliberately excluded from the request.
      */
     public record UpdateRequest(

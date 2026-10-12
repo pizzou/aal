@@ -4399,3 +4399,593 @@ canvas {
     transition-duration: .01ms !important;
   }
 }
+
+/* =========================================================
+   PROFESSIONAL LOGISTICS UI BASELINE
+   Shared by operational, air-cargo, finance, warehouse and reporting routes.
+   ========================================================= */
+:root {
+  --aal-ui-radius: 14px;
+  --aal-ui-focus: 0 0 0 3px rgba(23, 105, 216, 0.16);
+  --aal-ui-shadow: 0 8px 24px rgba(7, 26, 82, 0.055);
+}
+
+body {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.page {
+  width: min(1640px, 100%);
+  padding: clamp(18px, 2.2vw, 34px);
+}
+
+.page-head {
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.eyebrow {
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.13em;
+}
+
+.page-title {
+  font-size: clamp(27px, 2.4vw, 36px);
+  line-height: 1.13;
+  letter-spacing: -0.035em;
+}
+
+.page-subtitle {
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+:where(.card, .form-panel, .sticky-card) {
+  border-radius: var(--aal-ui-radius);
+  box-shadow: var(--aal-ui-shadow);
+}
+
+.card {
+  padding: clamp(16px, 1.5vw, 22px);
+}
+
+.card-title {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+:where(.card-muted, .form-hint, .helper-text, .field small, .form-field small) {
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+:where(.btn, button.filter-button, .filter-button) {
+  min-height: 40px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.btn-small {
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.btn-large {
+  min-height: 46px;
+  font-size: 13px;
+}
+
+:where(.btn, button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid rgba(23, 105, 216, 0.42);
+  outline-offset: 2px;
+}
+
+:where(.field, .form-field) {
+  min-width: 0;
+}
+
+:where(.field > span, .form-field > span) {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+:where(.field input, .field select, .field textarea, .form-input, .form-field input, .form-field select, .form-field textarea, .search) {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid #cfd7e3;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #101828;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.45;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+:where(.field input, .field select, .field textarea, .form-input, .form-field input, .form-field select, .form-field textarea, .search):focus {
+  border-color: #1769d8;
+  box-shadow: var(--aal-ui-focus);
+  outline: none;
+}
+
+:where(.field input, .form-input, .form-field input, .search):disabled,
+:where(.field select, .form-field select):disabled {
+  background: #f2f4f7;
+  color: #667085;
+  cursor: not-allowed;
+}
+
+:where(.alert, [role="alert"]) {
+  padding: 13px 16px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.table {
+  font-size: 12px;
+}
+
+.table th {
+  padding: 12px;
+  font-size: 10px;
+  letter-spacing: 0.055em;
+}
+
+.table td {
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.status {
+  padding: 5px 8px;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.aging-note {
+  font-size: 10px;
+}
+
+:where(.section-heading, .section-heading > div:last-child) {
+  min-width: 0;
+}
+
+.section-heading h2,
+.section-heading h3 {
+  color: var(--aal-navy-900);
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.section-heading p {
+  margin: 4px 0 0;
+  color: var(--aal-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* Step-by-step shipment/document flow */
+.workflow-steps {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 22px;
+  padding: 14px 18px;
+  background: #fff;
+  border: 1px solid var(--aal-line);
+  border-radius: 14px;
+  box-shadow: var(--aal-ui-shadow);
+}
+
+.workflow-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: #667085;
+}
+
+.workflow-step > span {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border: 1px solid #d0d5dd;
+  border-radius: 50%;
+  background: #f9fafb;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.workflow-step strong,
+.workflow-step small {
+  display: block;
+}
+
+.workflow-step strong {
+  color: #344054;
+  font-size: 12px;
+}
+
+.workflow-step small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.workflow-step.is-complete > span {
+  border-color: #86efac;
+  background: #ecfdf3;
+  color: #067647;
+}
+
+.workflow-step.is-current > span {
+  border-color: var(--aal-brand-blue);
+  background: var(--aal-brand-blue);
+  color: #fff;
+  box-shadow: 0 0 0 4px #eaf2ff;
+}
+
+.workflow-step.is-current strong {
+  color: var(--aal-brand-navy);
+}
+
+.workflow-connector {
+  height: 1px;
+  flex: 1 1 36px;
+  min-width: 22px;
+  background: #d0d5dd;
+}
+
+.workflow-connector.is-active {
+  background: #72a8f5;
+}
+
+.workflow-completion-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  background: #fff;
+  border: 1px solid #b7e4c7;
+  border-radius: 14px;
+  box-shadow: var(--aal-ui-shadow);
+}
+
+.workflow-completion-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 50%;
+  background: #ecfdf3;
+  color: #067647;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.workflow-completion-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.workflow-completion-copy > strong {
+  display: block;
+  color: var(--aal-navy-900);
+  font-size: 13px;
+}
+
+.workflow-completion-copy p {
+  margin: 4px 0 6px;
+  color: #475467;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.awb-workflow-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.awb-workflow-grid > .card {
+  min-width: 0;
+}
+
+.awb-selection-card .section-heading,
+.awb-generation-card .section-heading {
+  margin-bottom: 20px;
+}
+
+.awb-shipment-summary {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid #dbe5f2;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8fbff, #fff 75%);
+}
+
+.awb-summary-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e4eaf2;
+}
+
+.summary-kicker {
+  display: block;
+  margin-bottom: 5px;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .07em;
+}
+
+.awb-reference {
+  display: block;
+  color: var(--aal-navy-900);
+  font-size: 20px;
+  line-height: 1.25;
+  letter-spacing: -.025em;
+  overflow-wrap: anywhere;
+}
+
+.awb-party-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  padding: 16px 0;
+}
+
+.awb-party-columns > div {
+  min-width: 0;
+}
+
+.awb-party-columns strong {
+  display: block;
+  color: #101828;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.awb-party-columns p {
+  margin: 5px 0 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.awb-facts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.awb-facts-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid #e4eaf2;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.awb-facts-grid span {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.awb-facts-grid strong {
+  color: #101828;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.awb-draft-notice {
+  margin: 20px 0;
+  padding: 14px 15px;
+  border: 1px solid #f3d79b;
+  border-left: 4px solid #d99b19;
+  border-radius: 10px;
+  background: #fffbeb;
+}
+
+.awb-draft-notice strong {
+  color: #854d0e;
+  font-size: 12px;
+}
+
+.awb-draft-notice p {
+  margin: 5px 0 0;
+  color: #7a4b12;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.empty-state {
+  margin-top: 18px;
+  padding: 22px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+  text-align: center;
+}
+
+.empty-state strong {
+  color: #344054;
+  font-size: 14px;
+}
+
+.empty-state p {
+  margin: 6px 0 14px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.invoice-created-panel .actions {
+  justify-content: flex-end;
+}
+
+@media (max-width: 1050px) {
+  .awb-workflow-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .workflow-steps {
+    align-items: flex-start;
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .workflow-step {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .workflow-step > div {
+    max-width: 100px;
+  }
+
+  .workflow-connector {
+    min-width: 8px;
+    margin-top: 16px;
+  }
+
+  .workflow-completion-card {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .workflow-completion-card > .actions {
+    width: 100%;
+  }
+
+  .workflow-completion-card > .actions > * {
+    flex: 1 1 auto;
+  }
+
+  .awb-party-columns {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+}
+
+
+.workflow-pricing-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  border: 1px solid #f3d79b;
+  border-left: 4px solid #d99b19;
+  border-radius: 14px;
+  background: #fffbeb;
+}
+
+.workflow-pricing-notice strong {
+  color: #854d0e;
+  font-size: 13px;
+}
+
+.workflow-pricing-notice p {
+  margin: 4px 0 0;
+  color: #7a4b12;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+@media (max-width: 720px) {
+  .workflow-pricing-notice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+
+.shipment-pricing-workflow {
+  margin: 0 0 18px;
+  border-color: #cfe0f5;
+  box-shadow: var(--aal-ui-shadow);
+}
+
+.shipment-pricing-workflow .section-heading {
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+
+.shipment-pricing-workflow .section-heading h2 {
+  margin: 0;
+  color: var(--aal-navy-900);
+  font-size: 18px;
+}
+
+.shipment-pricing-workflow .section-heading p {
+  max-width: 920px;
+  margin: 5px 0 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.shipment-pricing-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.shipment-pricing-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 6px;
+  border-top: 1px solid #e4eaf2;
+}
+
+.shipment-pricing-actions .form-hint {
+  max-width: 620px;
+}
+
+@media (max-width: 800px) {
+  .shipment-pricing-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .shipment-pricing-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .shipment-pricing-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

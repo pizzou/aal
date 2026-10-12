@@ -55,6 +55,17 @@ public class FinanceDocumentSequenceService {
             "reference_code",
             "AAL-AWB-"
         );
+        // Structured AWBs are the canonical document register. Keep this
+        // sequence ahead of documents imported or restored independently of
+        // shipment reference codes as well.
+        synchronizeSequenceWithExistingData(
+            tenant,
+            "AWB",
+            year,
+            "awb_records",
+            "awb_number",
+            "AAL-AWB-"
+        );
         Long sequence = db.queryForObject("""
             UPDATE finance_document_sequences
                SET last_value=last_value+1,updated_at=now()

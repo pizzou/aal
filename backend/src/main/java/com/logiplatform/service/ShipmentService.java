@@ -7,6 +7,7 @@ import com.logiplatform.model.ShipmentStatus;
 import com.logiplatform.model.ShipmentTrackingEvent;
 import com.logiplatform.repository.ShipmentTrackingEventRepository;
 import com.logiplatform.repository.ProofOfDeliveryRepository;
+import com.logiplatform.repository.CommercialInvoiceRepository;
 import com.logiplatform.model.TrackingEventType;
 import com.logiplatform.model.TransportMode;
 
@@ -26,6 +27,7 @@ import java.util.Locale;
 import java.util.Map;
 import static com.logiplatform.dto.ShipmentDtos.*;
 import static com.logiplatform.dto.CommandCenterShipmentDtos.UpdateRequest;
+import static com.logiplatform.dto.CommandCenterShipmentDtos.UpdatePricingRequest;
 
 @Service
 public class ShipmentService {
@@ -37,9 +39,9 @@ public class ShipmentService {
     private final MilestoneOrchestrationService milestoneOrchestrationService;
     private final OperationsEventStreamService operationsEventStreamService;
     private final FinanceDocumentSequenceService documentSequences;
-    private final BillingService billingService;
     private final ShipmentCreationIdempotencyService creationIdempotency;
     private final ProofOfDeliveryRepository proofOfDeliveryRepository;
+    private final CommercialInvoiceRepository commercialInvoices;
 
     public ShipmentService(ShipmentRepository shipmentRepository,
             ShipmentTrackingEventRepository trackingEventRepository,
@@ -48,9 +50,9 @@ public class ShipmentService {
             MilestoneOrchestrationService milestoneOrchestrationService,
             OperationsEventStreamService operationsEventStreamService,
             FinanceDocumentSequenceService documentSequences,
-            BillingService billingService,
             ShipmentCreationIdempotencyService creationIdempotency,
-            ProofOfDeliveryRepository proofOfDeliveryRepository) {
+            ProofOfDeliveryRepository proofOfDeliveryRepository,
+            CommercialInvoiceRepository commercialInvoices) {
         this.shipmentRepository = shipmentRepository;
         this.trackingEventRepository = trackingEventRepository;
         this.notificationService = notificationService;
@@ -58,9 +60,9 @@ public class ShipmentService {
         this.milestoneOrchestrationService = milestoneOrchestrationService;
         this.operationsEventStreamService = operationsEventStreamService;
         this.documentSequences = documentSequences;
-        this.billingService = billingService;
         this.creationIdempotency = creationIdempotency;
         this.proofOfDeliveryRepository = proofOfDeliveryRepository;
+        this.commercialInvoices = commercialInvoices;
     }
 
     @Transactional
@@ -96,15 +98,13 @@ public class ShipmentService {
                     "A shipment with reference code '" + reference + "' already exists");
         }
 
-        String invoiceNumber = documentSequences.nextInvoiceNumber();
-
         Shipment shipment = new Shipment(
                 tenantId, reference, request.originAddress(), request.destinationAddress(),
                 mode, request.carrierName(), request.carrierReferenceNumber());
         shipment.updateCommandCenterFields(
                 null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null,
-                "Outstanding", null, invoiceNumber, null, null, null, null, null, "USD");
+                "Outstanding", null, null, null, null, null, null, null, "USD");
        
         Shipment saved = shipmentRepository.saveAndFlush(shipment);
 
@@ -193,6 +193,26 @@ public class ShipmentService {
     }
 
     @Transactional
+    public ShipmentResponse updatePricing(UUID shipmentId, UpdatePricingRequest request) {
+        UUID tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
+        }
+        Shipment shipment = getOwnedForUpdate(shipmentId);
+        if (commercialInvoices.findByTenantIdAndShipmentId(tenantId, shipmentId).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This shipment already has a canonical invoice. Use the finance adjustment workflow instead of editing issued pricing.");
+        }
+        try {
+            shipment.updateCommercialPricing(request.clientRevenue(), request.supplierCost(),
+                    request.otherCost(), request.otherExpenses(), request.currency());
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+        }
+        return ShipmentResponse.from(shipmentRepository.save(shipment));
+    }
+
+    @Transactional
     public ShipmentResponse updateCommandCenter(UUID shipmentId, UpdateRequest request) {
         UUID tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
@@ -200,21 +220,45 @@ public class ShipmentService {
         }
 
         Shipment shipment = getOwnedForUpdate(shipmentId);
+        var canonicalInvoice = commercialInvoices.findByTenantIdAndShipmentId(tenantId, shipmentId).orElse(null);
+        if (canonicalInvoice != null) {
+            boolean commercialValuesChanged = moneyChanged(request.supplierCost(), shipment.getSupplierCost())
+                    || moneyChanged(request.otherCost(), shipment.getOtherCost())
+                    || moneyChanged(request.clientRevenue(), shipment.getClientRevenue())
+                    || moneyChanged(request.amountPaidByClient(), shipment.getAmountPaidByClient())
+                    || moneyChanged(request.amountPaidToSupply(), shipment.getAmountPaidToSupply())
+                    || moneyChanged(request.otherExpenses(), shipment.getOtherExpenses())
+                    || !normalizeCurrency(request.currency()).equals(normalizeCurrency(shipment.getCurrency()))
+                    || (request.invoiceNo() != null && !request.invoiceNo().isBlank()
+                            && !request.invoiceNo().trim().equalsIgnoreCase(canonicalInvoice.getInvoiceNo()));
+            if (commercialValuesChanged) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "This shipment already has a canonical invoice. Commercial totals and invoice numbering must be changed through the finance adjustment workflow.");
+            }
+        }
 
         ShipmentStatus requestedStatus = request.shipmentStatus() == null || request.shipmentStatus().isBlank()
                 ? null : parseShipmentStatus(request.shipmentStatus());
         BigDecimal previousSupplierPaid = nz(shipment.getAmountPaidToSupply());
+        BigDecimal previousClientPaid = nz(shipment.getAmountPaidByClient());
         BigDecimal requestedSupplierPaid = nz(request.amountPaidToSupply());
-        if (previousSupplierPaid.signum() > 0 && request.currency() != null && shipment.getCurrency() != null
-                && !shipment.getCurrency().equalsIgnoreCase(request.currency().trim())) {
+        boolean financialPaymentsRecorded = previousSupplierPaid.signum() > 0 || previousClientPaid.signum() > 0;
+        if (financialPaymentsRecorded && (request.currency() == null || shipment.getCurrency() == null
+                || !shipment.getCurrency().equalsIgnoreCase(request.currency().trim()))) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Currency cannot be changed after supplier payments have been recorded");
+                    "Currency cannot be changed or cleared after customer or supplier payments have been recorded");
         }
         if (requestedSupplierPaid.compareTo(previousSupplierPaid) < 0) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Amount paid to supply cannot be reduced after it has been recorded");
+        }
+
+        if (nz(request.amountPaidByClient()).compareTo(previousClientPaid) < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Amount paid by client cannot be reduced after it has been recorded");
         }
 
         shipment.updateCommandCenterFields(
@@ -225,7 +269,9 @@ public class ShipmentService {
                 request.airlineUsed(), request.serviceType(), request.operatorName(),
                 request.supplierCost(), request.otherCost(), request.clientRevenue(),
                 request.amountPaidByClient(), request.amountPaidToSupply(), request.otherExpenses(),
-                request.paymentStatus(), request.ownerName(), request.invoiceNo(),
+                request.paymentStatus(), request.ownerName(),
+                canonicalInvoice != null && (request.invoiceNo() == null || request.invoiceNo().isBlank())
+                        ? canonicalInvoice.getInvoiceNo() : request.invoiceNo(),
                 request.etd(), request.eta(), request.nextAction(), request.nextActionDate(),
                 request.notes(), request.currency());
 
@@ -239,15 +285,10 @@ public class ShipmentService {
         Shipment saved = shipmentRepository.save(shipment);
 
        
-        BigDecimal billableClientRevenue = nz(saved.getAmountBilledToClient()).signum() > 0
-                ? saved.getAmountBilledToClient()
-                : saved.getClientRevenue();
-        if (nz(billableClientRevenue).signum() > 0) {
-            billingService.billShipment(saved.getId(),
-                    request.nextActionDate() != null ? request.nextActionDate() : java.time.LocalDate.now().plusDays(30),
-                    request.ownerName());
-        }
-
+        // Recording operational/commercial shipment fields must not silently
+        // issue an invoice before finance has confirmed its due date and any
+        // applicable tax rule. Invoice creation is an explicit next workflow
+        // step through /api/billing/shipments/{id}/invoice.
         BigDecimal supplierDelta = requestedSupplierPaid.subtract(previousSupplierPaid);
         if (supplierDelta.signum() > 0) {
             financePostingService.postSupplierPayment(
@@ -461,6 +502,14 @@ public class ShipmentService {
 
     private static BigDecimal nz(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private static boolean moneyChanged(BigDecimal requested, BigDecimal current) {
+        return nz(requested).compareTo(nz(current)) != 0;
+    }
+
+    private static String normalizeCurrency(String currency) {
+        return currency == null ? "" : currency.trim().toUpperCase(Locale.ROOT);
     }
 
     private String nextShipmentReference() {

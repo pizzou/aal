@@ -771,6 +771,20 @@ export const financeAccountsApi = {
 };
 
 export const shipmentsApi = {
+  updatePricing: (
+    id: string,
+    data: {
+      clientRevenue: number;
+      supplierCost: number;
+      otherCost: number;
+      otherExpenses: number;
+      currency: string;
+    },
+  ) =>
+    apiFetch<Shipment>(`/api/shipments/${id}/pricing`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
   list: (params: ShipmentListParams = {}, options: RequestInit = {}) => {
     const query = new URLSearchParams();
 

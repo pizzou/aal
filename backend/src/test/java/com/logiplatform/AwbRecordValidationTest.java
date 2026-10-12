@@ -51,6 +51,34 @@ class AwbRecordValidationTest {
         assertTrue(exception.getMessage().contains("airport codes"));
     }
 
+    @Test void internalDraftHouseAwbCanBeGeneratedBeforeCarrierMawbIsAssigned() {
+        AwbRecord draft = awb("AAL-AWB-2026-000001", "HAWB", null, "TBD", "NBO");
+        draft.markDraftHouseAwb();
+        assertEquals("DRAFT", draft.getValidationStatus());
+        assertEquals("AAL-AWB-2026-000001", draft.getHawbNumber());
+        assertEquals("NOT_SUBMITTED", draft.getSubmissionStatus());
+        assertThrows(IllegalStateException.class, draft::readyForSubmission);
+    }
+
+    @Test void draftHouseAwbNormalizesUnknownAirportCodesWithoutClaimingValidation() {
+        AwbRecord draft = awb("AAL-AWB-2026-000002", "HAWB", null, "Kigali", "London");
+        draft.markDraftHouseAwb();
+        assertEquals("DRAFT", draft.getValidationStatus());
+        assertEquals("TBD", draft.getOriginAirport());
+        assertEquals("TBD", draft.getDestinationAirport());
+    }
+
+    @Test void draftAirportCodesCanBeCorrectedWithoutIssuingASecondAwb() {
+        AwbRecord draft = awb("AAL-AWB-2026-000003", "HAWB", null, "TBD", "TBD");
+        draft.markDraftHouseAwb();
+        draft.updateDraftAirportCodes("KGL", "NBO");
+        assertEquals("AAL-AWB-2026-000003", draft.getAwbNumber());
+        assertEquals("KGL", draft.getOriginAirport());
+        assertEquals("NBO", draft.getDestinationAirport());
+        assertEquals("DRAFT", draft.getValidationStatus());
+        assertThrows(IllegalArgumentException.class, () -> draft.updateDraftAirportCodes("KGL", "KGL"));
+    }
+
     @Test void mawbPrefixAndEightDigitSerialAreSeparated() {
         AwbRecord a = awb("071-61746230", "MAWB");
         a.validateRecord();

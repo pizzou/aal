@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static com.logiplatform.dto.CommandCenterShipmentDtos.UpdateRequest;
+import static com.logiplatform.dto.CommandCenterShipmentDtos.UpdatePricingRequest;
 import static com.logiplatform.dto.ShipmentDtos.*;
 
 /**
@@ -57,6 +58,12 @@ public class ShipmentController {
     public ResponseEntity<ShipmentResponse> updateStatus(
             @PathVariable UUID id, @Valid @RequestBody UpdateStatusRequest request) {
         return ResponseEntity.ok(shipmentService.updateStatus(id, request));
+    }
+
+    @PatchMapping("/{id}/pricing")
+    public ResponseEntity<ShipmentResponse> updatePricing(
+            @PathVariable UUID id, @Valid @RequestBody UpdatePricingRequest request) {
+        return ResponseEntity.ok(shipmentService.updatePricing(id, request));
     }
 
     @PatchMapping("/{id}/command-center")

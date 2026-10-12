@@ -25,6 +25,16 @@ public class AirCargoDocumentController {
         return service.documentsForShipment(shipmentId);
     }
 
+    public record GenerateAwbRequest(String originAirport, String destinationAirport) {}
+
+    @PostMapping("/awb/from-shipment/{shipmentId}")
+    public AwbResponse generateAwbFromShipment(@PathVariable UUID shipmentId,
+            @RequestBody(required = false) GenerateAwbRequest request) {
+        return service.createDraftAwbFromShipment(shipmentId,
+                request == null ? null : request.originAirport(),
+                request == null ? null : request.destinationAirport());
+    }
+
     @PostMapping("/awb")
     public AwbResponse awb(@Valid @RequestBody AwbRequest r) {
         return service.createAwb(r);

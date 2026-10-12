@@ -716,6 +716,52 @@ public class Shipment {
     }
 
   
+    /**
+     * Applies customer pricing without overwriting route, customer, cargo or
+     * milestone fields from the operational shipment record.
+     */
+    public void updateCommercialPricing(
+            BigDecimal clientRevenue,
+            BigDecimal supplierCost,
+            BigDecimal otherCost,
+            BigDecimal otherExpenses,
+            String currency) {
+        validateNonNegative(clientRevenue, "clientRevenue");
+        validateNonNegative(supplierCost, "supplierCost");
+        validateNonNegative(otherCost, "otherCost");
+        validateNonNegative(otherExpenses, "otherExpenses");
+        if (clientRevenue == null || clientRevenue.signum() <= 0) {
+            throw new IllegalArgumentException("Client revenue must be greater than zero before invoice creation");
+        }
+        if (nz(amountPaidByClient).compareTo(clientRevenue) > 0) {
+            throw new IllegalArgumentException("Client revenue cannot be lower than customer payments already recorded");
+        }
+        String normalizedCurrency = currency == null ? "" : currency.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!normalizedCurrency.matches("[A-Z]{3}")) {
+            throw new IllegalArgumentException("Currency must be a 3-letter ISO code");
+        }
+        boolean financialPaymentsRecorded = nz(amountPaidByClient).signum() > 0
+                || nz(amountPaidToSupply).signum() > 0;
+        if (financialPaymentsRecorded && (this.currency == null
+                || !this.currency.equalsIgnoreCase(normalizedCurrency))) {
+            throw new IllegalArgumentException("Currency cannot be changed or inferred after customer or supplier payments have been recorded");
+        }
+
+        this.amountBilledToClient = clientRevenue;
+        this.supplierCost = supplierCost;
+        this.otherCost = otherCost;
+        this.otherExpenses = otherExpenses;
+        this.currency = normalizedCurrency;
+        if (nz(amountPaidByClient).compareTo(clientRevenue) >= 0) {
+            this.paymentStatus = "Paid";
+        } else if (nz(amountPaidByClient).signum() > 0) {
+            this.paymentStatus = "Partially Paid";
+        } else {
+            this.paymentStatus = "Outstanding";
+        }
+        this.updatedAt = Instant.now();
+    }
+
     public void setImportedCollectionData(
             BigDecimal amountPaid,
             String importedPaymentStatus

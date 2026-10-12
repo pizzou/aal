@@ -21,6 +21,7 @@ interface AuthState {
   accessToken: string | null;
   tenantId: string | null;
   role: string | null;
+  displayName: string | null;
   isLoading: boolean;
   login: (token: string | null, tenant: string, role: string) => void;
   logout: () => void;
@@ -148,6 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    */
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [role, setRole] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [accessToken, setAccessTokenState] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -191,6 +193,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
      */
     if (storedToken && bootstrapped) {
       setIsLoading(false);
+      void authApi
+        .session({ cache: "no-store" })
+        .then((session) => {
+          if (!cancelled && session.authenticated) {
+            setDisplayName(session.displayName?.trim() || null);
+          }
+        })
+        .catch(() => {
+          // Identity chrome is best-effort; do not invalidate a valid session.
+        });
       return () => {
         cancelled = true;
       };
@@ -228,6 +240,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         writeStoredAuthContext(session.tenantId, session.role);
         setTenantId(session.tenantId);
         setRole(session.role);
+        setDisplayName(session.displayName?.trim() || null);
 
         setAccessToken(COOKIE_SESSION_SENTINEL);
         setAccessTokenState(COOKIE_SESSION_SENTINEL);
@@ -274,6 +287,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       currentTenant = null;
       setTenantId(null);
       setRole(null);
+      setDisplayName(null);
       setAccessTokenState(null);
       setIsLoading(false);
     };
@@ -296,6 +310,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     currentTenant = tenant;
     setTenantId(tenant);
     setRole(userRole);
+    setDisplayName(null);
     setAccessTokenState(token);
     setIsLoading(false);
   }
@@ -312,13 +327,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     currentTenant = null;
     setTenantId(null);
     setRole(null);
+    setDisplayName(null);
     setAccessTokenState(null);
     setIsLoading(false);
   }
 
   return (
     <AuthContext.Provider
-      value={{ accessToken, tenantId, role, isLoading, login, logout }}
+      value={{
+        accessToken,
+        tenantId,
+        role,
+        displayName,
+        isLoading,
+        login,
+        logout,
+      }}
     >
       {children}
     </AuthContext.Provider>

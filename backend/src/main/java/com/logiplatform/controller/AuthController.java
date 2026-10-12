@@ -135,7 +135,8 @@ public class AuthController {
                         principal.tenantId().toString(),
                         principal.userId().toString(),
                         principal.role(),
-                        mustChange));
+                        mustChange,
+                        authService.userDisplayName(principal.userId())));
     }
 
     @PostMapping("/logout")
@@ -217,10 +218,11 @@ public class AuthController {
             String tenantId,
             String userId,
             String role,
-            boolean mustChangePassword) {
+            boolean mustChangePassword,
+            String displayName) {
 
         public static SessionResponse anonymous() {
-            return new SessionResponse(false, null, null, null, false);
+            return new SessionResponse(false, null, null, null, false, null);
         }
     }
 

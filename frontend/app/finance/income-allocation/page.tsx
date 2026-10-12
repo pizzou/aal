@@ -339,7 +339,7 @@ export default function IncomeAllocationPage() {
 
   return (
     <main
-      className="page"
+      className="page finance-page"
       style={{ maxWidth: 1240, margin: "0 auto", padding: "28px 24px 56px" }}
     >
       <header

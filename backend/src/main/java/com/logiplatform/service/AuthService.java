@@ -69,6 +69,23 @@ public class AuthService {
         this.otpRequired = otpRequired || "production".equalsIgnoreCase(environment);
     }
 
+
+    /**
+     * Resolve the authenticated user's human-readable identity for session
+     * chrome and audit reporting. Never expose credential fields.
+     */
+    @Transactional(readOnly = true)
+    public String userDisplayName(UUID userId) {
+        if (userId == null) return null;
+        try {
+            return db.queryForObject(
+                    "select coalesce(nullif(trim(display_name), ''), email) from users where id = ? and tenant_id = ? and active = true",
+                    String.class, userId, tenantId);
+        } catch (EmptyResultDataAccessException ex) {
+            return null;
+        }
+    }
+
     public AuthResponse login(LoginRequest request) {
 
         String stage = "start";

@@ -751,6 +751,38 @@ export default function AirCargoPage() {
                   ? `Live ${Array.isArray(integrationHealth?.liveSearchProviders) ? integrationHealth.liveSearchProviders.join(" · ") : String(integrationHealth?.provider || "airline")} availability`
                   : "Live airline provider not connected; AAL planning remains available."}
               </div>
+              {!liveSearchConfigured &&
+                Array.isArray(integrationHealth?.providers) && (
+                  <div
+                    className="alert"
+                    role="status"
+                    style={{ marginTop: 10 }}
+                  >
+                    <strong>Live search configuration</strong>
+                    {(
+                      integrationHealth.providers as Array<{
+                        code?: string;
+                        configurationIssues?: string[];
+                        configured?: boolean;
+                      }>
+                    )
+                      .filter(
+                        (provider) =>
+                          provider.code === "CARGOAI" &&
+                          Array.isArray(provider.configurationIssues) &&
+                          provider.configurationIssues.length > 0,
+                      )
+                      .flatMap((provider) => provider.configurationIssues || [])
+                      .map((issue, index) => (
+                        <div key={`${index}-${issue}`}>{issue}</div>
+                      ))}
+                    <small>
+                      After changing Render environment variables, confirm the
+                      latest deploy has restarted and use “Test active provider”
+                      to verify real provider connectivity.
+                    </small>
+                  </div>
+                )}
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <span

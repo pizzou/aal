@@ -202,7 +202,9 @@ public class ReportingExportService {
             );
         }
 
-        return b.toString()
+        // UTF-8 BOM makes the exported CSV open reliably in Excel without
+        // corrupting non-ASCII customer, destination and shipment names.
+        return ("\uFEFF" + b)
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
@@ -830,18 +832,27 @@ public class ReportingExportService {
         b.append('\n');
     }
 
-    private static String csv(Object v) {
-        String s =
-                v == null
-                        ? ""
-                        : String.valueOf(v);
+   
+private static String csv(Object v) {
+    String s = v == null ? "" : String.valueOf(v);
 
-        return "\""
-                + s.replace("\"", "\"\"")
-                + "\"";
+    
+    if (!(v instanceof Number) && !s.isEmpty()
+            && (s.charAt(0) == '='
+                || s.charAt(0) == '+'
+                || s.charAt(0) == '-'
+                || s.charAt(0) == '@'
+                || s.charAt(0) == '\t'
+                || s.charAt(0) == '\r'
+                || s.charAt(0) == '\n')) {
+        s = "'" + s;
     }
 
-   
+    // Escape embedded quotes and wrap the value as a CSV field.
+    return "\"" + s.replace("\"", "\"\"") + "\"";
+}
+
+
     private static float metric(
             PDPageContentStream c,
             String label,
@@ -890,16 +901,31 @@ public class ReportingExportService {
 
         c.newLineAtOffset(x, y);
 
-        c.showText(
-                value == null
-                        ? ""
-                        : value
-        );
+        c.showText(pdfSafeText(value));
 
         c.endText();
     }
 
-    private static String money(
+
+    private static String pdfSafeText(String value) {
+        if (value == null || value.isEmpty()) return "";
+        String normalized = java.text.Normalizer.normalize(
+                value, java.text.Normalizer.Form.NFKD);
+        StringBuilder safe = new StringBuilder(normalized.length());
+        for (int i = 0; i < normalized.length(); i++) {
+            char ch = normalized.charAt(i);
+            if (Character.getType(ch) == Character.NON_SPACING_MARK) continue;
+            if (ch >= 0x20 && ch <= 0x7E) {
+                safe.append(ch);
+            } else if (ch >= 0xA0 && ch <= 0xFF) {
+                safe.append(ch);
+            } else {
+                safe.append('?');
+            }
+        }
+        return safe.toString();
+    }
+   private static String money(
             BigDecimal n,
             String currency
     ) {

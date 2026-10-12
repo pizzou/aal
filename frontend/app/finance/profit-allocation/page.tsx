@@ -62,10 +62,12 @@ export default function ProfitAllocationPage() {
       const activeRules = nextRules.filter((rule) => rule.active);
       // Never invent bank shares or prefill a 100% allocation. The operator
       // must explicitly configure the real business policy.
-      setDrafts(activeRules.map((rule) => ({
-        bankDestinationId: rule.bankDestinationId,
-        percentage: String(rule.percentage),
-      })));
+      setDrafts(
+        activeRules.map((rule) => ({
+          bankDestinationId: rule.bankDestinationId,
+          percentage: String(rule.percentage),
+        })),
+      );
     } catch (e) {
       setError(messageFor(e));
     } finally {
@@ -106,8 +108,17 @@ export default function ProfitAllocationPage() {
       setError("Add at least one active bank destination.");
       return;
     }
-    if (chosen.some((row) => !Number.isFinite(Number(row.percentage)) || Number(row.percentage) < 0 || Number(row.percentage) > 100)) {
-      setError("Every profit share must be a valid percentage between 0 and 100.");
+    if (
+      chosen.some(
+        (row) =>
+          !Number.isFinite(Number(row.percentage)) ||
+          Number(row.percentage) < 0 ||
+          Number(row.percentage) > 100,
+      )
+    ) {
+      setError(
+        "Every profit share must be a valid percentage between 0 and 100.",
+      );
       return;
     }
     if (
@@ -186,7 +197,7 @@ export default function ProfitAllocationPage() {
 
   return (
     <main
-      className="page"
+      className="page finance-page"
       style={{ maxWidth: 1240, margin: "0 auto", padding: "28px 24px 56px" }}
     >
       <header
@@ -213,7 +224,8 @@ export default function ProfitAllocationPage() {
           </p>
           <h1 style={{ margin: 0 }}>Profit Distribution</h1>
           <p style={{ maxWidth: 760, lineHeight: 1.6 }}>
-            Calculate the selected shipment's actual net-profit basis and create auditable distribution instructions using your approved percentages.
+            Calculate the selected shipment's actual net-profit basis and create
+            auditable distribution instructions using your approved percentages.
           </p>
         </div>
         <Link className="btn" href="/finance/income-allocation">
@@ -389,10 +401,11 @@ export default function ProfitAllocationPage() {
       <section className="card" style={{ padding: 24, marginBottom: 22 }}>
         <h2 style={{ marginTop: 0 }}>Create distribution instructions</h2>
         <p>
-          The calculation uses billed shipment revenue minus supplier cost (using
-          supplier payments only when no cost basis is recorded), other cost, and
-          other expenses. A distribution is blocked if the result is zero/negative,
-          currency is invalid, or active shares do not total exactly 100%.
+          The calculation uses billed shipment revenue minus supplier cost
+          (using supplier payments only when no cost basis is recorded), other
+          cost, and other expenses. A distribution is blocked if the result is
+          zero/negative, currency is invalid, or active shares do not total
+          exactly 100%.
         </p>
         <form
           onSubmit={allocate}

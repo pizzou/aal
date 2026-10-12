@@ -164,7 +164,7 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const router = useRouter();
-  const { logout, isLoading, accessToken, role } = useAuth();
+  const { logout, isLoading, accessToken, role, displayName } = useAuth();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [shipments, setShipments] = useState<Shipment[]>([]);
@@ -349,9 +349,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </button>
             <div className="top-divider" />
             <div className="operator">
-              <div className="avatar">OP</div>
+              <div className="avatar">
+                {(displayName || "AU")
+                  .trim()
+                  .split(/\\s+/)
+                  .slice(0, 2)
+                  .map((part) => part[0])
+                  .join("")
+                  .toUpperCase()}
+              </div>
               <div className="operator-copy">
-                <strong>Operations</strong>
+                <strong>{displayName || "Authenticated user"}</strong>
                 <span>{role || "AAL workspace"}</span>
               </div>
             </div>

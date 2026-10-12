@@ -35,7 +35,27 @@ export default function ReportsPage() {
   const [to, setTo] = useState(today());
   const [report, setReport] = useState<ManagementReport | null>(null);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState<"pdf" | "xlsx" | "csv" | null>(
+    null,
+  );
+
+  function validateRange() {
+    if (!from || !to) {
+      setError("Choose both a start date and an end date.");
+      return false;
+    }
+    if (from > to) {
+      setError("The start date must be on or before the end date.");
+      return false;
+    }
+    return true;
+  }
+
   async function downloadReport(format: "pdf" | "xlsx" | "csv") {
+    setError("");
+    if (!validateRange()) return;
+    setExporting(format);
     try {
       const params = new URLSearchParams();
       if (from) params.set("from", from);
@@ -46,15 +66,22 @@ export default function ReportsPage() {
       );
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Unable to export report");
+    } finally {
+      setExporting(null);
     }
   }
 
   async function load() {
+    setError("");
+    if (!validateRange()) return;
+    setLoading(true);
     try {
-      setError("");
       setReport(await reportsApi.management(from, to));
     } catch (e) {
+      setReport(null);
       setError(e instanceof ApiError ? e.message : "Unable to load report");
+    } finally {
+      setLoading(false);
     }
   }
   useEffect(() => {
@@ -98,17 +125,33 @@ export default function ReportsPage() {
           <div className="field">
             <label>&nbsp;</label>
             <div className="actions" style={{ flexWrap: "wrap" }}>
-              <button className="btn btn-primary" onClick={load}>
-                Refresh report
+              <button
+                className="btn btn-primary"
+                onClick={load}
+                disabled={loading || !!exporting}
+              >
+                {loading ? "Loading…" : "Refresh report"}
               </button>
-              <button className="btn" onClick={() => downloadReport("pdf")}>
-                PDF
+              <button
+                className="btn"
+                onClick={() => downloadReport("pdf")}
+                disabled={loading || !!exporting}
+              >
+                {exporting === "pdf" ? "Preparing PDF…" : "PDF"}
               </button>
-              <button className="btn" onClick={() => downloadReport("xlsx")}>
-                Excel
+              <button
+                className="btn"
+                onClick={() => downloadReport("xlsx")}
+                disabled={loading || !!exporting}
+              >
+                {exporting === "xlsx" ? "Preparing Excel…" : "Excel"}
               </button>
-              <button className="btn" onClick={() => downloadReport("csv")}>
-                CSV
+              <button
+                className="btn"
+                onClick={() => downloadReport("csv")}
+                disabled={loading || !!exporting}
+              >
+                {exporting === "csv" ? "Preparing CSV…" : "CSV"}
               </button>
             </div>
           </div>

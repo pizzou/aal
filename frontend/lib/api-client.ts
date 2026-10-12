@@ -499,7 +499,8 @@ export async function downloadApiFile(
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  // Revoking in the same task can cancel downloads in some browsers.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export interface AuthLoginResponse {
@@ -518,6 +519,7 @@ export interface AuthSessionResponse {
   userId: string | null;
   role: string | null;
   mustChangePassword: boolean;
+  displayName?: string | null;
 }
 
 export const authApi = {

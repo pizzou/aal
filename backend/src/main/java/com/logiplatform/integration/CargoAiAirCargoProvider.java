@@ -174,7 +174,7 @@ public class CargoAiAirCargoProvider implements AirCargoProviderPort {
             issues.add("AIRCARGO_CARGOAI_CANCEL_PATH is missing; cancellation will remain disabled");
         }
         if (email.isBlank() && (iata.isBlank() || cass.isBlank())) {
-            issues.add("CargoAi user email or IATA+CASS credentials are missing");
+            issues.add("AIRCARGO_CARGOAI_API_KEY alone is not sufficient for live search in this adapter: configure AIRCARGO_CARGOAI_USER_EMAIL or both AIRCARGO_CARGOAI_USER_IATA and AIRCARGO_CARGOAI_USER_CASS");
         }
         if (email.isBlank()) {
             issues.add("CargoAi booking requires user email");

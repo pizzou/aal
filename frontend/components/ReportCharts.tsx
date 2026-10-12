@@ -53,7 +53,13 @@ function BarChart({
                   marginBottom: 6,
                 }}
               >
-                <strong style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <strong
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {item.label}
                 </strong>
                 <span style={{ whiteSpace: "nowrap" }}>
@@ -111,17 +117,67 @@ function MonthlyChart({ report }: { report: ManagementReport }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "flex-start",
+        }}
+      >
         <div>
           <h2 className="card-title">Financial trend</h2>
           <p className="page-subtitle">
             Monthly billed revenue, collections and gross profit.
           </p>
         </div>
-        <div style={{ display: "flex", gap: 14, fontSize: 12, whiteSpace: "nowrap" }}>
-          <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: 99, background: "currentColor", marginRight: 5 }} />Revenue</span>
-          <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: 99, background: "currentColor", marginRight: 5, opacity: .65 }} />Collections</span>
-          <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: 99, background: "currentColor", marginRight: 5, opacity: .4 }} />Profit</span>
+        <div
+          style={{
+            display: "flex",
+            gap: 14,
+            fontSize: 12,
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span>
+            <i
+              style={{
+                display: "inline-block",
+                width: 9,
+                height: 9,
+                borderRadius: 99,
+                background: "#2563eb",
+                marginRight: 5,
+              }}
+            />
+            Revenue
+          </span>
+          <span>
+            <i
+              style={{
+                display: "inline-block",
+                width: 9,
+                height: 9,
+                borderRadius: 99,
+                background: "#0d9488",
+                marginRight: 5,
+              }}
+            />
+            Collections
+          </span>
+          <span>
+            <i
+              style={{
+                display: "inline-block",
+                width: 9,
+                height: 9,
+                borderRadius: 99,
+                background: "#d97706",
+                marginRight: 5,
+              }}
+            />
+            Profit
+          </span>
         </div>
       </div>
       {data.length === 0 ? (
@@ -134,9 +190,14 @@ function MonthlyChart({ report }: { report: ManagementReport }) {
             viewBox={`0 0 ${width} ${height}`}
             role="img"
             aria-label="Monthly revenue, collections and gross profit chart"
-            style={{ width: "100%", minWidth: 620, height: "auto", display: "block" }}
+            style={{
+              width: "100%",
+              minWidth: 620,
+              height: "auto",
+              display: "block",
+            }}
           >
-            {[0, .25, .5, .75, 1].map((ratio) => {
+            {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
               const value = max * ratio;
               const yy = padding.top + chartHeight - ratio * chartHeight;
               return (
@@ -166,9 +227,17 @@ function MonthlyChart({ report }: { report: ManagementReport }) {
               const center = padding.left + index * groupWidth + groupWidth / 2;
               const baseY = padding.top + chartHeight;
               const bars = [
-                { value: item.revenue, opacity: .86, offset: -barWidth * 1.5 },
-                { value: item.collected, opacity: .62, offset: -barWidth / 2 },
-                { value: item.profit, opacity: .4, offset: barWidth / 2 },
+                {
+                  value: item.revenue,
+                  color: "#2563eb",
+                  offset: -barWidth * 1.5,
+                },
+                {
+                  value: item.collected,
+                  color: "#0d9488",
+                  offset: -barWidth / 2,
+                },
+                { value: item.profit, color: "#d97706", offset: barWidth / 2 },
               ];
               return (
                 <g key={item.month}>
@@ -182,8 +251,7 @@ function MonthlyChart({ report }: { report: ManagementReport }) {
                         width={barWidth}
                         height={Math.max(1, baseY - top)}
                         rx="4"
-                        fill="currentColor"
-                        opacity={bar.opacity}
+                        fill={bar.color}
                       />
                     );
                   })}
@@ -210,7 +278,10 @@ function MonthlyChart({ report }: { report: ManagementReport }) {
 export default function ReportCharts({ report }: { report: ManagementReport }) {
   const operations = [
     { label: "Active shipments", value: report.operations.activeShipments },
-    { label: "Completed shipments", value: report.operations.completedShipments },
+    {
+      label: "Completed shipments",
+      value: report.operations.completedShipments,
+    },
     { label: "Departed shipments", value: report.operations.departedShipments },
     { label: "Delayed shipments", value: report.operations.delayedShipments },
     { label: "Exceptions", value: report.operations.exceptionShipments },
@@ -231,7 +302,10 @@ export default function ReportCharts({ report }: { report: ManagementReport }) {
   }));
 
   return (
-    <section aria-label="Management report visual analytics" style={{ display: "grid", gap: 14, marginTop: 14 }}>
+    <section
+      aria-label="Management report visual analytics"
+      style={{ display: "grid", gap: 14, marginTop: 14 }}
+    >
       <div className="card">
         <MonthlyChart report={report} />
       </div>

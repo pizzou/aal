@@ -404,11 +404,19 @@ public class CommercialOperationsService {
 
         UUID tenantId = TenantContext.getTenantId();
         if (r == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer details are required");
-        String clientId = requiredText(r.clientId(), "Client ID", 80);
         String company = requiredText(r.clientCompany(), "Company legal/business name", 200);
         String email = normalizeEmail(r.email());
-
-        if (clients.findByTenantIdAndClientId(tenantId, clientId).isPresent()) throw conflict("Client ID already exists");
+        String clientId = normalizeText(r.clientId());
+        if (clientId == null || clientId.isBlank()) {
+            // Allocate the customer number on the server; never trust a browser-generated ID.
+            do {
+                clientId = "AAL-CUS-" + java.time.Year.now().getValue() + "-"
+                        + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase(Locale.ROOT);
+            } while (clients.findByTenantIdAndClientId(tenantId, clientId).isPresent());
+        } else {
+            clientId = requiredText(clientId, "Client ID", 80);
+            if (clients.findByTenantIdAndClientId(tenantId, clientId).isPresent()) throw conflict("Client ID already exists");
+        }
         if (clients.findFirstByTenantIdAndClientCompanyIgnoreCase(tenantId, company).isPresent()) throw conflict("Client company already exists");
         if (email != null && clients.findFirstByTenantIdAndEmailIgnoreCase(tenantId, email).isPresent()) throw conflict("Client email already exists");
 

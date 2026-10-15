@@ -67,7 +67,7 @@ public final class CommercialDtos {
             @NotBlank String idempotencyKey, String reference, UUID incomeSourceId) {
     }
 
-    public record ClientRequest(@NotBlank @Size(max = 80) String clientId,
+    public record ClientRequest(@Size(max = 80) String clientId,
             @NotBlank @Size(max = 200) String clientCompany, @Size(max = 160) String contactPerson,
             @Size(max = 80) String phone, @Email @Size(max = 254) String email,
             @Size(max = 120) String industry, @Size(max = 120) String country,

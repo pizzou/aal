@@ -22,8 +22,17 @@ import { useAuth } from "@/lib/auth-context";
 const EVENT_TYPES = ["EXCEPTION"];
 
 export default function ShipmentTrackingPage() {
-  const params = useParams<{ id: string }>();
+  const params = useParams<{ id: string | string[] }>();
+  const rawShipmentId = params?.id;
+  const shipmentId =
+    (Array.isArray(rawShipmentId) ? rawShipmentId[0] : rawShipmentId)?.trim() ??
+    "";
+  const hasValidShipmentId =
+    shipmentId.length > 0 && !/^(undefined|null)$/i.test(shipmentId);
   const router = useRouter();
+  const [workflowAwbNumber, setWorkflowAwbNumber] = useState("");
+  const [workflowAwbStatus, setWorkflowAwbStatus] = useState("");
+  const [nextWorkflowStep, setNextWorkflowStep] = useState("");
   const { accessToken, isLoading } = useAuth();
   const [events, setEvents] = useState<TrackingEvent[]>([]);
   const [shipment, setShipment] = useState<Shipment | null>(null);
@@ -48,6 +57,15 @@ export default function ShipmentTrackingPage() {
     null,
   );
   const [downloadingAwb, setDownloadingAwb] = useState(false);
+  const [pricingForm, setPricingForm] = useState({
+    clientRevenue: "",
+    supplierCost: "0",
+    otherCost: "0",
+    otherExpenses: "0",
+    currency: "USD",
+  });
+  const [savingPricing, setSavingPricing] = useState(false);
+  const [pricingError, setPricingError] = useState("");
   const [form, setForm] = useState({
     eventType: "EXCEPTION",
     location: "",
@@ -56,28 +74,87 @@ export default function ShipmentTrackingPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    setWorkflowAwbNumber(query.get("awbNumber") || "");
+    setWorkflowAwbStatus(query.get("awbStatus") || "");
+    setNextWorkflowStep(query.get("next") || "");
+  }, []);
+
+  useEffect(() => {
     if (!isLoading && !accessToken) router.push("/login");
   }, [isLoading, accessToken, router]);
 
   useEffect(() => {
-    if (accessToken) refresh();
-  }, [accessToken]);
+    if (!accessToken) return;
+    if (!hasValidShipmentId) {
+      setShipment(null);
+      setError(
+        "No valid shipment ID was provided. Return to Shipment Register and select a shipment.",
+      );
+      return;
+    }
+    void refresh();
+  }, [accessToken, hasValidShipmentId, shipmentId]);
 
   async function refresh() {
+    if (!hasValidShipmentId) {
+      setShipment(null);
+      setError(
+        "No valid shipment ID was provided. Return to Shipment Register and select a shipment.",
+      );
+      return;
+    }
+    setError(null);
     try {
-      const [s, events, readings, notifications] = await Promise.all([
-        shipmentsApi.get(params.id),
-        shipmentsApi.trackingHistory(params.id),
-        sensorsApi.history(params.id),
-        shipmentsApi.notificationHistory(params.id),
-      ]);
+      // Load the shipment record first so a slow or temporarily unavailable
+      // history/sensor endpoint cannot hide the core shipment details.
+      const s = await shipmentsApi.get(shipmentId);
       setShipment(s);
       setWeightKg(s.weightKg != null ? String(s.weightKg) : "");
+      setPricingForm({
+        clientRevenue:
+          s.amountBilledToClient != null && s.amountBilledToClient > 0
+            ? String(s.amountBilledToClient)
+            : s.clientRevenue != null && s.clientRevenue > 0
+              ? String(s.clientRevenue)
+              : "",
+        supplierCost: String(s.supplierCost ?? 0),
+        otherCost: String(s.otherCost ?? 0),
+        otherExpenses: String(s.otherExpenses ?? 0),
+        currency: (s.currency || "USD").toUpperCase(),
+      });
       setNotificationEmail(s.notificationEmail ?? "");
       setFlightNumber(s.flightNumber ?? "");
-      setEvents(events);
-      setReadings(readings.content);
-      setNotifications(notifications.content);
+
+      const [eventsResult, readingsResult, notificationsResult] =
+        await Promise.allSettled([
+          shipmentsApi.trackingHistory(shipmentId),
+          sensorsApi.history(shipmentId),
+          shipmentsApi.notificationHistory(shipmentId),
+        ] as const);
+
+      setEvents(eventsResult.status === "fulfilled" ? eventsResult.value : []);
+      setReadings(
+        readingsResult.status === "fulfilled"
+          ? readingsResult.value.content
+          : [],
+      );
+      setNotifications(
+        notificationsResult.status === "fulfilled"
+          ? notificationsResult.value.content
+          : [],
+      );
+
+      const unavailableSections = [
+        eventsResult.status !== "fulfilled" ? "tracking history" : "",
+        readingsResult.status !== "fulfilled" ? "sensor readings" : "",
+        notificationsResult.status !== "fulfilled" ? "notifications" : "",
+      ].filter(Boolean);
+      setError(
+        unavailableSections.length
+          ? `Shipment loaded, but ${unavailableSections.join(", ")} could not be loaded. Retry or contact support if the problem continues.`
+          : null,
+      );
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -89,8 +166,12 @@ export default function ShipmentTrackingPage() {
 
   async function saveWeight(e: React.FormEvent) {
     e.preventDefault();
+    if (!hasValidShipmentId) {
+      setError("A valid shipment ID is required to update the shipment.");
+      return;
+    }
     try {
-      await shipmentsApi.updateWeight(params.id, Number(weightKg));
+      await shipmentsApi.updateWeight(shipmentId, Number(weightKg));
       refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to save weight");
@@ -99,8 +180,12 @@ export default function ShipmentTrackingPage() {
 
   async function saveNotificationEmail(e: React.FormEvent) {
     e.preventDefault();
+    if (!hasValidShipmentId) {
+      setError("A valid shipment ID is required to update the shipment.");
+      return;
+    }
     try {
-      await shipmentsApi.updateNotificationEmail(params.id, notificationEmail);
+      await shipmentsApi.updateNotificationEmail(shipmentId, notificationEmail);
       refresh();
     } catch (err) {
       setError(
@@ -113,8 +198,12 @@ export default function ShipmentTrackingPage() {
 
   async function saveFlightNumber(e: React.FormEvent) {
     e.preventDefault();
+    if (!hasValidShipmentId) {
+      setError("A valid shipment ID is required to update the shipment.");
+      return;
+    }
     try {
-      await shipmentsApi.updateFlightNumber(params.id, flightNumber);
+      await shipmentsApi.updateFlightNumber(shipmentId, flightNumber);
       refresh();
     } catch (err) {
       setError(
@@ -124,6 +213,12 @@ export default function ShipmentTrackingPage() {
   }
 
   async function checkFlightStatus() {
+    if (!hasValidShipmentId) {
+      setFlightStatusError(
+        "A valid shipment ID is required to check flight status.",
+      );
+      return;
+    }
     setFlightStatusError(null);
     const number = flightNumber.trim().toUpperCase();
     if (!number) {
@@ -136,13 +231,13 @@ export default function ShipmentTrackingPage() {
       // immediately clicks Check status while the shipment still has no flight.
       if (shipment?.flightNumber?.trim().toUpperCase() !== number) {
         const updated = await shipmentsApi.updateFlightNumber(
-          params.id,
+          shipmentId,
           number,
         );
         setShipment(updated);
         setFlightNumber(updated.flightNumber ?? number);
       }
-      setFlightStatus(await flightStatusApi.check(params.id));
+      setFlightStatus(await flightStatusApi.check(shipmentId));
       await refresh();
     } catch (err) {
       setFlightStatusError(
@@ -165,10 +260,76 @@ export default function ShipmentTrackingPage() {
     }
   }
 
+  async function saveCommercialPricing(
+    event: React.FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+    if (!shipment) return;
+    setSavingPricing(true);
+    setPricingError("");
+    try {
+      const clientRevenue = Number(pricingForm.clientRevenue);
+      const supplierCost = Number(pricingForm.supplierCost);
+      const otherCost = Number(pricingForm.otherCost);
+      const otherExpenses = Number(pricingForm.otherExpenses);
+      const currency = pricingForm.currency.trim().toUpperCase();
+      if (!Number.isFinite(clientRevenue) || clientRevenue <= 0) {
+        throw new Error(
+          "Client revenue must be greater than zero before an invoice can be issued.",
+        );
+      }
+      if (
+        ![supplierCost, otherCost, otherExpenses].every(
+          (value) => Number.isFinite(value) && value >= 0,
+        )
+      ) {
+        throw new Error(
+          "Costs and expenses must be valid non-negative amounts.",
+        );
+      }
+      if (!/^[A-Z]{3}$/.test(currency)) {
+        throw new Error(
+          "Enter a valid 3-letter currency code, such as USD or RWF.",
+        );
+      }
+      const updated = await shipmentsApi.updatePricing(shipment.id, {
+        clientRevenue,
+        supplierCost,
+        otherCost,
+        otherExpenses,
+        currency,
+      });
+      setShipment(updated);
+      setPricingForm({
+        clientRevenue: String(updated.amountBilledToClient ?? clientRevenue),
+        supplierCost: String(updated.supplierCost ?? supplierCost),
+        otherCost: String(updated.otherCost ?? otherCost),
+        otherExpenses: String(updated.otherExpenses ?? otherExpenses),
+        currency: (updated.currency || currency).toUpperCase(),
+      });
+      const next = new URLSearchParams({ shipmentId: updated.id });
+      if (workflowAwbNumber) next.set("awbNumber", workflowAwbNumber);
+      if (workflowAwbStatus) next.set("awbStatus", workflowAwbStatus);
+      router.replace(`/billing?${next.toString()}`);
+    } catch (exception) {
+      setPricingError(
+        exception instanceof ApiError || exception instanceof Error
+          ? exception.message
+          : "Unable to save shipment pricing.",
+      );
+    } finally {
+      setSavingPricing(false);
+    }
+  }
+
   async function submitReading(e: React.FormEvent) {
     e.preventDefault();
+    if (!hasValidShipmentId) {
+      setError("A valid shipment ID is required to record sensor readings.");
+      return;
+    }
     try {
-      await sensorsApi.recordReading(params.id, {
+      await sensorsApi.recordReading(shipmentId, {
         temperatureCelsius: readingForm.temperatureCelsius
           ? Number(readingForm.temperatureCelsius)
           : undefined,
@@ -187,8 +348,12 @@ export default function ShipmentTrackingPage() {
 
   async function saveThreshold(e: React.FormEvent) {
     e.preventDefault();
+    if (!hasValidShipmentId) {
+      setError("A valid shipment ID is required to save sensor thresholds.");
+      return;
+    }
     try {
-      await sensorsApi.setThreshold(params.id, {
+      await sensorsApi.setThreshold(shipmentId, {
         minTemperatureCelsius: thresholdForm.minTemperatureCelsius
           ? Number(thresholdForm.minTemperatureCelsius)
           : undefined,
@@ -213,8 +378,12 @@ export default function ShipmentTrackingPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!hasValidShipmentId) {
+      setError("A valid shipment ID is required to add a tracking event.");
+      return;
+    }
     try {
-      await shipmentsApi.addTrackingEvent(params.id, form);
+      await shipmentsApi.addTrackingEvent(shipmentId, form);
       setForm({ ...form, location: "", notes: "" });
       refresh();
     } catch (err) {
@@ -225,6 +394,26 @@ export default function ShipmentTrackingPage() {
   }
 
   if (isLoading || !accessToken) return null;
+
+  if (!hasValidShipmentId) {
+    return (
+      <main className="page">
+        <div className="page-head">
+          <div>
+            <h1>Shipment not selected</h1>
+            <p>
+              This page needs a valid shipment ID. Open a shipment from the
+              Shipment Register to view tracking, flight status, sensor
+              readings, notifications, AWB details, and commercial pricing.
+            </p>
+          </div>
+          <Link className="btn btn-primary" href="/shipments">
+            Back to Shipment Register
+          </Link>
+        </div>
+      </main>
+    );
+  }
 
   const statusLabel = shipment?.status
     ? shipment.status.replace(/_/g, " ")
@@ -271,6 +460,183 @@ export default function ShipmentTrackingPage() {
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
+
+      {nextWorkflowStep === "pricing" && shipment && (
+        <section
+          className="card shipment-pricing-workflow"
+          aria-labelledby="shipment-pricing-title"
+        >
+          <div className="section-heading">
+            <div className="section-number">
+              {workflowAwbNumber ? "03" : "02"}
+            </div>
+            <div>
+              <h2 id="shipment-pricing-title">Complete commercial pricing</h2>
+              <p>
+                The shipment is saved
+                {workflowAwbNumber ? " and the AWB step is complete" : ""}.
+                Confirm revenue and costs here; the invoice is only issued after
+                this step, so due dates and configured tax can be applied
+                correctly.
+              </p>
+            </div>
+          </div>
+          {pricingError && (
+            <div className="alert alert-error" role="alert">
+              {pricingError}
+            </div>
+          )}
+          <form
+            className="shipment-pricing-form"
+            onSubmit={saveCommercialPricing}
+          >
+            <label className="field">
+              <span>Client revenue ({pricingForm.currency || "USD"})</span>
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                required
+                value={pricingForm.clientRevenue}
+                onChange={(event) =>
+                  setPricingForm((current) => ({
+                    ...current,
+                    clientRevenue: event.target.value,
+                  }))
+                }
+                placeholder="Enter amount to bill"
+              />
+            </label>
+            <label className="field">
+              <span>Supplier cost</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                required
+                value={pricingForm.supplierCost}
+                onChange={(event) =>
+                  setPricingForm((current) => ({
+                    ...current,
+                    supplierCost: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Other direct cost</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                required
+                value={pricingForm.otherCost}
+                onChange={(event) =>
+                  setPricingForm((current) => ({
+                    ...current,
+                    otherCost: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Other expenses</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                required
+                value={pricingForm.otherExpenses}
+                onChange={(event) =>
+                  setPricingForm((current) => ({
+                    ...current,
+                    otherExpenses: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Invoice currency</span>
+              <input
+                value={pricingForm.currency}
+                maxLength={3}
+                required
+                autoCapitalize="characters"
+                onChange={(event) =>
+                  setPricingForm((current) => ({
+                    ...current,
+                    currency: event.target.value
+                      .toUpperCase()
+                      .replace(/[^A-Z]/g, "")
+                      .slice(0, 3),
+                  }))
+                }
+                placeholder="USD"
+              />
+            </label>
+            <div className="shipment-pricing-actions">
+              <span className="form-hint">
+                An existing invoice locks this pricing record. Customer money
+                already collected cannot exceed the revised revenue.
+              </span>
+              <button
+                className="btn btn-primary"
+                type="submit"
+                disabled={savingPricing}
+              >
+                {savingPricing
+                  ? "Saving pricing…"
+                  : "Save pricing → Continue to invoice"}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+
+      {workflowAwbNumber && (
+        <section className="workflow-completion-card" role="status">
+          <div className="workflow-completion-icon" aria-hidden="true">
+            ✓
+          </div>
+          <div className="workflow-completion-copy">
+            <strong>AWB record prepared · {workflowAwbNumber}</strong>
+            <p>
+              {workflowAwbStatus.toUpperCase() === "DRAFT"
+                ? "This is an internal AAL House AWB draft. Confirm missing party/airport data and obtain the carrier-issued MAWB before carrier tender."
+                : "The shipment has an AWB record on file."}
+              {nextWorkflowStep === "pricing"
+                ? " Billing has not been opened because this shipment does not yet have a billable revenue amount."
+                : ""}
+            </p>
+          </div>
+          {shipment && (
+            <div className="actions">
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={handleAwbDownload}
+                disabled={downloadingAwb}
+              >
+                {downloadingAwb ? "Preparing PDF…" : "Download AWB PDF"}
+              </button>
+              {(shipment.amountBilledToClient ?? 0) > 0 ||
+              (shipment.clientRevenue ?? 0) > 0 ? (
+                <Link
+                  className="btn btn-primary btn-small"
+                  href={`/billing?shipmentId=${encodeURIComponent(shipment.id)}&awbNumber=${encodeURIComponent(workflowAwbNumber)}&awbStatus=${encodeURIComponent(workflowAwbStatus)}`}
+                >
+                  Continue to invoice
+                </Link>
+              ) : (
+                <span className="form-hint">
+                  Complete the commercial pricing step below before issuing an
+                  invoice.
+                </span>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       {shipment && (
         <>
@@ -503,9 +869,15 @@ export default function ShipmentTrackingPage() {
                   className="btn"
                   type="button"
                   onClick={async () => {
+                    if (!hasValidShipmentId) {
+                      setError(
+                        "A valid shipment ID is required to update the shipment.",
+                      );
+                      return;
+                    }
                     try {
                       await shipmentsApi.updateNotificationEmail(
-                        params.id,
+                        shipmentId,
                         notificationEmail,
                       );
                       await refresh();
@@ -638,7 +1010,18 @@ export default function ShipmentTrackingPage() {
                 <Link className="btn" href="/documents">
                   Documents & customs
                 </Link>
-                <Link className="btn" href="/billing">
+                {shipment.transportMode === "AIR" && (
+                  <Link
+                    className="btn"
+                    href={`/air-cargo/awb?shipmentId=${encodeURIComponent(shipment.id)}`}
+                  >
+                    Generate / review AWB
+                  </Link>
+                )}
+                <Link
+                  className="btn"
+                  href={`/billing?shipmentId=${encodeURIComponent(shipment.id)}`}
+                >
                   Invoice & payment
                 </Link>
                 <Link className="btn" href="/trips">

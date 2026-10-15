@@ -197,7 +197,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .session({ cache: "no-store" })
         .then((session) => {
           if (!cancelled && session.authenticated) {
-            setDisplayName(session.displayName?.trim() || null);
+            setDisplayName(
+              session.displayName?.trim() || session.userId?.trim() || null,
+            );
           }
         })
         .catch(() => {
@@ -240,7 +242,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         writeStoredAuthContext(session.tenantId, session.role);
         setTenantId(session.tenantId);
         setRole(session.role);
-        setDisplayName(session.displayName?.trim() || null);
+        setDisplayName(
+          session.displayName?.trim() || session.userId?.trim() || null,
+        );
 
         setAccessToken(COOKIE_SESSION_SENTINEL);
         setAccessTokenState(COOKIE_SESSION_SENTINEL);

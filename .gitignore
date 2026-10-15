@@ -101,3 +101,8 @@ releases/
 !.env.example
 !**/*.example
 !**/*.template
+
+# JVM crash diagnostics (local-only; may contain environment details)
+hs_err_pid*.log
+replay_pid*.log
+core.*

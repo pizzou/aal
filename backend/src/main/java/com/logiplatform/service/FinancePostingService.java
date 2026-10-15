@@ -2,6 +2,8 @@ package com.logiplatform.service;
 
 import com.logiplatform.model.FinanceLedgerEntry;
 import com.logiplatform.repository.FinanceLedgerRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +28,13 @@ public class FinancePostingService {
 
     private final FinanceLedgerRepository ledger;
 
+    /**
+     * PostgreSQL transaction-scoped lock serializes retries for the same business
+     * event.
+     */
+    @PersistenceContext
+    private EntityManager entityManager;
+
     public FinancePostingService(FinanceLedgerRepository ledger) {
         this.ledger = ledger;
     }
@@ -35,12 +44,20 @@ public class FinancePostingService {
             String currency, String invoiceNo) {
         validateTenant(tenantId);
         validateAmount(amount);
+        validateSourceId(invoiceId, "invoiceId");
         String c = normalizeCurrency(currency);
-        BigDecimal alreadyPosted = ledger.sumBySource(
-                tenantId, "INVOICE", invoiceId, "DEBIT", c);
-        BigDecimal unposted = amount.subtract(alreadyPosted == null ? BigDecimal.ZERO : alreadyPosted);
-        if (unposted.signum() <= 0) return;
-        postBalanced(tenantId, invoiceId, "INVOICE", invoiceId, unposted, c,
+        lockPosting(tenantId, "INVOICE", invoiceId, "ALL");
+        if (!sourceEntries(tenantId, "INVOICE_REVERSAL", invoiceId).isEmpty()) {
+            throw new IllegalStateException("A reversed invoice cannot be posted again under the same invoice ID");
+        }
+        List<FinanceLedgerEntry> existing = sourceEntries(tenantId, "INVOICE", invoiceId);
+        if (!existing.isEmpty()) {
+            if (isExactSimpleInvoice(existing, amount, c))
+                return;
+            throw new IllegalStateException(
+                    "Invoice already has a different accounting posting; use a credit/debit note or reversal");
+        }
+        postBalanced(tenantId, invoiceId, "INVOICE", invoiceId, amount, c,
                 ACCOUNTS_RECEIVABLE, FREIGHT_REVENUE, "Freight invoice " + invoiceNo);
     }
 
@@ -57,10 +74,17 @@ public class FinancePostingService {
         if (taxAmount == null || taxAmount.signum() < 0 || taxAmount.compareTo(grossAmount) > 0) {
             throw new IllegalArgumentException("Tax amount must be between zero and invoice total");
         }
+        validateSourceId(invoiceId, "invoiceId");
         String c = normalizeCurrency(currency);
-        BigDecimal alreadyPosted = ledger.sumBySource(tenantId, "INVOICE", invoiceId, "DEBIT", c);
-        if (alreadyPosted != null && alreadyPosted.signum() > 0) {
-            throw new IllegalStateException("Invoice already has an accounting posting; do not re-post tax");
+        lockPosting(tenantId, "INVOICE", invoiceId, "ALL");
+        if (!sourceEntries(tenantId, "INVOICE_REVERSAL", invoiceId).isEmpty()) {
+            throw new IllegalStateException("A reversed invoice cannot be posted again under the same invoice ID");
+        }
+        List<FinanceLedgerEntry> existing = sourceEntries(tenantId, "INVOICE", invoiceId);
+        if (!existing.isEmpty()) {
+            if (isExactTaxInvoice(existing, grossAmount, taxAmount, c))
+                return;
+            throw new IllegalStateException("Invoice already has a different accounting posting; do not re-post tax");
         }
         BigDecimal revenue = grossAmount.subtract(taxAmount);
         ledger.save(new FinanceLedgerEntry(tenantId, invoiceId, "INVOICE", invoiceId,
@@ -82,13 +106,17 @@ public class FinancePostingService {
     @Transactional
     public void reverseInvoice(UUID tenantId, UUID invoiceId, String invoiceNo, String reason) {
         validateTenant(tenantId);
+        validateSourceId(invoiceId, "invoiceId");
+        lockPosting(tenantId, "INVOICE", invoiceId, "ALL");
         // The source may be in any currency; check all immutable reversal rows.
         List<FinanceLedgerEntry> priorReversal = ledger
                 .findAllByTenantIdAndSourceTypeAndSourceIdOrderByPostedAtAsc(tenantId, "INVOICE_REVERSAL", invoiceId);
-        if (!priorReversal.isEmpty()) return;
+        if (!priorReversal.isEmpty())
+            return;
         List<FinanceLedgerEntry> originals = ledger
                 .findAllByTenantIdAndSourceTypeAndSourceIdOrderByPostedAtAsc(tenantId, "INVOICE", invoiceId);
-        if (originals.isEmpty()) return; // A draft has no journal to reverse.
+        if (originals.isEmpty())
+            return; // A draft has no journal to reverse.
         java.util.List<FinanceLedgerEntry> entries = new java.util.ArrayList<>();
         String suffix = (reason == null || reason.isBlank()) ? "" : " / " + reason.trim();
         for (FinanceLedgerEntry entry : originals) {
@@ -103,7 +131,15 @@ public class FinancePostingService {
     @Transactional
     public void postCustomerPayment(UUID tenantId, UUID invoiceId, BigDecimal amount,
             String currency, String invoiceNo, String reference) {
-        postCustomerPayment(tenantId, null, invoiceId, amount, currency, invoiceNo, reference);
+        validateTenant(tenantId);
+        validateSourceId(invoiceId, "invoiceId");
+        if (reference == null || reference.isBlank()) {
+            throw new IllegalArgumentException(
+                    "A stable payment reference or payment ID is required for idempotent posting");
+        }
+        UUID legacyPaymentId = UUID.nameUUIDFromBytes((tenantId + "|" + invoiceId + "|" + reference.trim())
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        postCustomerPayment(tenantId, legacyPaymentId, invoiceId, amount, currency, invoiceNo, reference);
     }
 
     @Transactional
@@ -111,13 +147,16 @@ public class FinancePostingService {
             String currency, String invoiceNo, String reference) {
         validateTenant(tenantId);
         validateAmount(amount);
+        validateSourceId(paymentId, "paymentId");
+        validateSourceId(invoiceId, "invoiceId");
         String c = normalizeCurrency(currency);
-        if (paymentId != null) {
-            BigDecimal alreadyPosted = ledger.sumBySource(
-                    tenantId, "CUSTOMER_PAYMENT", paymentId, "DEBIT", c);
-            BigDecimal unposted = amount.subtract(alreadyPosted == null ? BigDecimal.ZERO : alreadyPosted);
-            if (unposted.signum() <= 0) return;
-            amount = unposted;
+        lockPosting(tenantId, "CUSTOMER_PAYMENT", paymentId, "ALL");
+        List<FinanceLedgerEntry> existing = sourceEntries(tenantId, "CUSTOMER_PAYMENT", paymentId);
+        if (!existing.isEmpty()) {
+            if (isExactBalancedPosting(existing, amount, c, CASH, "DEBIT", ACCOUNTS_RECEIVABLE, "CREDIT"))
+                return;
+            throw new IllegalStateException(
+                    "Payment ID already has a different accounting posting; do not post it twice");
         }
         String description = "Customer payment " + invoiceNo;
         if (reference != null && !reference.isBlank())
@@ -131,7 +170,15 @@ public class FinancePostingService {
             String currency, String invoiceNo, String reason) {
         validateTenant(tenantId);
         validateAmount(amount);
+        validateSourceId(noteId, "noteId");
         String c = normalizeCurrency(currency);
+        lockPosting(tenantId, "CREDIT_NOTE", noteId, "ALL");
+        List<FinanceLedgerEntry> existing = sourceEntries(tenantId, "CREDIT_NOTE", noteId);
+        if (!existing.isEmpty()) {
+            if (isExactBalancedPosting(existing, amount, c, FREIGHT_REVENUE, "DEBIT", ACCOUNTS_RECEIVABLE, "CREDIT"))
+                return;
+            throw new IllegalStateException("Credit note already has a different accounting posting");
+        }
         postBalanced(tenantId, null, "CREDIT_NOTE", noteId, amount, c,
                 FREIGHT_REVENUE, ACCOUNTS_RECEIVABLE,
                 "Credit note for " + invoiceNo + " / " + reason);
@@ -142,7 +189,15 @@ public class FinancePostingService {
             String currency, String invoiceNo, String reason) {
         validateTenant(tenantId);
         validateAmount(amount);
+        validateSourceId(noteId, "noteId");
         String c = normalizeCurrency(currency);
+        lockPosting(tenantId, "DEBIT_NOTE", noteId, "ALL");
+        List<FinanceLedgerEntry> existing = sourceEntries(tenantId, "DEBIT_NOTE", noteId);
+        if (!existing.isEmpty()) {
+            if (isExactBalancedPosting(existing, amount, c, ACCOUNTS_RECEIVABLE, "DEBIT", FREIGHT_REVENUE, "CREDIT"))
+                return;
+            throw new IllegalStateException("Debit note already has a different accounting posting");
+        }
         postBalanced(tenantId, null, "DEBIT_NOTE", noteId, amount, c,
                 ACCOUNTS_RECEIVABLE, FREIGHT_REVENUE,
                 "Debit note for " + invoiceNo + " / " + reason);
@@ -155,14 +210,26 @@ public class FinancePostingService {
         validateTenant(tenantId);
         validateAmount(grossAmount);
         validateTaxComponent(grossAmount, taxAmount);
+        validateSourceId(noteId, "noteId");
         String c = normalizeCurrency(currency);
+        lockPosting(tenantId, "CREDIT_NOTE", noteId, "ALL");
+        List<FinanceLedgerEntry> existing = sourceEntries(tenantId, "CREDIT_NOTE", noteId);
+        if (!existing.isEmpty()) {
+            if (isExactTaxNote(existing, grossAmount, taxAmount, c, true))
+                return;
+            throw new IllegalStateException("Credit note already has a different accounting posting");
+        }
         BigDecimal revenue = grossAmount.subtract(taxAmount);
-        if (revenue.signum() > 0) ledger.save(new FinanceLedgerEntry(tenantId, null, "CREDIT_NOTE", noteId,
-                "DEBIT", FREIGHT_REVENUE, revenue, c, "Credit note revenue reversal for " + invoiceNo + " / " + reason));
-        if (taxAmount.signum() > 0) ledger.save(new FinanceLedgerEntry(tenantId, null, "CREDIT_NOTE", noteId,
-                "DEBIT", TAX_PAYABLE, taxAmount, c, "Credit note tax reversal for " + invoiceNo + " / " + reason));
+        if (revenue.signum() > 0)
+            ledger.save(new FinanceLedgerEntry(tenantId, null, "CREDIT_NOTE", noteId,
+                    "DEBIT", FREIGHT_REVENUE, revenue, c,
+                    "Credit note revenue reversal for " + invoiceNo + " / " + reason));
+        if (taxAmount.signum() > 0)
+            ledger.save(new FinanceLedgerEntry(tenantId, null, "CREDIT_NOTE", noteId,
+                    "DEBIT", TAX_PAYABLE, taxAmount, c, "Credit note tax reversal for " + invoiceNo + " / " + reason));
         ledger.save(new FinanceLedgerEntry(tenantId, null, "CREDIT_NOTE", noteId,
-                "CREDIT", ACCOUNTS_RECEIVABLE, grossAmount, c, "Credit note receivable adjustment for " + invoiceNo + " / " + reason));
+                "CREDIT", ACCOUNTS_RECEIVABLE, grossAmount, c,
+                "Credit note receivable adjustment for " + invoiceNo + " / " + reason));
     }
 
     /** Post a gross debit-note adjustment with its tax component separated. */
@@ -172,14 +239,27 @@ public class FinancePostingService {
         validateTenant(tenantId);
         validateAmount(grossAmount);
         validateTaxComponent(grossAmount, taxAmount);
+        validateSourceId(noteId, "noteId");
         String c = normalizeCurrency(currency);
+        lockPosting(tenantId, "DEBIT_NOTE", noteId, "ALL");
+        List<FinanceLedgerEntry> existing = sourceEntries(tenantId, "DEBIT_NOTE", noteId);
+        if (!existing.isEmpty()) {
+            if (isExactTaxNote(existing, grossAmount, taxAmount, c, false))
+                return;
+            throw new IllegalStateException("Debit note already has a different accounting posting");
+        }
         BigDecimal revenue = grossAmount.subtract(taxAmount);
         ledger.save(new FinanceLedgerEntry(tenantId, null, "DEBIT_NOTE", noteId,
-                "DEBIT", ACCOUNTS_RECEIVABLE, grossAmount, c, "Debit note receivable adjustment for " + invoiceNo + " / " + reason));
-        if (revenue.signum() > 0) ledger.save(new FinanceLedgerEntry(tenantId, null, "DEBIT_NOTE", noteId,
-                "CREDIT", FREIGHT_REVENUE, revenue, c, "Debit note revenue adjustment for " + invoiceNo + " / " + reason));
-        if (taxAmount.signum() > 0) ledger.save(new FinanceLedgerEntry(tenantId, null, "DEBIT_NOTE", noteId,
-                "CREDIT", TAX_PAYABLE, taxAmount, c, "Debit note tax adjustment for " + invoiceNo + " / " + reason));
+                "DEBIT", ACCOUNTS_RECEIVABLE, grossAmount, c,
+                "Debit note receivable adjustment for " + invoiceNo + " / " + reason));
+        if (revenue.signum() > 0)
+            ledger.save(new FinanceLedgerEntry(tenantId, null, "DEBIT_NOTE", noteId,
+                    "CREDIT", FREIGHT_REVENUE, revenue, c,
+                    "Debit note revenue adjustment for " + invoiceNo + " / " + reason));
+        if (taxAmount.signum() > 0)
+            ledger.save(new FinanceLedgerEntry(tenantId, null, "DEBIT_NOTE", noteId,
+                    "CREDIT", TAX_PAYABLE, taxAmount, c,
+                    "Debit note tax adjustment for " + invoiceNo + " / " + reason));
     }
 
     @Transactional
@@ -187,7 +267,16 @@ public class FinancePostingService {
             String currency, String expenseReference) {
         validateTenant(tenantId);
         validateAmount(amount);
+        validateSourceId(expenseId, "expenseId");
         String c = normalizeCurrency(currency);
+        lockPosting(tenantId, "EXPENSE", expenseId, "ALL");
+        List<FinanceLedgerEntry> existing = sourceEntries(tenantId, "EXPENSE", expenseId);
+        if (!existing.isEmpty()) {
+            if (isExactBalancedPosting(existing, amount, c, OPERATING_EXPENSE, "DEBIT", CASH, "CREDIT"))
+                return;
+            throw new IllegalStateException(
+                    "Expense ID already has a different accounting posting; use an adjustment or reversal");
+        }
         postBalanced(tenantId, null, "EXPENSE", expenseId, amount, c,
                 OPERATING_EXPENSE, CASH, "Operating expense " + expenseReference);
     }
@@ -202,11 +291,23 @@ public class FinancePostingService {
             String currency, String shipmentReference) {
         validateTenant(tenantId);
         validateAmount(cumulativeAmount);
+        validateSourceId(shipmentId, "shipmentId");
         String c = normalizeCurrency(currency);
+        lockPosting(tenantId, "SUPPLIER_PAYMENT", shipmentId, "ALL");
+        List<FinanceLedgerEntry> supplierEntries = sourceEntries(tenantId, "SUPPLIER_PAYMENT", shipmentId);
+        if (supplierEntries.stream().anyMatch(e -> !c.equalsIgnoreCase(e.getCurrency()))) {
+            throw new IllegalStateException(
+                    "Supplier payment currency cannot change for a shipment after posting; use an explicit FX/reversal workflow");
+        }
         BigDecimal alreadyPosted = ledger.sumBySource(
                 tenantId, "SUPPLIER_PAYMENT", shipmentId, "DEBIT", c);
-        BigDecimal unposted = cumulativeAmount.subtract(alreadyPosted == null ? BigDecimal.ZERO : alreadyPosted);
-        if (unposted.signum() <= 0)
+        BigDecimal prior = alreadyPosted == null ? BigDecimal.ZERO : alreadyPosted;
+        if (cumulativeAmount.compareTo(prior) < 0) {
+            throw new IllegalArgumentException(
+                    "Cumulative supplier payment cannot be lower than the amount already posted; use a documented reversal for corrections");
+        }
+        BigDecimal unposted = cumulativeAmount.subtract(prior);
+        if (unposted.signum() == 0)
             return;
         postBalanced(tenantId, null, "SUPPLIER_PAYMENT", shipmentId, unposted, c,
                 OPERATING_EXPENSE, CASH, "Supplier payment " + shipmentReference);
@@ -219,6 +320,74 @@ public class FinancePostingService {
                 "DEBIT", debitAccount, amount, currency, description));
         ledger.save(new FinanceLedgerEntry(tenantId, invoiceId, sourceType, sourceId,
                 "CREDIT", creditAccount, amount, currency, description));
+    }
+
+    private void lockPosting(UUID tenantId, String sourceType, UUID sourceId, String currency) {
+        if (entityManager == null) {
+            // Allows isolated unit tests to exercise pure posting decisions. In Spring
+            // runtime,
+            // EntityManager is injected and PostgreSQL serializes concurrent attempts.
+            return;
+        }
+        String key = tenantId + "|" + sourceType + "|" + sourceId + "|" + currency;
+        entityManager.createNativeQuery("select pg_advisory_xact_lock(hashtextextended(:lockKey, 0))")
+                .setParameter("lockKey", key)
+                .getSingleResult();
+    }
+
+    private List<FinanceLedgerEntry> sourceEntries(UUID tenantId, String sourceType, UUID sourceId) {
+        return ledger.findAllByTenantIdAndSourceTypeAndSourceIdOrderByPostedAtAsc(tenantId, sourceType, sourceId);
+    }
+
+    private static boolean isExactSimpleInvoice(List<FinanceLedgerEntry> entries, BigDecimal amount, String currency) {
+        if (entries.size() != 2)
+            return false;
+        return hasLine(entries, ACCOUNTS_RECEIVABLE, "DEBIT", amount, currency)
+                && hasLine(entries, FREIGHT_REVENUE, "CREDIT", amount, currency);
+    }
+
+    private static boolean isExactTaxInvoice(List<FinanceLedgerEntry> entries, BigDecimal gross, BigDecimal tax,
+            String currency) {
+        BigDecimal revenue = gross.subtract(tax);
+        int expectedLines = 1 + (revenue.signum() > 0 ? 1 : 0) + (tax.signum() > 0 ? 1 : 0);
+        if (entries.size() != expectedLines || !hasLine(entries, ACCOUNTS_RECEIVABLE, "DEBIT", gross, currency))
+            return false;
+        return (revenue.signum() == 0 || hasLine(entries, FREIGHT_REVENUE, "CREDIT", revenue, currency))
+                && (tax.signum() == 0 || hasLine(entries, TAX_PAYABLE, "CREDIT", tax, currency));
+    }
+
+    private static boolean isExactTaxNote(List<FinanceLedgerEntry> entries, BigDecimal gross, BigDecimal tax,
+            String currency, boolean creditNote) {
+        BigDecimal revenue = gross.subtract(tax);
+        String revenueType = creditNote ? "DEBIT" : "CREDIT";
+        String taxType = creditNote ? "DEBIT" : "CREDIT";
+        String arType = creditNote ? "CREDIT" : "DEBIT";
+        int expectedLines = 1 + (revenue.signum() > 0 ? 1 : 0) + (tax.signum() > 0 ? 1 : 0);
+        String arAccount = ACCOUNTS_RECEIVABLE;
+        return entries.size() == expectedLines
+                && hasLine(entries, arAccount, arType, gross, currency)
+                && (revenue.signum() == 0 || hasLine(entries, FREIGHT_REVENUE, revenueType, revenue, currency))
+                && (tax.signum() == 0 || hasLine(entries, TAX_PAYABLE, taxType, tax, currency));
+    }
+
+    private static boolean isExactBalancedPosting(List<FinanceLedgerEntry> entries, BigDecimal amount, String currency,
+            String debitAccount, String debitType, String creditAccount, String creditType) {
+        return entries.size() == 2
+                && hasLine(entries, debitAccount, debitType, amount, currency)
+                && hasLine(entries, creditAccount, creditType, amount, currency);
+    }
+
+    private static boolean hasLine(List<FinanceLedgerEntry> entries, String account, String type,
+            BigDecimal amount, String currency) {
+        return entries.stream().anyMatch(e -> account.equals(e.getAccountCode())
+                && type.equalsIgnoreCase(e.getEntryType())
+                && amount.compareTo(e.getAmount()) == 0
+                && currency.equalsIgnoreCase(e.getCurrency()));
+    }
+
+    private static void validateSourceId(UUID id, String field) {
+        if (id == null)
+            throw new IllegalArgumentException(field + " is required for auditable, idempotent financial posting");
     }
 
     private static void validateTaxComponent(BigDecimal grossAmount, BigDecimal taxAmount) {

@@ -86,6 +86,21 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Prevent malformed or missing shipment IDs from becoming requests such as
+ * `/api/shipments/undefined`. IDs are encoded so path construction is safe.
+ */
+function requireShipmentId(id: string, operation: string): string {
+  const normalized = typeof id === "string" ? id.trim() : "";
+  if (!normalized || /^(undefined|null)$/i.test(normalized)) {
+    throw new ApiError(
+      400,
+      `Cannot ${operation}: shipment ID is missing. Open a shipment from the register and try again.`,
+    );
+  }
+  return encodeURIComponent(normalized);
+}
+
 export interface Page<T> {
   content: T[];
   totalElements: number;
@@ -814,7 +829,10 @@ export const shipmentsApi = {
     );
   },
 
-  get: (id: string) => apiFetch<Shipment>(`/api/shipments/${id}`),
+  get: (id: string) =>
+    apiFetch<Shipment>(
+      `/api/shipments/${requireShipmentId(id, "load shipment details")}`,
+    ),
 
   create: (
     data: {
@@ -865,10 +883,14 @@ export const shipmentsApi = {
     }),
 
   notificationHistory: (id: string) =>
-    apiFetch<Page<NotificationRecord>>(`/api/shipments/${id}/notifications`),
+    apiFetch<Page<NotificationRecord>>(
+      `/api/shipments/${requireShipmentId(id, "load shipment notifications")}/notifications`,
+    ),
 
   trackingHistory: (id: string) =>
-    apiFetch<TrackingEvent[]>(`/api/shipments/${id}/events`),
+    apiFetch<TrackingEvent[]>(
+      `/api/shipments/${requireShipmentId(id, "load shipment events")}/events`,
+    ),
 
   addTrackingEvent: (
     id: string,
@@ -1402,14 +1424,17 @@ export const sensorsApi = {
       eventId?: string;
     },
   ) =>
-    apiFetch<SensorReading>(`/api/shipments/${shipmentId}/sensors/readings`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    apiFetch<SensorReading>(
+      `/api/shipments/${requireShipmentId(shipmentId, "record sensor readings")}/sensors/readings`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
 
   history: (shipmentId: string) =>
     apiFetch<Page<SensorReading>>(
-      `/api/shipments/${shipmentId}/sensors/readings`,
+      `/api/shipments/${requireShipmentId(shipmentId, "load sensor readings")}/sensors/readings`,
     ),
 
   setThreshold: (
@@ -1422,7 +1447,7 @@ export const sensorsApi = {
     },
   ) =>
     apiFetch<SensorThreshold>(
-      `/api/shipments/${shipmentId}/sensors/threshold`,
+      `/api/shipments/${requireShipmentId(shipmentId, "update sensor thresholds")}/sensors/threshold`,
       {
         method: "PUT",
         body: JSON.stringify(data),

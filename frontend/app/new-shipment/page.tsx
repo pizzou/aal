@@ -2,8 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useMemo, useState } from "react";
-import { ApiError, commandCenterApi, shipmentsApi } from "@/lib/api-client";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  ApiError,
+  ClientRecord,
+  commandCenterApi,
+  commercialApi,
+  shipmentsApi,
+} from "@/lib/api-client";
 
 const modes = [
   "AIR",
@@ -204,6 +210,9 @@ export default function NewShipmentPage() {
   const router = useRouter();
 
   const [form, setForm] = useState<FormState>(initialForm);
+  const [clients, setClients] = useState<ClientRecord[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState("");
+  const [clientsLoading, setClientsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -212,6 +221,33 @@ export default function NewShipmentPage() {
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
+
+  useEffect(() => {
+    let active = true;
+    commercialApi
+      .clients()
+      .then((records) => {
+        if (active)
+          setClients(
+            records.filter(
+              (client) =>
+                (client.clientStatus || "ACTIVE").toUpperCase() === "ACTIVE",
+            ),
+          );
+      })
+      .catch(() => {
+        if (active)
+          setError(
+            "Customer records could not be loaded. Retry the page or create a customer before registering the shipment.",
+          );
+      })
+      .finally(() => {
+        if (active) setClientsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((current) => ({
@@ -487,14 +523,43 @@ export default function NewShipmentPage() {
                 </label>
 
                 <label className="field field-span-2">
-                  <span>Client / company *</span>
-
-                  <input
-                    value={form.clientName}
-                    onChange={(e) => update("clientName", e.target.value)}
-                    placeholder="Client company name"
+                  <span>Assign shipment to customer *</span>
+                  <select
+                    value={selectedClientId}
+                    onChange={(event) => {
+                      const client = clients.find(
+                        (item) => item.id === event.target.value,
+                      );
+                      setSelectedClientId(event.target.value);
+                      setForm((current) => ({
+                        ...current,
+                        clientName: client?.clientCompany || "",
+                        contact: client?.contactPerson || "",
+                      }));
+                    }}
                     required
-                  />
+                    disabled={clientsLoading}
+                  >
+                    <option value="">
+                      {clientsLoading
+                        ? "Loading customers…"
+                        : "Select customer / customer number…"}
+                    </option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {(client.clientCompany || "Unnamed customer") +
+                          " · " +
+                          client.clientId}
+                      </option>
+                    ))}
+                  </select>
+                  {!clientsLoading && clients.length === 0 && (
+                    <small>
+                      No active customers found.{" "}
+                      <Link href="/customers">Create a customer first</Link>,
+                      then return to register the shipment.
+                    </small>
+                  )}
                 </label>
 
                 <label className="field">

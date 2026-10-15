@@ -17,9 +17,6 @@ import {
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
-function id() {
-  return `AAL-CLI-${new Date().getFullYear()}-${Date.now().toString().slice(-7)}`;
-}
 function err(e: unknown) {
   return e instanceof ApiError || e instanceof Error
     ? e.message
@@ -39,7 +36,7 @@ export default function CustomersPage() {
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState({
-    clientId: id(),
+    clientId: "",
     clientCompany: "",
     contactPerson: "",
     phone: "",
@@ -104,7 +101,7 @@ export default function CustomersPage() {
       );
       setForm({
         ...form,
-        clientId: id(),
+        clientId: "",
         clientCompany: "",
         contactPerson: "",
         phone: "",
@@ -197,7 +194,7 @@ export default function CustomersPage() {
           <form className="form-grid" onSubmit={createClient}>
             {(
               [
-                ["clientId", "Client ID"],
+                ["clientId", "Customer number (system assigned)"],
                 ["clientCompany", "Company"],
                 ["contactPerson", "Contact person"],
                 ["phone", "Phone"],
@@ -220,9 +217,15 @@ export default function CustomersPage() {
                         ? "email"
                         : "text"
                   }
-                  value={form[k]}
+                  value={k === "clientId" ? "" : form[k]}
+                  readOnly={k === "clientId"}
+                  placeholder={
+                    k === "clientId"
+                      ? "Assigned automatically after saving"
+                      : undefined
+                  }
                   onChange={(e) => setForm({ ...form, [k]: e.target.value })}
-                  required={k === "clientId" || k === "clientCompany"}
+                  required={k === "clientCompany"}
                 />
               </div>
             ))}

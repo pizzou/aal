@@ -18,6 +18,9 @@ import com.logiplatform.repository.PartnerRecordRepository;
 import com.logiplatform.repository.ShipmentRepository;
 import com.logiplatform.repository.TaskRecordRepository;
 import com.logiplatform.tenancy.TenantContext;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 
 import org.apache.poi.ss.usermodel.*;
 import org.springframework.stereotype.Service;
@@ -50,6 +53,13 @@ public class AalExcelImportService {
         private final ExpenseRecordRepository expenses;
         private final FinancePostingService financePostingService;
         private final com.logiplatform.repository.AalImportBatchRepository importBatches;
+
+        @PersistenceContext
+        private EntityManager entityManager;
+
+        private static final int MAX_WORKBOOK_SHEETS = 100;
+        private static final int MAX_ROWS_PER_SHEET = 200_000;
+        private static final long MAX_WORKBOOK_ENTRY_BYTES = 50L * 1024L * 1024L;
 
         public AalExcelImportService(
                         ShipmentRepository shipments,
@@ -102,7 +112,7 @@ public class AalExcelImportService {
          * Imports one or more AAL workbooks as one migration operation.
          *
          * The importer deliberately does not depend on workbook filenames or
-         * worksheet names.  It identifies each worksheet from its column
+         * worksheet names. It identifies each worksheet from its column
          * headers, so the client can upload the MOTHERSHIP and Command Center
          * workbooks in any order and future copies of those workbooks can use
          * different sheet names without changing the application.
@@ -111,6 +121,18 @@ public class AalExcelImportService {
         public ImportResult importWorkbooks(List<MultipartFile> files) {
                 if (files == null || files.isEmpty()) {
                         throw new IllegalArgumentException("At least one Excel workbook is required");
+                }
+                if (files.size() > 20) {
+                        throw new IllegalArgumentException("At most 20 workbooks may be imported in one batch");
+                }
+                long totalBytes = 0L;
+                for (MultipartFile file : files) {
+                        validateWorkbook(file);
+                        totalBytes += file.getSize();
+                        if (totalBytes > 200L * 1024L * 1024L) {
+                                throw new IllegalArgumentException(
+                                                "Combined workbook size exceeds the 200 MB batch limit");
+                        }
                 }
 
                 UUID tenant = TenantContext.getTenantId();
@@ -143,19 +165,22 @@ public class AalExcelImportService {
                         throw new IllegalArgumentException("Unable to read AAL workbook", e);
                 }
 
+                validateWorkbookSignature(file.getOriginalFilename(), bytes);
+                hardenPoiZipLimits();
                 String sha256 = sha256(bytes);
+                lockImport(tenant, sha256);
                 Optional<AalImportBatch> previous = importBatches.findByTenantIdAndSourceSha256(tenant, sha256);
                 if (previous.isPresent() && "COMPLETED".equalsIgnoreCase(previous.get().getStatus())) {
                         return toResult(previous.get().counts());
                 }
 
-                AalImportBatch batch = previous.orElseGet(() ->
-                        importBatches.save(new AalImportBatch(tenant,
+                AalImportBatch batch = previous.orElseGet(() -> importBatches.save(new AalImportBatch(tenant,
                                 Optional.ofNullable(file.getOriginalFilename()).orElse("AAL-workbook"), sha256)));
 
                 try (InputStream input = new java.io.ByteArrayInputStream(bytes);
-                     Workbook workbook = WorkbookFactory.create(input)) {
+                                Workbook workbook = WorkbookFactory.create(input)) {
 
+                        validateWorkbookStructure(workbook);
                         int shipments = 0, quotes = 0, invoices = 0, clients = 0, partners = 0, tasks = 0, expenses = 0;
 
                         // Keep the original two-pass safety guarantee: shipments are
@@ -183,26 +208,35 @@ public class AalExcelImportService {
 
                         for (SheetAndDescriptor item : detected) {
                                 if (item.descriptor().kind() == SheetKind.SHIPMENT_MOTHERSHIP) {
-                                        shipments += importShipments(item.sheet(), tenant, item.descriptor().headerRow(), true);
+                                        shipments += importShipments(item.sheet(), tenant,
+                                                        item.descriptor().headerRow(), true);
                                 } else if (item.descriptor().kind() == SheetKind.SHIPMENT_COMMAND_CENTER) {
-                                        shipments += importShipments(item.sheet(), tenant, item.descriptor().headerRow(), false);
+                                        shipments += importShipments(item.sheet(), tenant,
+                                                        item.descriptor().headerRow(), false);
                                 }
                         }
 
                         for (SheetAndDescriptor item : detected) {
                                 switch (item.descriptor().kind()) {
-                                        case QUOTATION -> quotes += importQuotes(item.sheet(), tenant, item.descriptor().headerRow());
-                                        case INVOICE -> invoices += importInvoices(item.sheet(), tenant, item.descriptor().headerRow());
-                                        case CLIENT -> clients += importClients(item.sheet(), tenant, item.descriptor().headerRow());
-                                        case PARTNER -> partners += importPartners(item.sheet(), tenant, item.descriptor().headerRow());
-                                        case TASK -> tasks += importTasks(item.sheet(), tenant, item.descriptor().headerRow());
-                                        case EXPENSE -> expenses += importExpenses(item.sheet(), tenant, item.descriptor().headerRow());
-                                        default -> { }
+                                        case QUOTATION -> quotes += importQuotes(item.sheet(), tenant,
+                                                        item.descriptor().headerRow());
+                                        case INVOICE -> invoices += importInvoices(item.sheet(), tenant,
+                                                        item.descriptor().headerRow());
+                                        case CLIENT -> clients += importClients(item.sheet(), tenant,
+                                                        item.descriptor().headerRow());
+                                        case PARTNER -> partners += importPartners(item.sheet(), tenant,
+                                                        item.descriptor().headerRow());
+                                        case TASK -> tasks += importTasks(item.sheet(), tenant,
+                                                        item.descriptor().headerRow());
+                                        case EXPENSE -> expenses += importExpenses(item.sheet(), tenant,
+                                                        item.descriptor().headerRow());
+                                        default -> {
+                                        }
                                 }
                         }
 
                         AalImportBatch.AalImportCounts counts = new AalImportBatch.AalImportCounts(
-                                shipments, quotes, invoices, clients, partners, tasks, expenses);
+                                        shipments, quotes, invoices, clients, partners, tasks, expenses);
                         batch.complete(counts);
                         importBatches.save(batch);
                         return toResult(counts);
@@ -217,12 +251,15 @@ public class AalExcelImportService {
                 SHIPMENT_MOTHERSHIP, SHIPMENT_COMMAND_CENTER, QUOTATION, INVOICE, CLIENT, PARTNER, TASK, EXPENSE
         }
 
-        private record SheetDescriptor(SheetKind kind, int headerRow) {}
+        private record SheetDescriptor(SheetKind kind, int headerRow) {
+        }
 
-        private record SheetAndDescriptor(Sheet sheet, SheetDescriptor descriptor) {}
+        private record SheetAndDescriptor(Sheet sheet, SheetDescriptor descriptor) {
+        }
 
         private static SheetDescriptor classifySheet(Sheet sheet) {
-                if (sheet == null || sheet.getLastRowNum() < 0) return null;
+                if (sheet == null || sheet.getLastRowNum() < 0)
+                        return null;
 
                 SheetDescriptor best = null;
                 int maxRowsToInspect = Math.min(sheet.getLastRowNum(), 20);
@@ -244,24 +281,32 @@ public class AalExcelImportService {
                 if (has(h, "Shipment ID", "Client", "Destination City / Port", "Client Revenue (USD)")) {
                         return SheetKind.SHIPMENT_COMMAND_CENTER;
                 }
-                if (has(h, "Quote ID", "Client", "Quoted Amount (USD)")) return SheetKind.QUOTATION;
-                if (has(h, "Invoice No.", "Client", "Invoice Amount")) return SheetKind.INVOICE;
-                if (has(h, "Client ID", "Client / Company", "Contact Person")) return SheetKind.CLIENT;
-                if (has(h, "Partner ID", "Company", "Contact Person")) return SheetKind.PARTNER;
-                if (has(h, "Task ID", "Task", "Due Date", "Status")) return SheetKind.TASK;
-                if (has(h, "Expense ID", "Date", "Original Amount")) return SheetKind.EXPENSE;
+                if (has(h, "Quote ID", "Client", "Quoted Amount (USD)"))
+                        return SheetKind.QUOTATION;
+                if (has(h, "Invoice No.", "Client", "Invoice Amount"))
+                        return SheetKind.INVOICE;
+                if (has(h, "Client ID", "Client / Company", "Contact Person"))
+                        return SheetKind.CLIENT;
+                if (has(h, "Partner ID", "Company", "Contact Person"))
+                        return SheetKind.PARTNER;
+                if (has(h, "Task ID", "Task", "Due Date", "Status"))
+                        return SheetKind.TASK;
+                if (has(h, "Expense ID", "Date", "Original Amount"))
+                        return SheetKind.EXPENSE;
                 return null;
         }
 
         private static boolean has(Map<String, Integer> h, String... required) {
                 for (String value : required) {
-                        if (!h.containsKey(canonicalHeader(value))) return false;
+                        if (!h.containsKey(canonicalHeader(value)))
+                                return false;
                 }
                 return true;
         }
 
         private static String normalizeHeader(String value) {
-                if (value == null) return "";
+                if (value == null)
+                        return "";
                 return value
                                 .replace('\u00a0', ' ')
                                 .trim()
@@ -285,7 +330,8 @@ public class AalExcelImportService {
                         case "awb", "awb no", "awb number", "awb no." -> "awb no";
                         case "name of client", "client name", "customer", "customer name" -> "name of client";
                         case "origin city", "origin city / port", "origin/port" -> "origin city / port";
-                        case "destination city", "destination city / port", "destination/port" -> "destination city / port";
+                        case "destination city", "destination city / port", "destination/port" ->
+                                "destination city / port";
                         case "client revenue", "client revenue (usd)", "client revenue usd" -> "client revenue (usd)";
                         case "actual weight", "actual weight (kg)", "gross weight (kg)" -> key;
                         case "volume weight", "volume weight (kg)", "volumetric weight (kg)" -> key;
@@ -298,7 +344,8 @@ public class AalExcelImportService {
 
         private static int findHeaderRow(Sheet sheet, String... required) {
                 for (int i = 0; i <= Math.min(sheet.getLastRowNum(), 20); i++) {
-                        if (has(headers(sheet.getRow(i)), required)) return i;
+                        if (has(headers(sheet.getRow(i)), required))
+                                return i;
                 }
                 return -1;
         }
@@ -315,13 +362,65 @@ public class AalExcelImportService {
                 if (!(lower.endsWith(".xls") || lower.endsWith(".xlsx") || lower.endsWith(".xlsm"))) {
                         throw new IllegalArgumentException("Only .xls, .xlsx and .xlsm AAL workbooks are supported");
                 }
+                if (filename != null
+                                && (filename.contains("..") || filename.contains("/") || filename.contains("\\"))) {
+                        throw new IllegalArgumentException("Workbook filename must not contain path components");
+                }
+        }
+
+        private static void validateWorkbookSignature(String filename, byte[] bytes) {
+                if (bytes == null || bytes.length < 4) {
+                        throw new IllegalArgumentException("Workbook file is truncated or invalid");
+                }
+                String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+                boolean ole2 = (bytes[0] & 0xff) == 0xD0 && (bytes[1] & 0xff) == 0xCF
+                                && (bytes[2] & 0xff) == 0x11 && (bytes[3] & 0xff) == 0xE0;
+                boolean zip = bytes[0] == 'P' && bytes[1] == 'K';
+                if (lower.endsWith(".xls") && !ole2) {
+                        throw new IllegalArgumentException(
+                                        "The .xls file signature is invalid; upload a real Excel workbook");
+                }
+                if ((lower.endsWith(".xlsx") || lower.endsWith(".xlsm")) && !zip) {
+                        throw new IllegalArgumentException("The workbook is not a valid .xlsx/.xlsm ZIP container");
+                }
+        }
+
+        private static void hardenPoiZipLimits() {
+                // Apache POI's ZIP-bomb protections apply to XLSX/XLSM workbooks.
+                ZipSecureFile.setMinInflateRatio(0.01d);
+                ZipSecureFile.setMaxEntrySize(MAX_WORKBOOK_ENTRY_BYTES);
+                ZipSecureFile.setMaxTextSize(10L * 1024L * 1024L);
+        }
+
+        private static void validateWorkbookStructure(Workbook workbook) {
+                if (workbook.getNumberOfSheets() > MAX_WORKBOOK_SHEETS) {
+                        throw new IllegalArgumentException(
+                                        "Workbook contains too many worksheets (maximum " + MAX_WORKBOOK_SHEETS + ")");
+                }
+                for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
+                        Sheet sheet = workbook.getSheetAt(i);
+                        if (sheet != null && sheet.getLastRowNum() > MAX_ROWS_PER_SHEET) {
+                                throw new IllegalArgumentException("Worksheet '" + sheet.getSheetName()
+                                                + "' exceeds the " + MAX_ROWS_PER_SHEET + " row import limit");
+                        }
+                }
+        }
+
+        private void lockImport(UUID tenantId, String sha256) {
+                if (entityManager == null)
+                        return;
+                String key = "AAL_IMPORT|" + tenantId + "|" + sha256;
+                entityManager.createNativeQuery("select pg_advisory_xact_lock(hashtextextended(:lockKey, 0))")
+                                .setParameter("lockKey", key)
+                                .getSingleResult();
         }
 
         private static String sha256(byte[] bytes) {
                 try {
                         byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
                         StringBuilder out = new StringBuilder(64);
-                        for (byte b : digest) out.append(String.format(Locale.ROOT, "%02x", b));
+                        for (byte b : digest)
+                                out.append(String.format(Locale.ROOT, "%02x", b));
                         return out.toString();
                 } catch (Exception e) {
                         throw new IllegalStateException("SHA-256 is unavailable", e);
@@ -329,7 +428,8 @@ public class AalExcelImportService {
         }
 
         private static ImportResult toResult(AalImportBatch.AalImportCounts c) {
-                return new ImportResult(c.shipments(), c.quotations(), c.invoices(), c.clients(), c.partners(), c.tasks(), c.expenses());
+                return new ImportResult(c.shipments(), c.quotations(), c.invoices(), c.clients(), c.partners(),
+                                c.tasks(), c.expenses());
         }
 
         private int importShipments(
@@ -991,7 +1091,8 @@ public class AalExcelImportService {
                         if (blank(clientId) || clients.findByTenantIdAndClientId(tenant, clientId).isPresent()) {
                                 continue;
                         }
-                        if (!blank(company) && clients.findFirstByTenantIdAndClientCompanyIgnoreCase(tenant, company).isPresent()) {
+                        if (!blank(company) && clients.findFirstByTenantIdAndClientCompanyIgnoreCase(tenant, company)
+                                        .isPresent()) {
                                 continue;
                         }
 
@@ -1363,7 +1464,8 @@ public class AalExcelImportService {
         }
 
         private static String normalizeKey(String value) {
-                if (value == null) return "";
+                if (value == null)
+                        return "";
                 return value.trim().replaceAll("\\s+", " ").toUpperCase(Locale.ROOT);
         }
 
@@ -1441,8 +1543,10 @@ public class AalExcelImportService {
                                                 cell.getCellStyle().getDataFormat(),
                                                 cell.getCellStyle().getDataFormatString()).trim();
                         }
-                        if (cached == CellType.BOOLEAN) return Boolean.toString(cell.getBooleanCellValue());
-                        if (cached == CellType.STRING) return cell.getStringCellValue().trim();
+                        if (cached == CellType.BOOLEAN)
+                                return Boolean.toString(cell.getBooleanCellValue());
+                        if (cached == CellType.STRING)
+                                return cell.getStringCellValue().trim();
                         return "";
                 }
                 return formatter.formatCellValue(cell).trim();
@@ -1476,8 +1580,10 @@ public class AalExcelImportService {
                         return new BigDecimal(raw);
 
                 } catch (NumberFormatException e) {
-
-                        return null;
+                        int excelRow = row == null ? -1 : row.getRowNum() + 1;
+                        String location = excelRow < 1 ? "" : " at row " + excelRow;
+                        throw new IllegalArgumentException(
+                                        "Invalid numeric value '" + raw + "' in column '" + header + "'" + location, e);
                 }
         }
 
@@ -1491,9 +1597,15 @@ public class AalExcelImportService {
                                 headers,
                                 header);
 
-                return value == null
-                                ? null
-                                : value.intValue();
+                if (value == null)
+                        return null;
+                try {
+                        return value.intValueExact();
+                } catch (ArithmeticException e) {
+                        int excelRow = row == null ? -1 : row.getRowNum() + 1;
+                        throw new IllegalArgumentException("Expected a whole-number value in column '" + header
+                                        + "'" + (excelRow < 1 ? "" : " at row " + excelRow), e);
+                }
         }
 
         /**
@@ -1532,7 +1644,8 @@ public class AalExcelImportService {
                                 return cell.getLocalDateTimeCellValue().toLocalDate();
                         }
                         if (cell.getCachedFormulaResultType() == CellType.NUMERIC) {
-                                return DateUtil.getJavaDate(cell.getNumericCellValue()).toInstant().atZone(ZoneOffset.UTC).toLocalDate();
+                                return DateUtil.getJavaDate(cell.getNumericCellValue()).toInstant()
+                                                .atZone(ZoneOffset.UTC).toLocalDate();
                         }
                 }
 
@@ -1554,19 +1667,24 @@ public class AalExcelImportService {
                         }
                 }
 
-                /*
-                 * Support ISO timestamps.
-                 */
+                // Accept ISO local timestamps, offset timestamps and UTC instants commonly
+                // exported by spreadsheets and APIs. A nonblank invalid date must not silently
+                // become null (expense dates otherwise default to today's date).
                 try {
-
-                        return Instant
-                                        .parse(raw)
-                                        .atZone(ZoneOffset.UTC)
-                                        .toLocalDate();
-
+                        return java.time.LocalDateTime.parse(raw, DateTimeFormatter.ISO_LOCAL_DATE_TIME).toLocalDate();
                 } catch (DateTimeParseException ignored) {
-
-                        return null;
+                }
+                try {
+                        return java.time.OffsetDateTime.parse(raw, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                                        .toLocalDate();
+                } catch (DateTimeParseException ignored) {
+                }
+                try {
+                        return Instant.parse(raw).atZone(ZoneOffset.UTC).toLocalDate();
+                } catch (DateTimeParseException ignored) {
+                        int excelRow = row.getRowNum() + 1;
+                        throw new IllegalArgumentException("Invalid date value '" + raw + "' in column '" + header
+                                        + "' at row " + excelRow);
                 }
         }
 

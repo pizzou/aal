@@ -8,6 +8,7 @@ import {
   QuoteRecord,
   TaskRecord,
   ExpenseRecord,
+  ClientRecord,
   commercialApi,
 } from "@/lib/api-client";
 
@@ -29,6 +30,8 @@ export default function CommercialPage() {
   const [quotes, setQuotes] = useState<QuoteRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
+  const [clients, setClients] = useState<ClientRecord[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState("");
   const [tab, setTab] = useState<"quotes" | "tasks" | "expenses">("quotes");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -65,12 +68,19 @@ export default function CommercialPage() {
     if (!accessToken) return;
     setError("");
     try {
-      const [q, t] = await Promise.all([
+      const [q, t, c] = await Promise.all([
         commercialApi.quotes(),
         commercialApi.tasks(),
+        commercialApi.clients(),
       ]);
       setQuotes(q);
       setTasks(t);
+      setClients(
+        c.filter(
+          (client) =>
+            (client.clientStatus || "ACTIVE").toUpperCase() === "ACTIVE",
+        ),
+      );
       if (canExpense) setExpenses(await commercialApi.expenses());
     } catch (e) {
       setError(msg(e));
@@ -129,6 +139,7 @@ export default function CommercialPage() {
       } else {
         setSuccess("Quotation created as a draft.");
       }
+      setSelectedClientId("");
       setQuote({
         ...quote,
         quoteId: id("AAL-QT"),
@@ -319,35 +330,60 @@ export default function CommercialPage() {
                 ] as const
               ).map(([k, l]) => (
                 <div className="field" key={k}>
-                  <label>{l}</label>
-                  <input
-                    type={
-                      k.toLowerCase().includes("date") ||
-                      k === "validUntil" ||
-                      k === "followUpDate"
-                        ? "date"
-                        : [
-                              "chargeableWeightKg",
-                              "supplierCost",
-                              "otherCost",
-                              "markupPercent",
-                              "quotedAmount",
-                            ].includes(k)
-                          ? "number"
-                          : "text"
-                    }
-                    step="any"
-                    value={quote[k]}
-                    onChange={(e) =>
-                      setQuote({ ...quote, [k]: e.target.value })
-                    }
-                    required={[
-                      "quoteId",
-                      "quoteDate",
-                      "client",
-                      "quotedAmount",
-                    ].includes(k)}
-                  />
+                  <label>{k === "client" ? "Assign to customer" : l}</label>
+                  {k === "client" ? (
+                    <select
+                      value={selectedClientId}
+                      onChange={(e) => {
+                        const chosen = clients.find(
+                          (client) => client.id === e.target.value,
+                        );
+                        setSelectedClientId(e.target.value);
+                        setQuote({
+                          ...quote,
+                          client: chosen?.clientCompany || "",
+                          customerEmail: chosen?.email || "",
+                        });
+                      }}
+                      required
+                    >
+                      <option value="">Select an existing customer…</option>
+                      {clients.map((client) => (
+                        <option key={client.id} value={client.id}>
+                          {client.clientCompany || "Unnamed customer"} ·{" "}
+                          {client.clientId}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={
+                        k.toLowerCase().includes("date") ||
+                        k === "validUntil" ||
+                        k === "followUpDate"
+                          ? "date"
+                          : [
+                                "chargeableWeightKg",
+                                "supplierCost",
+                                "otherCost",
+                                "markupPercent",
+                                "quotedAmount",
+                              ].includes(k)
+                            ? "number"
+                            : "text"
+                      }
+                      step="any"
+                      value={quote[k]}
+                      onChange={(e) =>
+                        setQuote({ ...quote, [k]: e.target.value })
+                      }
+                      required={[
+                        "quoteId",
+                        "quoteDate",
+                        "quotedAmount",
+                      ].includes(k)}
+                    />
+                  )}
                 </div>
               ))}
               <div className="field field-span-2">
@@ -368,8 +404,8 @@ export default function CommercialPage() {
                 <span>
                   <strong>Send quotation to customer immediately</strong>
                   <small>
-                    Uses the customer email above or the email stored in
-                    Customer 360.
+                    Uses the email attached to the selected Customer 360 record.
+                    You can change it before sending.
                   </small>
                 </span>
               </label>

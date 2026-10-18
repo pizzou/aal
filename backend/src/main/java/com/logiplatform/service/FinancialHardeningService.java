@@ -56,13 +56,46 @@ public class FinancialHardeningService {
         UUID tenant = tenant();
         Map<String, Object> row = one("""
                 SELECT lifecycle_status,invoice_no,amount_paid,invoice_amount,subtotal_amount,
-                       tax_amount,credit_note_amount,debit_note_amount,currency,due_date
+                       tax_rate,tax_amount,tax_code,tax_jurisdiction_code,tax_inclusive,
+                       credit_note_amount,debit_note_amount,currency,due_date
                   FROM commercial_invoices WHERE tenant_id=? AND id=? FOR UPDATE
                 """, tenant, invoiceId);
         String current = Objects.toString(row.get("lifecycle_status"), "ISSUED").toUpperCase(Locale.ROOT);
         String next = normalizeStatus(target);
         if (!allowed(current, next))
             throw bad("Invalid invoice lifecycle transition: " + current + " -> " + next);
+
+        // Every invoice must have a persisted tax decision before issuance. The
+        // normal BillingService path applies tax first; this guard also closes the
+        // alternate Financial hardening lifecycle endpoint so callers cannot issue
+        // a draft by omitting tax fields.
+        if ("DRAFT".equals(current) && "ISSUED".equals(next)) {
+            String taxCode = Objects.toString(row.get("tax_code"), null);
+            String jurisdictionCode = Objects.toString(row.get("tax_jurisdiction_code"), null);
+            BigDecimal currentTax = n(row.get("tax_amount"));
+            BigDecimal currentRate = n(row.get("tax_rate"));
+            if (blank(taxCode)) {
+                if (currentTax.signum() != 0 || currentRate.signum() != 0) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "This draft contains tax amounts but no tax rule identifier. Review and correct the draft before issuing it.");
+                }
+                String currency = Objects.toString(row.get("currency"), "USD").toUpperCase(Locale.ROOT);
+                Map<String, Object> defaultRule = defaultInvoiceVatRule(LocalDate.now(), currency);
+                applyTaxToDraftInvoice(invoiceId,
+                        Objects.toString(defaultRule.get("jurisdiction_code"), ""),
+                        Objects.toString(defaultRule.get("code"), ""), LocalDate.now());
+                row = one("""
+                        SELECT lifecycle_status,invoice_no,amount_paid,invoice_amount,subtotal_amount,
+                               tax_rate,tax_amount,tax_code,tax_jurisdiction_code,tax_inclusive,
+                               credit_note_amount,debit_note_amount,currency,due_date
+                          FROM commercial_invoices WHERE tenant_id=? AND id=? FOR UPDATE
+                        """, tenant, invoiceId);
+            } else if (blank(jurisdictionCode)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "This draft has a tax code but no jurisdiction snapshot. Review the draft in Financial hardening before issuing it.");
+            }
+        }
+
         BigDecimal paid = n(row.get("amount_paid"));
         BigDecimal total = n(row.get("invoice_amount")).add(n(row.get("debit_note_amount")))
                 .subtract(n(row.get("credit_note_amount")));
@@ -560,6 +593,11 @@ public class FinancialHardeningService {
             throw bad("Jurisdiction code may contain only letters, numbers, dot, underscore and hyphen");
         if (!normalizedCountry.matches("[A-Z]{2,3}"))
             throw bad("Country code must be ISO alpha-2 or alpha-3");
+        if (active && defaultForInvoicing
+                && ("ZZZ".equals(normalizedCountry)
+                        || legalName.trim().toLowerCase(Locale.ROOT).contains("unconfigured")))
+            throw bad(
+                    "An active default invoice jurisdiction must use the company's verified legal identity and country, not an unconfigured placeholder");
         if (!normalizedCurrency.matches("[A-Z]{3}"))
             throw bad("Currency must be a three-letter ISO code");
         String normalizedPrefix = blank(prefix) ? null : prefix.trim().toUpperCase(Locale.ROOT);
@@ -586,8 +624,17 @@ public class FinancialHardeningService {
                 UUID.randomUUID(), t, normalizedCode, legalName.trim(),
                 blank(registrationNo) ? null : registrationNo.trim(),
                 normalizedCountry, address, normalizedPrefix, normalizedCurrency, active, defaultForInvoicing);
-        return one("SELECT * FROM finance_tax_jurisdictions WHERE tenant_id=? AND jurisdiction_code=?", t,
+        Map<String, Object> saved = one(
+                "SELECT * FROM finance_tax_jurisdictions WHERE tenant_id=? AND jurisdiction_code=?", t,
                 normalizedCode);
+        // Making a real, active jurisdiction the invoice default is the explicit
+        // administrator action that authorizes the tenant's standard 18% VAT rule.
+        // Do not invent legal identity/registration data; only create the rule after
+        // the administrator has saved the jurisdiction above.
+        if (active && defaultForInvoicing) {
+            ensureDefaultInvoiceVatRule(t, normalizedCode, LocalDate.now());
+        }
+        return saved;
     }
 
     /**
@@ -655,6 +702,25 @@ public class FinancialHardeningService {
                 rs -> rs.next() && rs.getBoolean(1), t, jurisdiction);
         if (!Boolean.TRUE.equals(configured))
             throw bad("Configure the tax jurisdiction before adding tax rules");
+        if (active && "VAT".equals(normalizedType) && rate.compareTo(new BigDecimal("18")) == 0) {
+            Boolean overlappingRule = db.query("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM finance_tax_rules r
+                         WHERE r.tenant_id=? AND r.jurisdiction_code=? AND r.active=TRUE
+                           AND upper(r.tax_type)='VAT' AND r.rate=18
+                           AND r.currency IS NOT DISTINCT FROM ?
+                           AND (r.applies_to='ALL' OR r.applies_to='INVOICE')
+                           AND r.valid_from<=COALESCE(?::date, DATE '9999-12-31')
+                           AND (r.valid_until IS NULL OR r.valid_until>=?)
+                           AND NOT (r.code=? AND r.valid_from=?)
+                    )
+                    """, rs -> rs.next() && rs.getBoolean(1), t, jurisdiction, normalizedCurrency,
+                    validUntil, validFrom, taxCode, validFrom);
+            if (Boolean.TRUE.equals(overlappingRule)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Another active 18% VAT rule overlaps this currency and effective period. Edit the existing rule or change the dates/currency to avoid ambiguous invoice tax selection.");
+            }
+        }
         db.update(
                 """
                         INSERT INTO finance_tax_rules(id,tenant_id,code,tax_name,rate,withholding_rate,currency,valid_from,valid_until,active,
@@ -676,34 +742,151 @@ public class FinancialHardeningService {
     }
 
     /**
-     * Resolve the single effective 18% VAT rule for the tenant default invoice
-     * jurisdiction.
-     * Never silently invent a tax registration, jurisdiction, or rule when
-     * configuration is missing.
+     * Resolve the single effective 18% VAT rule for the tenant's default invoice
+     * jurisdiction when a document currency is not yet known. Kept for backwards
+     * compatibility; invoice flows should use the currency-aware overload.
      */
     @Transactional(readOnly = true)
     public Map<String, Object> defaultInvoiceVatRule(LocalDate onDate) {
+        return resolveDefaultInvoiceVatRule(onDate, null);
+    }
+
+    /**
+     * Resolve a VAT rule using the default jurisdiction and invoice currency.
+     * A currency-specific rule takes precedence over a currency-neutral rule;
+     * this lets one tenant invoice in USD and RWF without making the VAT amount
+     * or shipment currency browser-controlled.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> defaultInvoiceVatRule(LocalDate onDate, String documentCurrency) {
+        String currency = blank(documentCurrency) ? null : documentCurrency.trim().toUpperCase(Locale.ROOT);
+        if (currency != null && !currency.matches("[A-Z]{3}"))
+            throw bad("Invoice currency must be a three-letter ISO code");
+        return resolveDefaultInvoiceVatRule(onDate, currency);
+    }
+
+    private Map<String, Object> resolveDefaultInvoiceVatRule(LocalDate onDate, String documentCurrency) {
         LocalDate effective = onDate == null ? LocalDate.now() : onDate;
-        List<Map<String, Object>> rules = db.queryForList("""
-                SELECT r.id, r.code, r.tax_name, r.rate, r.currency, r.valid_from, r.valid_until,
-                       r.jurisdiction_code, r.tax_type, r.inclusive, j.tax_registration_no
-                  FROM finance_tax_jurisdictions j
-                  JOIN finance_tax_rules r ON r.tenant_id=j.tenant_id AND r.jurisdiction_code=j.jurisdiction_code
-                 WHERE j.tenant_id=? AND j.active=true AND j.default_for_invoicing=true
-                   AND r.active=true AND upper(r.tax_type)='VAT' AND r.rate=18
-                   AND r.valid_from<=? AND (r.valid_until IS NULL OR r.valid_until>=?)
-                   AND (r.applies_to='ALL' OR r.applies_to='INVOICE')
-                 ORDER BY r.valid_from DESC
-                """, tenant(), effective, effective);
-        if (rules.isEmpty()) {
+        UUID t = tenant();
+        List<Map<String, Object>> jurisdictions = db.queryForList("""
+                SELECT jurisdiction_code, legal_name, tax_registration_no, currency
+                  FROM finance_tax_jurisdictions
+                 WHERE tenant_id=? AND active=true AND default_for_invoicing=true
+                 ORDER BY jurisdiction_code
+                """, t);
+        if (jurisdictions.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "No active 18% VAT rule is configured for the default invoice tax jurisdiction. Ask a finance administrator to configure it before issuing invoices.");
+                    "No active default invoice tax jurisdiction is configured for this tenant. Open Billing > Financial hardening and save the company's verified tax jurisdiction as active and default before issuing invoices.");
+        }
+        if (jurisdictions.size() > 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "More than one active default invoice tax jurisdiction exists. Ask a finance administrator to resolve the configuration before issuing invoices.");
+        }
+        String jurisdiction = Objects.toString(jurisdictions.get(0).get("jurisdiction_code"), "");
+        List<Map<String, Object>> rules;
+        if (documentCurrency == null) {
+            rules = db.queryForList("""
+                    SELECT r.id, r.code, r.tax_name, r.rate, r.currency, r.valid_from, r.valid_until,
+                           r.jurisdiction_code, r.tax_type, r.inclusive, j.tax_registration_no
+                      FROM finance_tax_jurisdictions j
+                      JOIN finance_tax_rules r ON r.tenant_id=j.tenant_id AND r.jurisdiction_code=j.jurisdiction_code
+                     WHERE j.tenant_id=? AND j.jurisdiction_code=? AND j.active=true AND j.default_for_invoicing=true
+                       AND r.active=true AND upper(r.tax_type)='VAT' AND r.rate=18
+                       AND r.valid_from<=? AND (r.valid_until IS NULL OR r.valid_until>=?)
+                       AND (r.applies_to='ALL' OR r.applies_to='INVOICE')
+                     ORDER BY r.valid_from DESC
+                    """, t, jurisdiction, effective, effective);
+        } else {
+            // Specific-currency rules win. Only when none is effective for this
+            // currency do we fall back to the currency-neutral default rule.
+            rules = db.queryForList("""
+                    SELECT r.id, r.code, r.tax_name, r.rate, r.currency, r.valid_from, r.valid_until,
+                           r.jurisdiction_code, r.tax_type, r.inclusive, j.tax_registration_no
+                      FROM finance_tax_jurisdictions j
+                      JOIN finance_tax_rules r ON r.tenant_id=j.tenant_id AND r.jurisdiction_code=j.jurisdiction_code
+                     WHERE j.tenant_id=? AND j.jurisdiction_code=? AND j.active=true AND j.default_for_invoicing=true
+                       AND r.active=true AND upper(r.tax_type)='VAT' AND r.rate=18
+                       AND r.valid_from<=? AND (r.valid_until IS NULL OR r.valid_until>=?)
+                       AND (r.applies_to='ALL' OR r.applies_to='INVOICE')
+                       AND upper(r.currency)=?
+                     ORDER BY r.valid_from DESC
+                    """, t, jurisdiction, effective, effective, documentCurrency);
+            if (rules.isEmpty()) {
+                rules = db.queryForList(
+                        """
+                                SELECT r.id, r.code, r.tax_name, r.rate, r.currency, r.valid_from, r.valid_until,
+                                       r.jurisdiction_code, r.tax_type, r.inclusive, j.tax_registration_no
+                                  FROM finance_tax_jurisdictions j
+                                  JOIN finance_tax_rules r ON r.tenant_id=j.tenant_id AND r.jurisdiction_code=j.jurisdiction_code
+                                 WHERE j.tenant_id=? AND j.jurisdiction_code=? AND j.active=true AND j.default_for_invoicing=true
+                                   AND r.active=true AND upper(r.tax_type)='VAT' AND r.rate=18
+                                   AND r.valid_from<=? AND (r.valid_until IS NULL OR r.valid_until>=?)
+                                   AND (r.applies_to='ALL' OR r.applies_to='INVOICE')
+                                   AND r.currency IS NULL
+                                 ORDER BY r.valid_from DESC
+                                """,
+                        t, jurisdiction, effective, effective);
+            }
+        }
+        if (rules.isEmpty()) {
+            String currencyNote = documentCurrency == null ? "" : " for invoice currency " + documentCurrency;
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "No active 18% VAT rule is configured for default invoice jurisdiction " + jurisdiction
+                            + currencyNote
+                            + ". Open Billing > Financial hardening; an active default jurisdiction can receive the standard VAT rule automatically when it is saved.");
         }
         if (rules.size() > 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Multiple effective 18% VAT rules exist for the default invoice jurisdiction. Ask a finance administrator to resolve the tax configuration.");
+                    "Multiple effective 18% VAT rules exist for default invoice jurisdiction " + jurisdiction
+                            + ". Ask a finance administrator to resolve the tax configuration before issuing invoices.");
         }
         return rules.get(0);
+    }
+
+    /**
+     * Create a currency-neutral standard VAT rule only after an administrator
+     * explicitly saves an active default jurisdiction. Existing effective rules
+     * and scheduled future rules remain authoritative; this method only fills an
+     * effective-date gap. The rule is exclusive by default (VAT is added to the
+     * shipment's entered amount). Finance can edit the rule's inclusive setting.
+     */
+    private void ensureDefaultInvoiceVatRule(UUID tenantId, String jurisdictionCode, LocalDate effectiveDate) {
+        List<Map<String, Object>> currentRules = db.queryForList("""
+                SELECT id FROM finance_tax_rules
+                 WHERE tenant_id=? AND jurisdiction_code=? AND active=true
+                   AND upper(tax_type)='VAT' AND rate=18 AND currency IS NULL
+                   AND valid_from<=? AND (valid_until IS NULL OR valid_until>=?)
+                   AND (applies_to='ALL' OR applies_to='INVOICE')
+                 ORDER BY valid_from DESC
+                """, tenantId, jurisdictionCode, effectiveDate, effectiveDate);
+        if (!currentRules.isEmpty()) {
+            return;
+        }
+        java.sql.Date nextStart = db.queryForObject("""
+                SELECT MIN(valid_from) FROM finance_tax_rules
+                 WHERE tenant_id=? AND jurisdiction_code=? AND active=true
+                   AND upper(tax_type)='VAT' AND rate=18 AND currency IS NULL
+                   AND valid_from>? AND (applies_to='ALL' OR applies_to='INVOICE')
+                """, java.sql.Date.class, tenantId, jurisdictionCode, effectiveDate);
+        LocalDate validUntil = nextStart == null ? null : nextStart.toLocalDate().minusDays(1);
+        if (validUntil != null && validUntil.isBefore(effectiveDate)) {
+            return;
+        }
+        String generatedCode = "VAT18-AUTO";
+        int suffix = 2;
+        while (Boolean.TRUE.equals(db.queryForObject("""
+                SELECT EXISTS(SELECT 1 FROM finance_tax_rules
+                 WHERE tenant_id=? AND jurisdiction_code=? AND code=? AND valid_from=?)
+                """, Boolean.class, tenantId, jurisdictionCode, generatedCode, effectiveDate))) {
+            generatedCode = "VAT18-AUTO-" + suffix++;
+        }
+        db.update("""
+                INSERT INTO finance_tax_rules
+                    (id,tenant_id,code,tax_name,rate,withholding_rate,currency,valid_from,valid_until,active,
+                     jurisdiction_code,tax_type,inclusive,exemption_code,applies_to)
+                VALUES(?,?,?,?,?,?,?,?,?,true,?,'VAT',false,NULL,'INVOICE')
+                """, UUID.randomUUID(), tenantId, generatedCode, "Value Added Tax (VAT)",
+                new BigDecimal("18.0000"), BigDecimal.ZERO, null, effectiveDate, validUntil, jurisdictionCode);
     }
 
     @Transactional(readOnly = true)

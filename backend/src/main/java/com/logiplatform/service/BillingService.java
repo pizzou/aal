@@ -61,7 +61,13 @@ public class BillingService {
          */
         @Transactional(readOnly = true)
         public java.util.Map<String, Object> previewDefaultShipmentInvoiceVat(UUID shipmentId, LocalDate onDate) {
-                java.util.Map<String, Object> rule = financialHardening.defaultInvoiceVatRule(onDate);
+                UUID tenantId = TenantContext.getTenantId();
+                Shipment shipment = shipments.findByIdAndTenantId(shipmentId, tenantId)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "Shipment not found"));
+                String currency = normalizeCurrency(
+                                shipment.getCurrency() == null ? "USD" : shipment.getCurrency());
+                java.util.Map<String, Object> rule = financialHardening.defaultInvoiceVatRule(onDate, currency);
                 return previewShipmentInvoiceTax(shipmentId,
                                 java.util.Objects.toString(rule.get("jurisdiction_code")),
                                 java.util.Objects.toString(rule.get("code")), onDate);
@@ -224,7 +230,6 @@ public class BillingService {
                                 .orElseThrow(() -> new ResponseStatusException(
                                                 HttpStatus.NOT_FOUND,
                                                 "Shipment not found"));
-
                 /*
                  * A shipment may only have one canonical commercial invoice.
                  * Retrying the operation therefore returns the existing invoice
@@ -233,21 +238,45 @@ public class BillingService {
                 CommercialInvoice existing = invoices
                                 .findByTenantIdAndShipmentId(tenantId, shipmentId)
                                 .orElse(null);
+                // A retry for a previously issued invoice must return the canonical
+                // record even if the tax configuration has changed since issuance.
+                if (existing != null && !"DRAFT".equalsIgnoreCase(existing.getLifecycleStatus())) {
+                        return existing;
+                }
+
+                String currency = normalizeCurrency(
+                                shipment.getCurrency() == null ? "USD" : shipment.getCurrency());
+                java.util.Map<String, Object> defaultVatRule = financialHardening.defaultInvoiceVatRule(LocalDate.now(),
+                                currency);
+                String resolvedJurisdiction = java.util.Objects.toString(
+                                defaultVatRule.get("jurisdiction_code"), "");
+                String resolvedTaxCode = java.util.Objects.toString(defaultVatRule.get("code"), "");
+                // Request-body tax codes are retained only for compatibility with older
+                // clients. They cannot override the tenant's server-selected tax rule.
+                if (hasJurisdiction &&
+                                (!resolvedJurisdiction.equalsIgnoreCase(taxJurisdictionCode.trim())
+                                                || !resolvedTaxCode.equalsIgnoreCase(taxCode.trim()))) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                        "The applicable VAT rule changed or the submitted rule is not the tenant default. Refresh the invoice tax preview and retry.");
+                }
 
                 if (existing != null) {
                         if ("DRAFT".equalsIgnoreCase(existing.getLifecycleStatus())) {
-                                if (hasJurisdiction) {
-                                        if (existing.getTaxCode() != null && !existing.getTaxCode().isBlank()) {
-                                                throw new ResponseStatusException(HttpStatus.CONFLICT,
-                                                                "A tax rule is already applied to this draft invoice");
-                                        }
-                                        financialHardening.applyTaxToDraftInvoice(existing.getId(), taxJurisdictionCode,
-                                                        taxCode, LocalDate.now());
+                                String existingTaxCode = existing.getTaxCode();
+                                String existingJurisdiction = existing.getTaxJurisdictionCode();
+                                if (existingTaxCode == null || existingTaxCode.isBlank()) {
+                                        financialHardening.applyTaxToDraftInvoice(existing.getId(),
+                                                        resolvedJurisdiction,
+                                                        resolvedTaxCode, LocalDate.now());
                                         entityManager.refresh(existing);
+                                } else if (!resolvedTaxCode.equalsIgnoreCase(existingTaxCode)
+                                                || existingJurisdiction == null
+                                                || !resolvedJurisdiction.equalsIgnoreCase(existingJurisdiction)) {
+                                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                                        "This draft has a different tax rule. Review it in Financial hardening before issuing it; billing cannot silently replace an already-applied tax calculation.");
                                 }
                                 // Use the shared lifecycle transition as the single posting and
-                                // history boundary. Keeping a second copy here had allowed billing
-                                // and the finance-hardening endpoint to drift apart.
+                                // history boundary. Tax is guaranteed to be applied before issue.
                                 financialHardening.transitionInvoice(existing.getId(), "ISSUED",
                                                 "Draft invoice issued by shipment billing");
                                 entityManager.refresh(existing);
@@ -267,11 +296,6 @@ public class BillingService {
                                         HttpStatus.UNPROCESSABLE_ENTITY,
                                         "Shipment has no billable client revenue");
                 }
-
-                String currency = normalizeCurrency(
-                                shipment.getCurrency() == null
-                                                ? "USD"
-                                                : shipment.getCurrency());
 
                 String invoiceNo = shipment.getInvoiceNo();
                 if (invoiceNo == null || invoiceNo.isBlank()) {
@@ -298,11 +322,11 @@ public class BillingService {
                 invoices.insertLifecycleHistory(tenantId, invoice.getId(), null, "DRAFT",
                                 "Draft invoice created from shipment billing", currentUser());
 
-                if (hasJurisdiction) {
-                        financialHardening.applyTaxToDraftInvoice(invoice.getId(), taxJurisdictionCode, taxCode,
-                                        LocalDate.now());
-                        entityManager.refresh(invoice);
-                }
+                // VAT is resolved and calculated by the backend for every issued
+                // shipment invoice. Omitting tax fields in an API request cannot bypass VAT.
+                financialHardening.applyTaxToDraftInvoice(invoice.getId(), resolvedJurisdiction,
+                                resolvedTaxCode, LocalDate.now());
+                entityManager.refresh(invoice);
                 // One canonical lifecycle transition owns the ledger posting, status
                 // update and immutable lifecycle-history row for every invoice path.
                 financialHardening.transitionInvoice(invoice.getId(), "ISSUED",

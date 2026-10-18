@@ -2,6 +2,9 @@ package com.logiplatform.controller;
 
 import com.logiplatform.dto.EnterpriseCompletionDtos.*;
 import com.logiplatform.service.EnterpriseCompletionService;
+import com.logiplatform.service.FinancialHardeningService;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,9 +16,12 @@ import java.util.UUID;
 @RequestMapping("/api/enterprise-completion")
 public class EnterpriseCompletionExtrasController {
     private final EnterpriseCompletionService service;
+    private final FinancialHardeningService financialHardening;
 
-    public EnterpriseCompletionExtrasController(EnterpriseCompletionService service) {
+    public EnterpriseCompletionExtrasController(EnterpriseCompletionService service,
+            FinancialHardeningService financialHardening) {
         this.service = service;
+        this.financialHardening = financialHardening;
     }
 
     @GetMapping("/checklist")
@@ -43,9 +49,32 @@ public class EnterpriseCompletionExtrasController {
         return service.createFinanceNote(request);
     }
 
+    /**
+     * Compatibility route for older clients. Tax rule persistence is centralized in
+     * FinancialHardeningService so legacy requests cannot create unscoped duplicate
+     * tax rows that bypass jurisdiction/effective-date validation.
+     */
     @PostMapping("/finance/tax-rules")
     public Map<String, Object> taxRule(@Valid @RequestBody TaxRuleRequest request) {
-        return service.upsertTaxRule(request);
+        String jurisdictionCode = request.jurisdictionCode();
+        if (jurisdictionCode == null || jurisdictionCode.isBlank()) {
+            jurisdictionCode = financialHardening.taxJurisdictions().stream()
+                    .filter(j -> Boolean.TRUE.equals(j.get("active")))
+                    .filter(j -> Boolean.TRUE.equals(j.get("default_for_invoicing"))
+                            || Boolean.TRUE.equals(j.get("defaultForInvoicing")))
+                    .map(j -> java.util.Objects.toString(j.get("jurisdiction_code"),
+                            java.util.Objects.toString(j.get("jurisdictionCode"), "")))
+                    .filter(code -> !code.isBlank())
+                    .findFirst().orElse(null);
+        }
+        if (jurisdictionCode == null || jurisdictionCode.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "This compatibility endpoint no longer creates unscoped tax rules. Configure an active default tax jurisdiction in Billing > Financial hardening first.");
+        }
+        return financialHardening.upsertTaxRule(jurisdictionCode, request.code(), request.taxName(),
+                request.rate(), request.withholdingRate(), request.currency(), request.validFrom(),
+                request.validUntil(), request.taxType(), Boolean.TRUE.equals(request.inclusive()),
+                request.exemptionCode(), request.appliesTo(), true);
     }
 
     @GetMapping("/finance/customer-statements")

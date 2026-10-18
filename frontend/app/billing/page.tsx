@@ -827,9 +827,18 @@ export default function BillingPage() {
                 </p>
               )}
               {taxPreviewError && (
-                <p className="form-hint" role="alert">
-                  Tax preview unavailable: {taxPreviewError}
-                </p>
+                <div className="form-hint" role="alert">
+                  <p style={{ marginTop: 0 }}>
+                    Tax preview unavailable: {taxPreviewError}
+                  </p>
+                  <p style={{ marginBottom: 0 }}>
+                    A finance administrator can review the active default
+                    jurisdiction and 18% VAT rule in{" "}
+                    <Link href="/billing/hardening">Financial hardening</Link>.
+                    Invoice creation remains blocked until the server confirms a
+                    valid rule.
+                  </p>
+                </div>
               )}
               {!taxPreview && !taxPreviewLoading && !taxPreviewError && (
                 <p className="form-hint">

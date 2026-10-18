@@ -31,6 +31,12 @@ public class BillingController {
                         String currency, String reference, UUID incomeSourceId) {
         }
 
+        @GetMapping("/shipments/{shipmentId}/invoice/vat-preview")
+        public java.util.Map<String, Object> previewDefaultInvoiceVat(@PathVariable UUID shipmentId,
+                        @RequestParam(required = false) LocalDate onDate) {
+                return service.previewDefaultShipmentInvoiceVat(shipmentId, onDate);
+        }
+
         @PostMapping("/shipments/{shipmentId}/invoice/tax-preview")
         public java.util.Map<String, Object> previewInvoiceTax(@PathVariable UUID shipmentId,
                         @Valid @RequestBody TaxPreviewRequest request) {

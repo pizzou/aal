@@ -675,6 +675,37 @@ public class FinancialHardeningService {
                 t, jurisdiction, taxCode, validFrom);
     }
 
+    /**
+     * Resolve the single effective 18% VAT rule for the tenant default invoice
+     * jurisdiction.
+     * Never silently invent a tax registration, jurisdiction, or rule when
+     * configuration is missing.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> defaultInvoiceVatRule(LocalDate onDate) {
+        LocalDate effective = onDate == null ? LocalDate.now() : onDate;
+        List<Map<String, Object>> rules = db.queryForList("""
+                SELECT r.id, r.code, r.tax_name, r.rate, r.currency, r.valid_from, r.valid_until,
+                       r.jurisdiction_code, r.tax_type, r.inclusive, j.tax_registration_no
+                  FROM finance_tax_jurisdictions j
+                  JOIN finance_tax_rules r ON r.tenant_id=j.tenant_id AND r.jurisdiction_code=j.jurisdiction_code
+                 WHERE j.tenant_id=? AND j.active=true AND j.default_for_invoicing=true
+                   AND r.active=true AND upper(r.tax_type)='VAT' AND r.rate=18
+                   AND r.valid_from<=? AND (r.valid_until IS NULL OR r.valid_until>=?)
+                   AND (r.applies_to='ALL' OR r.applies_to='INVOICE')
+                 ORDER BY r.valid_from DESC
+                """, tenant(), effective, effective);
+        if (rules.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "No active 18% VAT rule is configured for the default invoice tax jurisdiction. Ask a finance administrator to configure it before issuing invoices.");
+        }
+        if (rules.size() > 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Multiple effective 18% VAT rules exist for the default invoice jurisdiction. Ask a finance administrator to resolve the tax configuration.");
+        }
+        return rules.get(0);
+    }
+
     @Transactional(readOnly = true)
     public List<Map<String, Object>> taxRules(String jurisdictionCode, LocalDate onDate) {
         LocalDate effective = onDate == null ? LocalDate.now() : onDate;
@@ -739,7 +770,6 @@ public class FinancialHardeningService {
         result.put("jurisdictionCode", jurisdiction);
         result.put("taxCode", rule.get("code"));
         result.put("taxName", rule.get("tax_name"));
-        result.put("taxType", Objects.toString(rule.get("tax_type"), "OTHER").toUpperCase(Locale.ROOT));
         result.put("effectiveDate", effective);
         result.put("currency", normalizedCurrency);
         result.put("jurisdictionLegalName", rule.get("jurisdiction_legal_name"));

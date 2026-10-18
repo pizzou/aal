@@ -56,6 +56,18 @@ public class BillingService {
         }
 
         /**
+         * Preview using the tenant's configured default 18% VAT rule; the user does not
+         * type tax codes.
+         */
+        @Transactional(readOnly = true)
+        public java.util.Map<String, Object> previewDefaultShipmentInvoiceVat(UUID shipmentId, LocalDate onDate) {
+                java.util.Map<String, Object> rule = financialHardening.defaultInvoiceVatRule(onDate);
+                return previewShipmentInvoiceTax(shipmentId,
+                                java.util.Objects.toString(rule.get("jurisdiction_code")),
+                                java.util.Objects.toString(rule.get("code")), onDate);
+        }
+
+        /**
          * Server-authoritative invoice tax preview. It deliberately does not persist a
          * tax snapshot; the immutable snapshot is created only when the selected rule
          * is applied to the draft invoice.

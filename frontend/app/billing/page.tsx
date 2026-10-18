@@ -19,7 +19,6 @@ type TaxPreview = {
   shipmentId: string;
   currency: string;
   taxName: string;
-  taxType: string;
   taxCode: string;
   taxJurisdictionCode: string;
   taxRate: number;
@@ -104,8 +103,6 @@ export default function BillingPage() {
   const [invoiceShipment, setInvoiceShipment] = useState("");
   const [invoiceDueDate, setInvoiceDueDate] = useState("");
   const [invoiceOwner, setInvoiceOwner] = useState("");
-  const [invoiceTaxJurisdiction, setInvoiceTaxJurisdiction] = useState("");
-  const [invoiceTaxCode, setInvoiceTaxCode] = useState("");
   const [taxPreview, setTaxPreview] = useState<TaxPreview | null>(null);
   const [taxPreviewError, setTaxPreviewError] = useState("");
   const [taxPreviewLoading, setTaxPreviewLoading] = useState(false);
@@ -252,11 +249,9 @@ export default function BillingPage() {
 
   useEffect(() => {
     let cancelled = false;
-    const jurisdiction = invoiceTaxJurisdiction.trim();
-    const code = invoiceTaxCode.trim();
     setTaxPreview(null);
     setTaxPreviewError("");
-    if (!invoiceShipment || !jurisdiction || !code) {
+    if (!invoiceShipment) {
       setTaxPreviewLoading(false);
       return () => {
         cancelled = true;
@@ -264,26 +259,19 @@ export default function BillingPage() {
     }
     setTaxPreviewLoading(true);
     apiFetch<TaxPreview>(
-      `/api/billing/shipments/${invoiceShipment}/invoice/tax-preview`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          taxJurisdictionCode: jurisdiction,
-          taxCode: code,
-        }),
-      },
+      `/api/billing/shipments/${invoiceShipment}/invoice/vat-preview`,
+      { method: "GET" },
     )
       .then((preview) => {
         if (!cancelled) setTaxPreview(preview);
       })
       .catch((exception) => {
-        if (!cancelled) {
+        if (!cancelled)
           setTaxPreviewError(
             exception instanceof Error
               ? exception.message
-              : "Unable to calculate tax preview from the server.",
+              : "Unable to calculate VAT from the configured server tax rule.",
           );
-        }
       })
       .finally(() => {
         if (!cancelled) setTaxPreviewLoading(false);
@@ -291,7 +279,7 @@ export default function BillingPage() {
     return () => {
       cancelled = true;
     };
-  }, [invoiceShipment, invoiceTaxJurisdiction, invoiceTaxCode]);
+  }, [invoiceShipment]);
 
   function shipmentForInvoice(invoice: Invoice) {
     return shipments.find((shipment) => shipment.id === invoice.shipmentId);
@@ -312,11 +300,9 @@ export default function BillingPage() {
       setSaving(false);
       return;
     }
-    if (
-      Boolean(invoiceTaxJurisdiction.trim()) !== Boolean(invoiceTaxCode.trim())
-    ) {
+    if (!taxPreview) {
       setError(
-        "Enter both the configured tax jurisdiction and tax code, or leave both blank.",
+        "The server has not confirmed the applicable 18% VAT rule and totals. Resolve the tax configuration before creating this invoice.",
       );
       setSaving(false);
       return;
@@ -334,8 +320,8 @@ export default function BillingPage() {
           body: JSON.stringify({
             dueDate: invoiceDueDate,
             owner: invoiceOwner.trim() || undefined,
-            taxJurisdictionCode: invoiceTaxJurisdiction.trim() || undefined,
-            taxCode: invoiceTaxCode.trim() || undefined,
+            taxJurisdictionCode: taxPreview.taxJurisdictionCode,
+            taxCode: taxPreview.taxCode,
           }),
         },
       );
@@ -350,8 +336,6 @@ export default function BillingPage() {
       setInvoiceShipment("");
       setInvoiceOwner("");
       setInvoiceDueDate("");
-      setInvoiceTaxJurisdiction("");
-      setInvoiceTaxCode("");
       setSuccess(
         `Invoice ${created.invoiceNo || ""} is available in the invoice register. Use View / Print or Download PDF when you are ready.`,
       );
@@ -812,35 +796,13 @@ export default function BillingPage() {
                 placeholder="Responsible person"
               />
             </label>
-            <label className="field">
-              <span>Tax jurisdiction (optional)</span>
-              <input
-                value={invoiceTaxJurisdiction}
-                onChange={(event) =>
-                  setInvoiceTaxJurisdiction(event.target.value.toUpperCase())
-                }
-                placeholder="Configured jurisdiction code"
-                autoComplete="off"
-              />
-            </label>
-            <label className="field">
-              <span>Tax code (optional)</span>
-              <input
-                value={invoiceTaxCode}
-                onChange={(event) =>
-                  setInvoiceTaxCode(event.target.value.toUpperCase())
-                }
-                placeholder="Configured VAT/tax rule code"
-                autoComplete="off"
-              />
-            </label>
           </div>
           <p className="form-hint">
-            Invoice VAT is calculated by the server using the active,
-            effective-dated tax rule configured by your finance administrator.
-            Enter the jurisdiction and tax code to see the authoritative
-            preview. The system does not assume 18% when a valid rule is not
-            configured.
+            VAT is selected automatically from the tenant's default invoice
+            jurisdiction. The server requires exactly one active,
+            effective-dated 18% VAT rule; tax codes are not entered manually. If
+            configuration is missing or ambiguous, invoice creation is blocked
+            and a finance administrator must correct it.
           </p>
 
           {invoiceShipment && selectedInvoiceShipment && (
@@ -850,7 +812,7 @@ export default function BillingPage() {
               style={{ marginTop: 16 }}
             >
               <div className="section-heading">
-                <div className="section-number">TAX</div>
+                <div className="section-number">VAT</div>
                 <div>
                   <h3>Invoice tax preview</h3>
                   <p>
@@ -869,31 +831,27 @@ export default function BillingPage() {
                   Tax preview unavailable: {taxPreviewError}
                 </p>
               )}
-              {!invoiceTaxJurisdiction.trim() || !invoiceTaxCode.trim() ? (
+              {!taxPreview && !taxPreviewLoading && !taxPreviewError && (
                 <p className="form-hint">
-                  Enter both the configured tax jurisdiction and tax code to
-                  calculate subtotal, tax, and total.
+                  Select a shipment to calculate VAT using the configured rule.
                 </p>
-              ) : null}
+              )}
               {taxPreview && (
                 <>
                   <div className="grid grid-2" style={{ gap: 12 }}>
                     <div className="card" style={{ padding: 14 }}>
-                      <div className="kpi-label">Subtotal excluding tax</div>
+                      <div className="kpi-label">Subtotal excluding VAT</div>
                       <strong>
                         {money(taxPreview.subtotalAmount, taxPreview.currency)}
                       </strong>
                       <div className="kpi-meta" style={{ marginTop: 8 }}>
-                        {taxPreview.taxType === "VAT"
-                          ? "VAT"
-                          : taxPreview.taxName}{" "}
-                        ({taxPreview.taxRate}%)
+                        VAT ({taxPreview.taxRate}%)
                       </div>
                       <strong>
                         {money(taxPreview.taxAmount, taxPreview.currency)}
                       </strong>
                       <div className="kpi-meta" style={{ marginTop: 8 }}>
-                        Total including tax
+                        Total including VAT
                       </div>
                       <strong>
                         {money(taxPreview.invoiceAmount, taxPreview.currency)}
@@ -903,8 +861,8 @@ export default function BillingPage() {
                       <div className="kpi-label">Configured tax treatment</div>
                       <strong>
                         {taxPreview.taxInclusive
-                          ? `${taxPreview.taxType === "VAT" ? "VAT" : taxPreview.taxName} included in entered amount`
-                          : `${taxPreview.taxType === "VAT" ? "VAT" : taxPreview.taxName} added to entered amount`}
+                          ? "VAT included in entered amount"
+                          : "VAT added to entered amount"}
                       </strong>
                       <div className="kpi-meta" style={{ marginTop: 8 }}>
                         Tax rule
@@ -920,8 +878,8 @@ export default function BillingPage() {
                   </div>
                   <p className="form-hint" style={{ marginTop: 10 }}>
                     {taxPreview.taxInclusive
-                      ? `The shipment amount is treated as tax-inclusive. ${taxPreview.taxType === "VAT" ? "VAT" : taxPreview.taxName} is extracted from the gross amount; it is not added a second time.`
-                      : `The shipment amount is treated as tax-exclusive. ${taxPreview.taxType === "VAT" ? "VAT" : taxPreview.taxName} is added to the subtotal to determine the amount payable.`}
+                      ? "The shipment amount is treated as VAT-inclusive. VAT is extracted from the gross amount; it is not added a second time."
+                      : "The shipment amount is treated as VAT-exclusive. VAT is added to the subtotal to determine the amount payable."}
                   </p>
                 </>
               )}

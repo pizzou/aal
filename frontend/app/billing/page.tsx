@@ -19,6 +19,7 @@ type TaxPreview = {
   shipmentId: string;
   currency: string;
   taxName: string;
+  taxType: string;
   taxCode: string;
   taxJurisdictionCode: string;
   taxRate: number;
@@ -849,7 +850,7 @@ export default function BillingPage() {
               style={{ marginTop: 16 }}
             >
               <div className="section-heading">
-                <div className="section-number">VAT</div>
+                <div className="section-number">TAX</div>
                 <div>
                   <h3>Invoice tax preview</h3>
                   <p>
@@ -871,25 +872,28 @@ export default function BillingPage() {
               {!invoiceTaxJurisdiction.trim() || !invoiceTaxCode.trim() ? (
                 <p className="form-hint">
                   Enter both the configured tax jurisdiction and tax code to
-                  calculate subtotal, VAT, and total.
+                  calculate subtotal, tax, and total.
                 </p>
               ) : null}
               {taxPreview && (
                 <>
                   <div className="grid grid-2" style={{ gap: 12 }}>
                     <div className="card" style={{ padding: 14 }}>
-                      <div className="kpi-label">Subtotal excluding VAT</div>
+                      <div className="kpi-label">Subtotal excluding tax</div>
                       <strong>
                         {money(taxPreview.subtotalAmount, taxPreview.currency)}
                       </strong>
                       <div className="kpi-meta" style={{ marginTop: 8 }}>
-                        VAT ({taxPreview.taxRate}%)
+                        {taxPreview.taxType === "VAT"
+                          ? "VAT"
+                          : taxPreview.taxName}{" "}
+                        ({taxPreview.taxRate}%)
                       </div>
                       <strong>
                         {money(taxPreview.taxAmount, taxPreview.currency)}
                       </strong>
                       <div className="kpi-meta" style={{ marginTop: 8 }}>
-                        Total including VAT
+                        Total including tax
                       </div>
                       <strong>
                         {money(taxPreview.invoiceAmount, taxPreview.currency)}
@@ -899,8 +903,8 @@ export default function BillingPage() {
                       <div className="kpi-label">Configured tax treatment</div>
                       <strong>
                         {taxPreview.taxInclusive
-                          ? "VAT included in entered amount"
-                          : "VAT added to entered amount"}
+                          ? `${taxPreview.taxType === "VAT" ? "VAT" : taxPreview.taxName} included in entered amount`
+                          : `${taxPreview.taxType === "VAT" ? "VAT" : taxPreview.taxName} added to entered amount`}
                       </strong>
                       <div className="kpi-meta" style={{ marginTop: 8 }}>
                         Tax rule
@@ -916,8 +920,8 @@ export default function BillingPage() {
                   </div>
                   <p className="form-hint" style={{ marginTop: 10 }}>
                     {taxPreview.taxInclusive
-                      ? "The shipment amount is treated as VAT-inclusive. VAT is extracted from the gross amount; it is not added a second time."
-                      : "The shipment amount is treated as VAT-exclusive. VAT is added to the subtotal to determine the amount payable."}
+                      ? `The shipment amount is treated as tax-inclusive. ${taxPreview.taxType === "VAT" ? "VAT" : taxPreview.taxName} is extracted from the gross amount; it is not added a second time.`
+                      : `The shipment amount is treated as tax-exclusive. ${taxPreview.taxType === "VAT" ? "VAT" : taxPreview.taxName} is added to the subtotal to determine the amount payable.`}
                   </p>
                 </>
               )}

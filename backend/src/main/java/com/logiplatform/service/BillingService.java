@@ -26,488 +26,553 @@ import jakarta.persistence.PersistenceContext;
 @Service
 public class BillingService {
 
-    private final ShipmentRepository shipments;
-    private final CommercialInvoiceRepository invoices;
-    private final CommercialPaymentRepository payments;
-    private final FinancePostingService finance;
-    private final FinanceDocumentSequenceService documentSequences;
-    private final FinanceIncomeAllocationService incomeAllocations;
-    private final FinancialHardeningService financialHardening;
+        private final ShipmentRepository shipments;
+        private final CommercialInvoiceRepository invoices;
+        private final CommercialPaymentRepository payments;
+        private final FinancePostingService finance;
+        private final FinanceDocumentSequenceService documentSequences;
+        private final FinanceIncomeAllocationService incomeAllocations;
+        private final FinancialHardeningService financialHardening;
 
-    @PersistenceContext
-    private EntityManager entityManager;
+        @PersistenceContext
+        private EntityManager entityManager;
 
-    public BillingService(
-            ShipmentRepository shipments,
-            CommercialInvoiceRepository invoices,
-            CommercialPaymentRepository payments,
-            FinancePostingService finance,
-            FinanceDocumentSequenceService documentSequences,
-            FinanceIncomeAllocationService incomeAllocations,
-            FinancialHardeningService financialHardening) {
+        public BillingService(
+                        ShipmentRepository shipments,
+                        CommercialInvoiceRepository invoices,
+                        CommercialPaymentRepository payments,
+                        FinancePostingService finance,
+                        FinanceDocumentSequenceService documentSequences,
+                        FinanceIncomeAllocationService incomeAllocations,
+                        FinancialHardeningService financialHardening) {
 
-        this.shipments = shipments;
-        this.invoices = invoices;
-        this.payments = payments;
-        this.finance = finance;
-        this.documentSequences = documentSequences;
-        this.incomeAllocations = incomeAllocations;
-        this.financialHardening = financialHardening;
-    }
-
-    @Transactional
-    public CommercialInvoice createDraftInvoice(UUID shipmentId, LocalDate dueDate, String owner) {
-        return createDraftInvoice(shipmentId, dueDate, owner, null, null);
-    }
-
-    @Transactional
-    public CommercialInvoice createDraftInvoice(UUID shipmentId, LocalDate dueDate, String owner,
-            String taxJurisdictionCode, String taxCode) {
-        UUID tenantId=TenantContext.getTenantId();
-        if (dueDate == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice due date is required");
-        }
-        boolean hasJurisdiction = taxJurisdictionCode != null && !taxJurisdictionCode.isBlank();
-        boolean hasTaxCode = taxCode != null && !taxCode.isBlank();
-        if (hasJurisdiction != hasTaxCode) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Both tax jurisdiction code and tax code are required when applying tax");
-        }
-        Shipment shipment=shipments.findLockedByIdAndTenantId(shipmentId,tenantId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Shipment not found"));
-        CommercialInvoice existing=invoices.findByTenantIdAndShipmentId(tenantId,shipmentId).orElse(null);
-        if(existing!=null) {
-            if (hasJurisdiction && "DRAFT".equalsIgnoreCase(existing.getLifecycleStatus())) {
-                if (existing.getTaxCode() != null && !existing.getTaxCode().isBlank()) {
-                    throw new ResponseStatusException(HttpStatus.CONFLICT, "A tax rule is already applied to this draft invoice");
-                }
-                financialHardening.applyTaxToDraftInvoice(existing.getId(), taxJurisdictionCode, taxCode, LocalDate.now());
-                entityManager.refresh(existing);
-            }
-            return existing;
+                this.shipments = shipments;
+                this.invoices = invoices;
+                this.payments = payments;
+                this.finance = finance;
+                this.documentSequences = documentSequences;
+                this.incomeAllocations = incomeAllocations;
+                this.financialHardening = financialHardening;
         }
 
-        BigDecimal amount = shipment.getAmountBilledToClient();
-        // Some legacy/imported shipments persist zero in amountBilledToClient
-        // while the governed client revenue is populated. Treat zero the same
-        // as an absent billed amount so those legitimate shipments can invoice.
-        if (amount == null || amount.signum() <= 0) amount = shipment.getClientRevenue();
-        if(amount==null || amount.signum()<=0)
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,"Shipment has no billable client revenue");
-
-        String currency=normalizeCurrency(shipment.getCurrency()==null?"USD":shipment.getCurrency());
-        String invoiceNo=shipment.getInvoiceNo();
-        if(invoiceNo==null || invoiceNo.isBlank()){
-            invoiceNo=documentSequences.nextInvoiceNumber();
-            shipment.assignInvoiceNoIfBlank(invoiceNo);
-            shipments.save(shipment);
-        }
-
-        CommercialInvoice invoice = new CommercialInvoice(
-                tenantId, invoiceNo, LocalDate.now(),
-                shipment.getClientName() != null ? shipment.getClientName() : shipment.getContact(),
-                shipmentId, currency, amount, dueDate, owner);
-        invoice.changeLifecycleStatus("DRAFT");
-        invoice = invoices.saveAndFlush(invoice);
-        invoices.insertLifecycleHistory(tenantId,invoice.getId(),null,"DRAFT","Draft invoice created",currentUser());
-        if (hasJurisdiction) {
-            financialHardening.applyTaxToDraftInvoice(invoice.getId(), taxJurisdictionCode, taxCode, LocalDate.now());
-            entityManager.refresh(invoice);
-        }
-        return invoice;
-    }
-
-    @Transactional
-    public CommercialInvoice billShipment(UUID shipmentId, LocalDate dueDate, String owner) {
-        return billShipment(shipmentId, dueDate, owner, null, null);
-    }
-
-    @Transactional
-    public CommercialInvoice billShipment(
-            UUID shipmentId,
-            LocalDate dueDate,
-            String owner,
-            String taxJurisdictionCode,
-            String taxCode) {
-
-        boolean hasJurisdiction = taxJurisdictionCode != null && !taxJurisdictionCode.isBlank();
-        boolean hasTaxCode = taxCode != null && !taxCode.isBlank();
-        if (hasJurisdiction != hasTaxCode) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Both tax jurisdiction code and tax code are required when applying tax");
-        }
-        UUID tenantId = TenantContext.getTenantId();
-        if (dueDate == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice due date is required");
-        }
-
-        // Serialize invoice creation/issue attempts for the same shipment. The
-        // unique tenant+shipment constraint remains the final database guard,
-        // while this row lock prevents concurrent requests from allocating
-        // competing invoice numbers or posting the same receivable twice.
-        Shipment shipment = shipments
-                .findLockedByIdAndTenantId(shipmentId, tenantId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "Shipment not found"));
-
-        /*
-         * A shipment may only have one canonical commercial invoice.
-         * Retrying the operation therefore returns the existing invoice
-         * rather than generating another financial posting.
+        /**
+         * Server-authoritative invoice tax preview. It deliberately does not persist a
+         * tax snapshot; the immutable snapshot is created only when the selected rule
+         * is applied to the draft invoice.
          */
-        CommercialInvoice existing = invoices
-                .findByTenantIdAndShipmentId(tenantId, shipmentId)
-                .orElse(null);
+        @Transactional(readOnly = true)
+        public java.util.Map<String, Object> previewShipmentInvoiceTax(
+                        UUID shipmentId, String taxJurisdictionCode, String taxCode, LocalDate onDate) {
+                UUID tenantId = TenantContext.getTenantId();
+                if (taxJurisdictionCode == null || taxJurisdictionCode.isBlank()
+                                || taxCode == null || taxCode.isBlank()) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Select a configured tax jurisdiction and tax code to preview VAT");
+                }
+                Shipment shipment = shipments.findByIdAndTenantId(shipmentId, tenantId)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "Shipment not found"));
+                BigDecimal amount = shipment.getAmountBilledToClient();
+                if (amount == null || amount.signum() <= 0)
+                        amount = shipment.getClientRevenue();
+                if (amount == null || amount.signum() <= 0) {
+                        throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                                        "Shipment has no billable client revenue");
+                }
+                String currency = normalizeCurrency(shipment.getCurrency() == null ? "USD" : shipment.getCurrency());
+                java.util.Map<String, Object> tax = financialHardening.calculateTax(
+                                taxJurisdictionCode, taxCode, amount, currency, onDate, "INVOICE", null);
+                if (n(tax.get("withholdingAmount")).signum() > 0) {
+                        throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                                        "This tax rule includes withholding and cannot be used for invoice preview until withholding handling is configured");
+                }
+                java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+                result.put("shipmentId", shipmentId);
+                result.put("currency", currency);
+                result.put("taxName", tax.get("taxName"));
+                result.put("taxCode", tax.get("taxCode"));
+                result.put("taxJurisdictionCode", tax.get("jurisdictionCode"));
+                result.put("taxRate", tax.get("rate"));
+                result.put("taxInclusive", tax.get("inclusive"));
+                result.put("subtotalAmount", tax.get("taxableAmount"));
+                result.put("taxAmount", tax.get("taxAmount"));
+                result.put("invoiceAmount", tax.get("totalAmount"));
+                result.put("effectiveDate", tax.get("effectiveDate"));
+                result.put("taxRegistrationNo", tax.get("taxRegistrationNo"));
+                return result;
+        }
 
-        if (existing != null) {
-            if ("DRAFT".equalsIgnoreCase(existing.getLifecycleStatus())) {
+        private static BigDecimal n(Object value) {
+                if (value instanceof BigDecimal decimal)
+                        return decimal;
+                if (value == null)
+                        return BigDecimal.ZERO;
+                return new BigDecimal(value.toString());
+        }
+
+        @Transactional
+        public CommercialInvoice createDraftInvoice(UUID shipmentId, LocalDate dueDate, String owner) {
+                return createDraftInvoice(shipmentId, dueDate, owner, null, null);
+        }
+
+        @Transactional
+        public CommercialInvoice createDraftInvoice(UUID shipmentId, LocalDate dueDate, String owner,
+                        String taxJurisdictionCode, String taxCode) {
+                UUID tenantId = TenantContext.getTenantId();
+                if (dueDate == null) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice due date is required");
+                }
+                boolean hasJurisdiction = taxJurisdictionCode != null && !taxJurisdictionCode.isBlank();
+                boolean hasTaxCode = taxCode != null && !taxCode.isBlank();
+                if (hasJurisdiction != hasTaxCode) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Both tax jurisdiction code and tax code are required when applying tax");
+                }
+                Shipment shipment = shipments.findLockedByIdAndTenantId(shipmentId, tenantId)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "Shipment not found"));
+                CommercialInvoice existing = invoices.findByTenantIdAndShipmentId(tenantId, shipmentId).orElse(null);
+                if (existing != null) {
+                        if (hasJurisdiction && "DRAFT".equalsIgnoreCase(existing.getLifecycleStatus())) {
+                                if (existing.getTaxCode() != null && !existing.getTaxCode().isBlank()) {
+                                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                                        "A tax rule is already applied to this draft invoice");
+                                }
+                                financialHardening.applyTaxToDraftInvoice(existing.getId(), taxJurisdictionCode,
+                                                taxCode, LocalDate.now());
+                                entityManager.refresh(existing);
+                        }
+                        return existing;
+                }
+
+                BigDecimal amount = shipment.getAmountBilledToClient();
+                // Some legacy/imported shipments persist zero in amountBilledToClient
+                // while the governed client revenue is populated. Treat zero the same
+                // as an absent billed amount so those legitimate shipments can invoice.
+                if (amount == null || amount.signum() <= 0)
+                        amount = shipment.getClientRevenue();
+                if (amount == null || amount.signum() <= 0)
+                        throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                                        "Shipment has no billable client revenue");
+
+                String currency = normalizeCurrency(shipment.getCurrency() == null ? "USD" : shipment.getCurrency());
+                String invoiceNo = shipment.getInvoiceNo();
+                if (invoiceNo == null || invoiceNo.isBlank()) {
+                        invoiceNo = documentSequences.nextInvoiceNumber();
+                        shipment.assignInvoiceNoIfBlank(invoiceNo);
+                        shipments.save(shipment);
+                }
+
+                CommercialInvoice invoice = new CommercialInvoice(
+                                tenantId, invoiceNo, LocalDate.now(),
+                                shipment.getClientName() != null ? shipment.getClientName() : shipment.getContact(),
+                                shipmentId, currency, amount, dueDate, owner);
+                invoice.changeLifecycleStatus("DRAFT");
+                invoice = invoices.saveAndFlush(invoice);
+                invoices.insertLifecycleHistory(tenantId, invoice.getId(), null, "DRAFT", "Draft invoice created",
+                                currentUser());
                 if (hasJurisdiction) {
-                    if (existing.getTaxCode() != null && !existing.getTaxCode().isBlank()) {
-                        throw new ResponseStatusException(HttpStatus.CONFLICT,
-                                "A tax rule is already applied to this draft invoice");
-                    }
-                    financialHardening.applyTaxToDraftInvoice(existing.getId(), taxJurisdictionCode, taxCode, LocalDate.now());
-                    entityManager.refresh(existing);
+                        financialHardening.applyTaxToDraftInvoice(invoice.getId(), taxJurisdictionCode, taxCode,
+                                        LocalDate.now());
+                        entityManager.refresh(invoice);
                 }
-                // Use the shared lifecycle transition as the single posting and
-                // history boundary. Keeping a second copy here had allowed billing
-                // and the finance-hardening endpoint to drift apart.
-                financialHardening.transitionInvoice(existing.getId(), "ISSUED",
-                        "Draft invoice issued by shipment billing");
-                entityManager.refresh(existing);
-            }
-            return existing;
+                return invoice;
         }
 
-        BigDecimal amount = shipment.getAmountBilledToClient();
-        // Zero is a common default for imported/older shipment records. If it
-        // is not billable, fall back to the actual governed client revenue.
-        if (amount == null || amount.signum() <= 0) {
-            amount = shipment.getClientRevenue();
+        @Transactional
+        public CommercialInvoice billShipment(UUID shipmentId, LocalDate dueDate, String owner) {
+                return billShipment(shipmentId, dueDate, owner, null, null);
         }
 
-        if (amount == null || amount.signum() <= 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.UNPROCESSABLE_ENTITY,
-                    "Shipment has no billable client revenue");
+        @Transactional
+        public CommercialInvoice billShipment(
+                        UUID shipmentId,
+                        LocalDate dueDate,
+                        String owner,
+                        String taxJurisdictionCode,
+                        String taxCode) {
+
+                boolean hasJurisdiction = taxJurisdictionCode != null && !taxJurisdictionCode.isBlank();
+                boolean hasTaxCode = taxCode != null && !taxCode.isBlank();
+                if (hasJurisdiction != hasTaxCode) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Both tax jurisdiction code and tax code are required when applying tax");
+                }
+                UUID tenantId = TenantContext.getTenantId();
+                if (dueDate == null) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice due date is required");
+                }
+
+                // Serialize invoice creation/issue attempts for the same shipment. The
+                // unique tenant+shipment constraint remains the final database guard,
+                // while this row lock prevents concurrent requests from allocating
+                // competing invoice numbers or posting the same receivable twice.
+                Shipment shipment = shipments
+                                .findLockedByIdAndTenantId(shipmentId, tenantId)
+                                .orElseThrow(() -> new ResponseStatusException(
+                                                HttpStatus.NOT_FOUND,
+                                                "Shipment not found"));
+
+                /*
+                 * A shipment may only have one canonical commercial invoice.
+                 * Retrying the operation therefore returns the existing invoice
+                 * rather than generating another financial posting.
+                 */
+                CommercialInvoice existing = invoices
+                                .findByTenantIdAndShipmentId(tenantId, shipmentId)
+                                .orElse(null);
+
+                if (existing != null) {
+                        if ("DRAFT".equalsIgnoreCase(existing.getLifecycleStatus())) {
+                                if (hasJurisdiction) {
+                                        if (existing.getTaxCode() != null && !existing.getTaxCode().isBlank()) {
+                                                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                                                "A tax rule is already applied to this draft invoice");
+                                        }
+                                        financialHardening.applyTaxToDraftInvoice(existing.getId(), taxJurisdictionCode,
+                                                        taxCode, LocalDate.now());
+                                        entityManager.refresh(existing);
+                                }
+                                // Use the shared lifecycle transition as the single posting and
+                                // history boundary. Keeping a second copy here had allowed billing
+                                // and the finance-hardening endpoint to drift apart.
+                                financialHardening.transitionInvoice(existing.getId(), "ISSUED",
+                                                "Draft invoice issued by shipment billing");
+                                entityManager.refresh(existing);
+                        }
+                        return existing;
+                }
+
+                BigDecimal amount = shipment.getAmountBilledToClient();
+                // Zero is a common default for imported/older shipment records. If it
+                // is not billable, fall back to the actual governed client revenue.
+                if (amount == null || amount.signum() <= 0) {
+                        amount = shipment.getClientRevenue();
+                }
+
+                if (amount == null || amount.signum() <= 0) {
+                        throw new ResponseStatusException(
+                                        HttpStatus.UNPROCESSABLE_ENTITY,
+                                        "Shipment has no billable client revenue");
+                }
+
+                String currency = normalizeCurrency(
+                                shipment.getCurrency() == null
+                                                ? "USD"
+                                                : shipment.getCurrency());
+
+                String invoiceNo = shipment.getInvoiceNo();
+                if (invoiceNo == null || invoiceNo.isBlank()) {
+                        invoiceNo = documentSequences.nextInvoiceNumber();
+                        shipment.assignInvoiceNoIfBlank(invoiceNo);
+                        shipments.save(shipment);
+                }
+
+                CommercialInvoice invoice = new CommercialInvoice(
+                                tenantId,
+                                invoiceNo,
+                                LocalDate.now(),
+                                shipment.getClientName() != null ? shipment.getClientName() : shipment.getContact(),
+                                shipmentId,
+                                currency,
+                                amount,
+                                dueDate,
+                                owner);
+                // Persist every new invoice as a draft first. This makes tax application
+                // part of the same transaction and ensures the immutable-issued-document
+                // database guard never sees a financial edit after issuance.
+                invoice.changeLifecycleStatus("DRAFT");
+                invoice = invoices.saveAndFlush(invoice);
+                invoices.insertLifecycleHistory(tenantId, invoice.getId(), null, "DRAFT",
+                                "Draft invoice created from shipment billing", currentUser());
+
+                if (hasJurisdiction) {
+                        financialHardening.applyTaxToDraftInvoice(invoice.getId(), taxJurisdictionCode, taxCode,
+                                        LocalDate.now());
+                        entityManager.refresh(invoice);
+                }
+                // One canonical lifecycle transition owns the ledger posting, status
+                // update and immutable lifecycle-history row for every invoice path.
+                financialHardening.transitionInvoice(invoice.getId(), "ISSUED",
+                                "Invoice issued from shipment billing");
+                entityManager.refresh(invoice);
+                return invoice;
         }
 
-        String currency = normalizeCurrency(
-                shipment.getCurrency() == null
-                        ? "USD"
-                        : shipment.getCurrency());
-
-        String invoiceNo = shipment.getInvoiceNo();
-        if (invoiceNo == null || invoiceNo.isBlank()) {
-            invoiceNo = documentSequences.nextInvoiceNumber();
-            shipment.assignInvoiceNoIfBlank(invoiceNo);
-            shipments.save(shipment);
-        }
-
-        CommercialInvoice invoice = new CommercialInvoice(
-                tenantId,
-                invoiceNo,
-                LocalDate.now(),
-                shipment.getClientName() != null ? shipment.getClientName() : shipment.getContact(),
-                shipmentId,
-                currency,
-                amount,
-                dueDate,
-                owner);
-        // Persist every new invoice as a draft first. This makes tax application
-        // part of the same transaction and ensures the immutable-issued-document
-        // database guard never sees a financial edit after issuance.
-        invoice.changeLifecycleStatus("DRAFT");
-        invoice = invoices.saveAndFlush(invoice);
-        invoices.insertLifecycleHistory(tenantId, invoice.getId(), null, "DRAFT",
-                "Draft invoice created from shipment billing", currentUser());
-
-        if (hasJurisdiction) {
-            financialHardening.applyTaxToDraftInvoice(invoice.getId(), taxJurisdictionCode, taxCode, LocalDate.now());
-            entityManager.refresh(invoice);
-        }
-        // One canonical lifecycle transition owns the ledger posting, status
-        // update and immutable lifecycle-history row for every invoice path.
-        financialHardening.transitionInvoice(invoice.getId(), "ISSUED",
-                "Invoice issued from shipment billing");
-        entityManager.refresh(invoice);
-        return invoice;
-    }
-
-    /**
-     * Compatibility entry point used by the existing billing controller.
-     *
-     * The invoice currency remains authoritative.
-     */
-    @Transactional
-    public CommercialInvoice recordPayment(
-            UUID invoiceId,
-            BigDecimal amount,
-            String idempotencyKey,
-            String reference) {
-
-        return recordPayment(
-                invoiceId,
-                amount,
-                null,
-                idempotencyKey,
-                reference,
-                null);
-    }
-
-    /**
-     * Backward-compatible canonical payment entry point for integrations that
-     * do not provide income classification.
-     */
-    @Transactional
-    public CommercialInvoice recordPayment(
-            UUID invoiceId,
-            BigDecimal amount,
-            String currency,
-            String idempotencyKey,
-            String reference) {
-        return recordPayment(
-                invoiceId, amount, currency, idempotencyKey, reference, null);
-    }
-
-    /**
-     * Canonical payment operation used by both:
-     *
-     * /api/billing
-     * /api/commercial
-     *
-     * This prevents the two APIs from maintaining separate payment rules.
-     */
-    @Transactional
-    public CommercialInvoice recordPayment(
-            UUID invoiceId,
-            BigDecimal amount,
-            String currency,
-            String idempotencyKey,
-            String reference,
-            UUID incomeSourceId) {
-
-        UUID tenantId = TenantContext.getTenantId();
-
-        String key = normalizeIdempotencyKey(idempotencyKey);
-
-        if (amount == null || amount.signum() <= 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Payment amount must be greater than zero");
-        }
-
-        /*
-         * Idempotency is checked before changing the invoice.
+        /**
+         * Compatibility entry point used by the existing billing controller.
+         *
+         * The invoice currency remains authoritative.
          */
-        CommercialPayment prior = payments
-                .findByTenantIdAndIdempotencyKey(
-                        tenantId,
-                        key)
-                .orElse(null);
+        @Transactional
+        public CommercialInvoice recordPayment(
+                        UUID invoiceId,
+                        BigDecimal amount,
+                        String idempotencyKey,
+                        String reference) {
 
-        if (prior != null) {
-
-            CommercialInvoice priorInvoice = invoices
-                    .findByTenantIdAndIdForUpdate(
-                            tenantId,
-                            prior.getInvoiceId())
-                    .orElseThrow(() -> new IllegalStateException(
-                            "Payment references missing invoice"));
-
-            String requestedCurrency = currency == null || currency.isBlank()
-                    ? priorInvoice.getCurrency()
-                    : normalizeCurrency(currency);
-
-            if (!prior.getInvoiceId().equals(invoiceId)
-                    || prior.getAmount().compareTo(amount) != 0
-                    || !prior.getCurrency()
-                            .equalsIgnoreCase(requestedCurrency)
-                    || !sameNullable(
-                            prior.getReference(),
-                            reference)
-                    || !java.util.Objects.equals(
-                            prior.getIncomeSourceId(),
-                            incomeSourceId)) {
-
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT,
-                        "Idempotency key was already used with different payment data");
-            }
-
-            /*
-             * Safe retry: return the original invoice state.
-             */
-            return priorInvoice;
+                return recordPayment(
+                                invoiceId,
+                                amount,
+                                null,
+                                idempotencyKey,
+                                reference,
+                                null);
         }
 
-        /*
-         * Pessimistic invoice lock prevents concurrent payments from
-         * independently spending the same remaining balance.
+        /**
+         * Backward-compatible canonical payment entry point for integrations that
+         * do not provide income classification.
          */
-        CommercialInvoice invoice = invoices
-                .findByTenantIdAndIdForUpdate(
-                        tenantId,
-                        invoiceId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "Invoice not found"));
+        @Transactional
+        public CommercialInvoice recordPayment(
+                        UUID invoiceId,
+                        BigDecimal amount,
+                        String currency,
+                        String idempotencyKey,
+                        String reference) {
+                return recordPayment(
+                                invoiceId, amount, currency, idempotencyKey, reference, null);
+        }
 
-        String invoiceCurrency = normalizeCurrency(invoice.getCurrency());
-
-        /*
-         * Re-check idempotency after acquiring the invoice lock. Two identical
-         * requests can pass the first read concurrently; the second request
-         * must observe the committed payment instead of attempting a second
-         * receipt/ledger posting.
+        /**
+         * Canonical payment operation used by both:
+         *
+         * /api/billing
+         * /api/commercial
+         *
+         * This prevents the two APIs from maintaining separate payment rules.
          */
-        CommercialPayment lockedPrior = payments
-                .findByTenantIdAndIdempotencyKey(tenantId, key)
-                .orElse(null);
-        if (lockedPrior != null) {
-            String requestedCurrency = currency == null || currency.isBlank()
-                    ? invoiceCurrency
-                    : normalizeCurrency(currency);
-            if (!lockedPrior.getInvoiceId().equals(invoiceId)
-                    || lockedPrior.getAmount().compareTo(amount) != 0
-                    || !lockedPrior.getCurrency().equalsIgnoreCase(requestedCurrency)
-                    || !sameNullable(lockedPrior.getReference(), reference)
-                    || !java.util.Objects.equals(lockedPrior.getIncomeSourceId(), incomeSourceId)) {
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT,
-                        "Idempotency key was already used with different payment data");
-            }
-            return invoice;
+        @Transactional
+        public CommercialInvoice recordPayment(
+                        UUID invoiceId,
+                        BigDecimal amount,
+                        String currency,
+                        String idempotencyKey,
+                        String reference,
+                        UUID incomeSourceId) {
+
+                UUID tenantId = TenantContext.getTenantId();
+
+                String key = normalizeIdempotencyKey(idempotencyKey);
+
+                if (amount == null || amount.signum() <= 0) {
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST,
+                                        "Payment amount must be greater than zero");
+                }
+
+                /*
+                 * Idempotency is checked before changing the invoice.
+                 */
+                CommercialPayment prior = payments
+                                .findByTenantIdAndIdempotencyKey(
+                                                tenantId,
+                                                key)
+                                .orElse(null);
+
+                if (prior != null) {
+
+                        CommercialInvoice priorInvoice = invoices
+                                        .findByTenantIdAndIdForUpdate(
+                                                        tenantId,
+                                                        prior.getInvoiceId())
+                                        .orElseThrow(() -> new IllegalStateException(
+                                                        "Payment references missing invoice"));
+
+                        String requestedCurrency = currency == null || currency.isBlank()
+                                        ? priorInvoice.getCurrency()
+                                        : normalizeCurrency(currency);
+
+                        if (!prior.getInvoiceId().equals(invoiceId)
+                                        || prior.getAmount().compareTo(amount) != 0
+                                        || !prior.getCurrency()
+                                                        .equalsIgnoreCase(requestedCurrency)
+                                        || !sameNullable(
+                                                        prior.getReference(),
+                                                        reference)
+                                        || !java.util.Objects.equals(
+                                                        prior.getIncomeSourceId(),
+                                                        incomeSourceId)) {
+
+                                throw new ResponseStatusException(
+                                                HttpStatus.CONFLICT,
+                                                "Idempotency key was already used with different payment data");
+                        }
+
+                        /*
+                         * Safe retry: return the original invoice state.
+                         */
+                        return priorInvoice;
+                }
+
+                /*
+                 * Pessimistic invoice lock prevents concurrent payments from
+                 * independently spending the same remaining balance.
+                 */
+                CommercialInvoice invoice = invoices
+                                .findByTenantIdAndIdForUpdate(
+                                                tenantId,
+                                                invoiceId)
+                                .orElseThrow(() -> new ResponseStatusException(
+                                                HttpStatus.NOT_FOUND,
+                                                "Invoice not found"));
+
+                String invoiceCurrency = normalizeCurrency(invoice.getCurrency());
+
+                /*
+                 * Re-check idempotency after acquiring the invoice lock. Two identical
+                 * requests can pass the first read concurrently; the second request
+                 * must observe the committed payment instead of attempting a second
+                 * receipt/ledger posting.
+                 */
+                CommercialPayment lockedPrior = payments
+                                .findByTenantIdAndIdempotencyKey(tenantId, key)
+                                .orElse(null);
+                if (lockedPrior != null) {
+                        String requestedCurrency = currency == null || currency.isBlank()
+                                        ? invoiceCurrency
+                                        : normalizeCurrency(currency);
+                        if (!lockedPrior.getInvoiceId().equals(invoiceId)
+                                        || lockedPrior.getAmount().compareTo(amount) != 0
+                                        || !lockedPrior.getCurrency().equalsIgnoreCase(requestedCurrency)
+                                        || !sameNullable(lockedPrior.getReference(), reference)
+                                        || !java.util.Objects.equals(lockedPrior.getIncomeSourceId(), incomeSourceId)) {
+                                throw new ResponseStatusException(
+                                                HttpStatus.CONFLICT,
+                                                "Idempotency key was already used with different payment data");
+                        }
+                        return invoice;
+                }
+
+                if (currency != null
+                                && !currency.isBlank()
+                                && !invoiceCurrency.equalsIgnoreCase(
+                                                currency.trim())) {
+
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST,
+                                        "Payment currency does not match invoice currency");
+                }
+
+                /*
+                 * CommercialInvoice validates:
+                 * - positive payment
+                 * - payment cannot exceed remaining balance
+                 */
+                invoice.applyPayment(amount);
+
+                String receiptNo = documentSequences.nextReceiptNumber();
+
+                CommercialPayment payment = payments.saveAndFlush(
+                                new CommercialPayment(
+                                                tenantId,
+                                                invoice.getId(),
+                                                amount,
+                                                invoiceCurrency,
+                                                key,
+                                                normalizeReference(reference),
+                                                incomeSourceId,
+                                                receiptNo));
+
+                /*
+                 * Income allocation is metadata attached to the canonical payment.
+                 * No second income/payment ledger is created and no Excel values are
+                 * seeded. Active rules are copied as percentages so historical
+                 * allocation remains stable if configuration changes later.
+                 */
+                incomeAllocations.applyRules(payment);
+
+                /*
+                 * Accounting is posted through the single finance boundary.
+                 */
+                finance.postCustomerPayment(
+                                tenantId,
+                                payment.getId(),
+                                invoice.getId(),
+                                amount,
+                                invoiceCurrency,
+                                invoice.getInvoiceNo(),
+                                reference);
+
+                String previousLifecycle = savedLifecycle(invoice);
+                CommercialInvoice saved = invoices.save(invoice);
+                String lifecycle = saved.getBalance().signum() <= 0 ? "PAID" : "PARTIALLY_PAID";
+                saved.changeLifecycleStatus(lifecycle);
+                invoices.updateLifecycleStatus(tenantId, saved.getId(), lifecycle);
+                if (!lifecycle.equalsIgnoreCase(previousLifecycle)) {
+                        invoices.insertLifecycleHistory(tenantId, saved.getId(), previousLifecycle, lifecycle,
+                                        "Customer payment recorded", currentUser());
+                }
+                return saved;
         }
 
-        if (currency != null
-                && !currency.isBlank()
-                && !invoiceCurrency.equalsIgnoreCase(
-                        currency.trim())) {
-
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Payment currency does not match invoice currency");
+        private static String savedLifecycle(CommercialInvoice invoice) {
+                String value = invoice.getLifecycleStatus();
+                return value == null || value.isBlank() ? "ISSUED" : value;
         }
 
-        /*
-         * CommercialInvoice validates:
-         * - positive payment
-         * - payment cannot exceed remaining balance
-         */
-        invoice.applyPayment(amount);
-
-        String receiptNo = documentSequences.nextReceiptNumber();
-
-        CommercialPayment payment = payments.saveAndFlush(
-                new CommercialPayment(
-                        tenantId,
-                        invoice.getId(),
-                        amount,
-                        invoiceCurrency,
-                        key,
-                        normalizeReference(reference),
-                        incomeSourceId,
-                        receiptNo));
-
-        /*
-         * Income allocation is metadata attached to the canonical payment.
-         * No second income/payment ledger is created and no Excel values are
-         * seeded. Active rules are copied as percentages so historical
-         * allocation remains stable if configuration changes later.
-         */
-        incomeAllocations.applyRules(payment);
-
-        /*
-         * Accounting is posted through the single finance boundary.
-         */
-        finance.postCustomerPayment(
-                tenantId,
-                payment.getId(),
-                invoice.getId(),
-                amount,
-                invoiceCurrency,
-                invoice.getInvoiceNo(),
-                reference);
-
-        String previousLifecycle = savedLifecycle(invoice);
-        CommercialInvoice saved = invoices.save(invoice);
-        String lifecycle = saved.getBalance().signum() <= 0 ? "PAID" : "PARTIALLY_PAID";
-        saved.changeLifecycleStatus(lifecycle);
-        invoices.updateLifecycleStatus(tenantId, saved.getId(), lifecycle);
-        if (!lifecycle.equalsIgnoreCase(previousLifecycle)) {
-            invoices.insertLifecycleHistory(tenantId, saved.getId(), previousLifecycle, lifecycle,
-                    "Customer payment recorded", currentUser());
-        }
-        return saved;
-    }
-
-    private static String savedLifecycle(CommercialInvoice invoice) {
-        String value=invoice.getLifecycleStatus();
-        return value==null || value.isBlank() ? "ISSUED" : value;
-    }
-
-    private static UUID currentUser() {
-        Object principal=SecurityContextHolder.getContext().getAuthentication()==null
-                ? null : SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-        return principal instanceof TenantPrincipal tp ? tp.userId() : null;
-    }
-
-    private static String normalizeCurrency(String currency) {
-
-        if (currency == null || currency.isBlank()) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Currency is required");
+        private static UUID currentUser() {
+                Object principal = SecurityContextHolder.getContext().getAuthentication() == null
+                                ? null
+                                : SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+                return principal instanceof TenantPrincipal tp ? tp.userId() : null;
         }
 
-        return currency
-                .trim()
-                .toUpperCase(Locale.ROOT);
-    }
+        private static String normalizeCurrency(String currency) {
 
-    private static String normalizeIdempotencyKey(String key) {
+                if (currency == null || currency.isBlank()) {
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST,
+                                        "Currency is required");
+                }
 
-        if (key == null || key.isBlank()) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Idempotency-Key is required");
+                return currency
+                                .trim()
+                                .toUpperCase(Locale.ROOT);
         }
 
-        String normalized = key.trim();
+        private static String normalizeIdempotencyKey(String key) {
 
-        if (normalized.length() > 255) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Idempotency-Key exceeds 255 characters");
+                if (key == null || key.isBlank()) {
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST,
+                                        "Idempotency-Key is required");
+                }
+
+                String normalized = key.trim();
+
+                if (normalized.length() > 255) {
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST,
+                                        "Idempotency-Key exceeds 255 characters");
+                }
+
+                return normalized;
         }
 
-        return normalized;
-    }
+        private static String normalizeReference(String reference) {
 
-    private static String normalizeReference(String reference) {
+                if (reference == null) {
+                        return null;
+                }
 
-        if (reference == null) {
-            return null;
+                String normalized = reference.trim();
+
+                return normalized.isBlank()
+                                ? null
+                                : normalized;
         }
 
-        String normalized = reference.trim();
+        private static boolean sameNullable(
+                        String left,
+                        String right) {
 
-        return normalized.isBlank()
-                ? null
-                : normalized;
-    }
+                String a = normalizeReference(left);
+                String b = normalizeReference(right);
 
-    private static boolean sameNullable(
-            String left,
-            String right) {
-
-        String a = normalizeReference(left);
-        String b = normalizeReference(right);
-
-        return a == null
-                ? b == null
-                : a.equals(b);
-    }
+                return a == null
+                                ? b == null
+                                : a.equals(b);
+        }
 }

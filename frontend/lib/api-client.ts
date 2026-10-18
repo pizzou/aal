@@ -257,21 +257,18 @@ async function fetchWithTimeout(
   timeoutMs: number,
 ): Promise<Response> {
   const controller = new AbortController();
-  let timeoutId: number | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const parentSignal = init.signal;
+  const forwardAbort = () => controller.abort(parentSignal?.reason);
 
   if (parentSignal?.aborted) {
     controller.abort(parentSignal.reason);
   } else if (parentSignal) {
-    parentSignal.addEventListener(
-      "abort",
-      () => controller.abort(parentSignal.reason),
-      { once: true },
-    );
+    parentSignal.addEventListener("abort", forwardAbort, { once: true });
   }
 
   if (!controller.signal.aborted) {
-    timeoutId = window.setTimeout(
+    timeoutId = setTimeout(
       () =>
         controller.abort(new DOMException("Request timed out", "TimeoutError")),
       timeoutMs,
@@ -281,7 +278,8 @@ async function fetchWithTimeout(
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
-    if (timeoutId !== null) window.clearTimeout(timeoutId);
+    if (timeoutId !== null) clearTimeout(timeoutId);
+    parentSignal?.removeEventListener("abort", forwardAbort);
   }
 }
 
@@ -362,8 +360,8 @@ export async function apiFetch<T>(
           throw error;
         }
       }
-      await new Promise((resolve) =>
-        window.setTimeout(resolve, retryDelay(attempt)),
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, retryDelay(attempt)),
       );
     }
     throw new Error("Request failed after retries");
@@ -798,10 +796,13 @@ export const shipmentsApi = {
       currency: string;
     },
   ) =>
-    apiFetch<Shipment>(`/api/shipments/${id}/pricing`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
+    apiFetch<Shipment>(
+      `/api/shipments/${requireShipmentId(id, "update shipment pricing")}/pricing`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      },
+    ),
   list: (params: ShipmentListParams = {}, options: RequestInit = {}) => {
     const query = new URLSearchParams();
 
@@ -859,28 +860,40 @@ export const shipmentsApi = {
   },
 
   updateStatus: (id: string, status: string) =>
-    apiFetch<Shipment>(`/api/shipments/${id}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
-    }),
+    apiFetch<Shipment>(
+      `/api/shipments/${requireShipmentId(id, "update shipment status")}/status`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      },
+    ),
 
   updateWeight: (id: string, weightKg: number) =>
-    apiFetch<Shipment>(`/api/shipments/${id}/weight`, {
-      method: "PATCH",
-      body: JSON.stringify({ weightKg }),
-    }),
+    apiFetch<Shipment>(
+      `/api/shipments/${requireShipmentId(id, "update shipment weight")}/weight`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ weightKg }),
+      },
+    ),
 
   updateNotificationEmail: (id: string, notificationEmail: string) =>
-    apiFetch<Shipment>(`/api/shipments/${id}/notification-email`, {
-      method: "PATCH",
-      body: JSON.stringify({ notificationEmail }),
-    }),
+    apiFetch<Shipment>(
+      `/api/shipments/${requireShipmentId(id, "update shipment notification email")}/notification-email`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ notificationEmail }),
+      },
+    ),
 
   updateFlightNumber: (id: string, flightNumber: string) =>
-    apiFetch<Shipment>(`/api/shipments/${id}/flight-number`, {
-      method: "PATCH",
-      body: JSON.stringify({ flightNumber }),
-    }),
+    apiFetch<Shipment>(
+      `/api/shipments/${requireShipmentId(id, "update shipment flight number")}/flight-number`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ flightNumber }),
+      },
+    ),
 
   notificationHistory: (id: string) =>
     apiFetch<Page<NotificationRecord>>(
@@ -900,10 +913,13 @@ export const shipmentsApi = {
       notes?: string;
     },
   ) =>
-    apiFetch<TrackingEvent>(`/api/shipments/${id}/events`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    apiFetch<TrackingEvent>(
+      `/api/shipments/${requireShipmentId(id, "record shipment event")}/events`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
 };
 
 export interface PublicTrackingEvent {
@@ -1119,10 +1135,13 @@ export const aalExcelImportApi = {
 
 export const commandCenterApi = {
   updateShipment: (id: string, data: Record<string, unknown>) =>
-    apiFetch<Shipment>(`/api/shipments/${id}/command-center`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
+    apiFetch<Shipment>(
+      `/api/shipments/${requireShipmentId(id, "update command-center shipment")}/command-center`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      },
+    ),
   dashboard: (asOf?: string) =>
     apiFetch<ManagementReport>(
       `/api/command-center/dashboard${asOf ? `?asOf=${encodeURIComponent(asOf)}` : ""}`,
@@ -1464,18 +1483,20 @@ export interface FlightStatusResult {
 
 export const flightStatusApi = {
   check: (shipmentId: string) =>
-    apiFetch<FlightStatusResult>(`/api/shipments/${shipmentId}/flight-status`),
+    apiFetch<FlightStatusResult>(
+      `/api/shipments/${requireShipmentId(shipmentId, "check shipment flight status")}/flight-status`,
+    ),
 };
 
 export function awbDownloadUrl(shipmentId: string): string {
-  return `${API_BASE}/api/shipments/${shipmentId}/documents/awb`;
+  return `${API_BASE}/api/shipments/${requireShipmentId(shipmentId, "download air waybill")}/documents/awb`;
 }
 
 export async function downloadAwbPdf(shipmentId: string): Promise<void> {
   const headers = new Headers();
   applyAuthenticationHeader(
     headers,
-    `/api/shipments/${shipmentId}/documents/awb`,
+    `/api/shipments/${requireShipmentId(shipmentId, "download air waybill")}/documents/awb`,
   );
   const response = await fetch(awbDownloadUrl(shipmentId), {
     method: "GET",
@@ -1700,7 +1721,7 @@ export type ShipmentEtaHistory = {
 export const airCargoApi = {
   shipmentDocuments: (shipmentId: string) =>
     apiFetch<Record<string, unknown>[]>(
-      `/api/air-cargo/documents/shipment/${shipmentId}`,
+      `/api/air-cargo/documents/shipment/${requireShipmentId(shipmentId, "load shipment air-cargo documents")}`,
     ),
 
   searchFlights: (data: {
@@ -1751,14 +1772,16 @@ export const airCargoApi = {
 
   refreshEta: (shipmentId: string) =>
     apiFetch<Record<string, unknown>>(
-      `/api/shipments/${shipmentId}/eta/refresh`,
+      `/api/shipments/${requireShipmentId(shipmentId, "refresh shipment ETA")}/eta/refresh`,
       {
         method: "POST",
       },
     ),
 
   etaHistory: (shipmentId: string) =>
-    apiFetch<ShipmentEtaHistory[]>(`/api/shipments/${shipmentId}/eta/history`),
+    apiFetch<ShipmentEtaHistory[]>(
+      `/api/shipments/${requireShipmentId(shipmentId, "load shipment ETA history")}/eta/history`,
+    ),
 
   airlines: () => apiFetch<AirCargoAirlineDirectory>("/api/air-cargo/airlines"),
 

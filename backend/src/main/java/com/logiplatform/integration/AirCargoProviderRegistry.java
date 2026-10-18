@@ -71,7 +71,19 @@ public class AirCargoProviderRegistry {
     /** Provider used when an operation does not carry an explicit provider. */
     public AirCargoProviderPort active() {
         if (!"AUTO".equals(configuredCode)) {
-            return adapters.getOrDefault(configuredCode, generic);
+            AirCargoProviderPort selected = adapters.get(configuredCode);
+            if (selected == null) {
+                throw new IllegalStateException(
+                        "Configured air-cargo provider '" + configuredCode
+                                + "' is not registered. Refusing to silently route operations to GENERIC_HTTP.");
+            }
+            if (!selected.configured()) {
+                String issues = String.join("; ", selected.configurationIssues());
+                throw new IllegalStateException(
+                        "Configured air-cargo provider '" + configuredCode + "' is not ready"
+                                + (issues.isBlank() ? "." : ": " + issues));
+            }
+            return selected;
         }
 
         // Prefer a configured provider that supports both live search and booking.

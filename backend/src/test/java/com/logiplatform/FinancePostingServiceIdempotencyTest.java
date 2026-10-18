@@ -69,6 +69,49 @@ class FinancePostingServiceIdempotencyTest {
         verify(ledger, never()).save(any(FinanceLedgerEntry.class));
     }
 
+
+    @Test
+    void taxInvoicePostsReceivableRevenueAndTaxAsBalancedLines() {
+        UUID invoice = UUID.randomUUID();
+        when(ledger.findAllByTenantIdAndSourceTypeAndSourceIdOrderByPostedAtAsc(tenant, "INVOICE", invoice))
+                .thenReturn(List.of());
+        when(ledger.findAllByTenantIdAndSourceTypeAndSourceIdOrderByPostedAtAsc(tenant, "INVOICE_REVERSAL", invoice))
+                .thenReturn(List.of());
+
+        service.postInvoiceWithTax(tenant, invoice, new BigDecimal("118.00"),
+                new BigDecimal("18.00"), "usd", "INV-TAX-1");
+
+        verify(ledger, times(3)).save(any(FinanceLedgerEntry.class));
+    }
+
+    @Test
+    void taxInvoiceRetryWithSameAmountsDoesNotDuplicateJournalLines() {
+        UUID invoice = UUID.randomUUID();
+        when(ledger.findAllByTenantIdAndSourceTypeAndSourceIdOrderByPostedAtAsc(tenant, "INVOICE", invoice))
+                .thenReturn(List.of(
+                        new FinanceLedgerEntry(tenant, invoice, "INVOICE", invoice, "DEBIT",
+                                FinancePostingService.ACCOUNTS_RECEIVABLE, new BigDecimal("118.00"), "USD", "Invoice"),
+                        new FinanceLedgerEntry(tenant, invoice, "INVOICE", invoice, "CREDIT",
+                                FinancePostingService.FREIGHT_REVENUE, new BigDecimal("100.00"), "USD", "Revenue"),
+                        new FinanceLedgerEntry(tenant, invoice, "INVOICE", invoice, "CREDIT",
+                                FinancePostingService.TAX_PAYABLE, new BigDecimal("18.00"), "USD", "Tax")));
+        when(ledger.findAllByTenantIdAndSourceTypeAndSourceIdOrderByPostedAtAsc(tenant, "INVOICE_REVERSAL", invoice))
+                .thenReturn(List.of());
+
+        service.postInvoiceWithTax(tenant, invoice, new BigDecimal("118.00"),
+                new BigDecimal("18.00"), "USD", "INV-TAX-1");
+
+        verify(ledger, never()).save(any(FinanceLedgerEntry.class));
+    }
+
+    @Test
+    void taxGreaterThanGrossIsRejectedBeforePosting() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.postInvoiceWithTax(tenant, UUID.randomUUID(),
+                        new BigDecimal("100.00"), new BigDecimal("101.00"), "USD", "INV-TAX-2"));
+        verifyNoInteractions(ledger);
+    }
+
     @Test
     void postingWithoutStableSourceIdentityIsRejected() {
         assertThrows(IllegalArgumentException.class,

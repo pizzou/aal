@@ -17,6 +17,14 @@ test.describe("AAL authenticated smoke", () => {
   );
 
   test("login, dashboard and core modules", async ({ page }) => {
+    const malformedShipmentRequests: string[] = [];
+    page.on("request", (request) => {
+      const url = request.url();
+      if (/\/api\/shipments\/(?:undefined|null)(?:\/|\?|$)/i.test(url)) {
+        malformedShipmentRequests.push(url);
+      }
+    });
+
     await page.goto("/login");
     await page.getByLabel(/email/i).fill(email!);
     await page.getByLabel(/password/i).fill(password!);
@@ -51,6 +59,25 @@ test.describe("AAL authenticated smoke", () => {
       "/customers",
       "/commercial",
       "/billing",
+      "/reports",
+      "/audit",
+      "/dispatch",
+      "/trips",
+      "/fleet",
+      "/warehouse-ops",
+      "/warehouses",
+      "/inventory/invalid-e2e-id",
+      "/exceptions",
+      "/settings",
+      "/users",
+      "/air-cargo",
+      "/air-cargo/bookings",
+      "/air-cargo/integrations",
+      "/multimodal",
+      "/ocean",
+      "/road",
+      "/rail",
+      "/new-shipment",
     ]) {
       await page.goto(route);
       await expect(page.locator("body")).not.toContainText(
@@ -60,5 +87,10 @@ test.describe("AAL authenticated smoke", () => {
         "Request failed with status 401",
       );
     }
+
+    expect(
+      malformedShipmentRequests,
+      "A dashboard page must never request a shipment using an undefined/null ID",
+    ).toEqual([]);
   });
 });

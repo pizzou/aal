@@ -15,6 +15,21 @@ import {
   financeIncomeConfigurationApi,
 } from "@/lib/api-client";
 
+type TaxPreview = {
+  shipmentId: string;
+  currency: string;
+  taxName: string;
+  taxCode: string;
+  taxJurisdictionCode: string;
+  taxRate: number;
+  taxInclusive: boolean;
+  subtotalAmount: number;
+  taxAmount: number;
+  invoiceAmount: number;
+  effectiveDate: string;
+  taxRegistrationNo?: string | null;
+};
+
 type Invoice = {
   id: string;
   tenantId?: string;
@@ -24,6 +39,11 @@ type Invoice = {
   shipmentId: string | null;
   currency: string;
   invoiceAmount: number;
+  subtotalAmount?: number;
+  taxRate?: number;
+  taxAmount?: number;
+  taxCode?: string | null;
+  taxInclusive?: boolean;
   amountPaid: number;
   balance: number;
   dueDate: string | null;
@@ -85,6 +105,9 @@ export default function BillingPage() {
   const [invoiceOwner, setInvoiceOwner] = useState("");
   const [invoiceTaxJurisdiction, setInvoiceTaxJurisdiction] = useState("");
   const [invoiceTaxCode, setInvoiceTaxCode] = useState("");
+  const [taxPreview, setTaxPreview] = useState<TaxPreview | null>(null);
+  const [taxPreviewError, setTaxPreviewError] = useState("");
+  const [taxPreviewLoading, setTaxPreviewLoading] = useState(false);
 
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -221,6 +244,53 @@ export default function BillingPage() {
       (invoice.balance > 0 && invoice.daysOverdue > 0 ? invoice.balance : 0),
     0,
   );
+
+  const selectedInvoiceShipment = shipments.find(
+    (shipment) => shipment.id === invoiceShipment,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const jurisdiction = invoiceTaxJurisdiction.trim();
+    const code = invoiceTaxCode.trim();
+    setTaxPreview(null);
+    setTaxPreviewError("");
+    if (!invoiceShipment || !jurisdiction || !code) {
+      setTaxPreviewLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setTaxPreviewLoading(true);
+    apiFetch<TaxPreview>(
+      `/api/billing/shipments/${invoiceShipment}/invoice/tax-preview`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          taxJurisdictionCode: jurisdiction,
+          taxCode: code,
+        }),
+      },
+    )
+      .then((preview) => {
+        if (!cancelled) setTaxPreview(preview);
+      })
+      .catch((exception) => {
+        if (!cancelled) {
+          setTaxPreviewError(
+            exception instanceof Error
+              ? exception.message
+              : "Unable to calculate tax preview from the server.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setTaxPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [invoiceShipment, invoiceTaxJurisdiction, invoiceTaxCode]);
 
   function shipmentForInvoice(invoice: Invoice) {
     return shipments.find((shipment) => shipment.id === invoice.shipmentId);
@@ -765,9 +835,94 @@ export default function BillingPage() {
             </label>
           </div>
           <p className="form-hint">
-            Tax is applied only when both codes match an active, effective-dated
-            rule configured by your finance administrator.
+            Invoice VAT is calculated by the server using the active,
+            effective-dated tax rule configured by your finance administrator.
+            Enter the jurisdiction and tax code to see the authoritative
+            preview. The system does not assume 18% when a valid rule is not
+            configured.
           </p>
+
+          {invoiceShipment && selectedInvoiceShipment && (
+            <section
+              className="card"
+              aria-label="Server-calculated invoice tax preview"
+              style={{ marginTop: 16 }}
+            >
+              <div className="section-heading">
+                <div className="section-number">VAT</div>
+                <div>
+                  <h3>Invoice tax preview</h3>
+                  <p>
+                    Calculated by the backend using the selected effective tax
+                    rule; the issued invoice remains the final record.
+                  </p>
+                </div>
+              </div>
+              {taxPreviewLoading && (
+                <p className="form-hint">
+                  Calculating using the configured tax rule…
+                </p>
+              )}
+              {taxPreviewError && (
+                <p className="form-hint" role="alert">
+                  Tax preview unavailable: {taxPreviewError}
+                </p>
+              )}
+              {!invoiceTaxJurisdiction.trim() || !invoiceTaxCode.trim() ? (
+                <p className="form-hint">
+                  Enter both the configured tax jurisdiction and tax code to
+                  calculate subtotal, VAT, and total.
+                </p>
+              ) : null}
+              {taxPreview && (
+                <>
+                  <div className="grid grid-2" style={{ gap: 12 }}>
+                    <div className="card" style={{ padding: 14 }}>
+                      <div className="kpi-label">Subtotal excluding VAT</div>
+                      <strong>
+                        {money(taxPreview.subtotalAmount, taxPreview.currency)}
+                      </strong>
+                      <div className="kpi-meta" style={{ marginTop: 8 }}>
+                        VAT ({taxPreview.taxRate}%)
+                      </div>
+                      <strong>
+                        {money(taxPreview.taxAmount, taxPreview.currency)}
+                      </strong>
+                      <div className="kpi-meta" style={{ marginTop: 8 }}>
+                        Total including VAT
+                      </div>
+                      <strong>
+                        {money(taxPreview.invoiceAmount, taxPreview.currency)}
+                      </strong>
+                    </div>
+                    <div className="card" style={{ padding: 14 }}>
+                      <div className="kpi-label">Configured tax treatment</div>
+                      <strong>
+                        {taxPreview.taxInclusive
+                          ? "VAT included in entered amount"
+                          : "VAT added to entered amount"}
+                      </strong>
+                      <div className="kpi-meta" style={{ marginTop: 8 }}>
+                        Tax rule
+                      </div>
+                      <strong>
+                        {taxPreview.taxName} ({taxPreview.taxCode})
+                      </strong>
+                      <div className="kpi-meta" style={{ marginTop: 8 }}>
+                        Effective date
+                      </div>
+                      <strong>{taxPreview.effectiveDate}</strong>
+                    </div>
+                  </div>
+                  <p className="form-hint" style={{ marginTop: 10 }}>
+                    {taxPreview.taxInclusive
+                      ? "The shipment amount is treated as VAT-inclusive. VAT is extracted from the gross amount; it is not added a second time."
+                      : "The shipment amount is treated as VAT-exclusive. VAT is added to the subtotal to determine the amount payable."}
+                  </p>
+                </>
+              )}
+            </section>
+          )}
 
           {invoiceShipment && (
             <div className="selected-shipment">
@@ -1096,7 +1251,9 @@ export default function BillingPage() {
                 <th>Client</th>
                 <th>Issue</th>
                 <th>Due</th>
-                <th>Amount</th>
+                <th>Subtotal</th>
+                <th>VAT</th>
+                <th>Total incl. VAT</th>
                 <th>Paid</th>
                 <th>Balance</th>
                 <th>Status</th>
@@ -1261,7 +1418,24 @@ export default function BillingPage() {
 
                       <td>{invoice.dueDate || "—"}</td>
 
-                      <td>{money(invoice.invoiceAmount, invoice.currency)}</td>
+                      <td>
+                        {money(
+                          invoice.subtotalAmount ?? invoice.invoiceAmount,
+                          invoice.currency,
+                        )}
+                      </td>
+
+                      <td>
+                        {invoice.taxAmount && invoice.taxAmount > 0
+                          ? `${money(invoice.taxAmount, invoice.currency)}${invoice.taxRate ? ` (${invoice.taxRate}%)` : ""}`
+                          : "—"}
+                      </td>
+
+                      <td>
+                        <strong>
+                          {money(invoice.invoiceAmount, invoice.currency)}
+                        </strong>
+                      </td>
 
                       <td>{money(invoice.amountPaid, invoice.currency)}</td>
 

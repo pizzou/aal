@@ -25,6 +25,7 @@ public class FinancePostingService {
     public static final String FREIGHT_REVENUE = "4000-FREIGHT_REVENUE";
     public static final String OPERATING_EXPENSE = "5100-OPERATING_EXPENSE";
     public static final String TAX_PAYABLE = "2200-TAX_PAYABLE";
+    public static final String ACCOUNTS_PAYABLE = "2100-ACCOUNTS_PAYABLE";
 
     private final FinanceLedgerRepository ledger;
 
@@ -309,8 +310,58 @@ public class FinancePostingService {
         BigDecimal unposted = cumulativeAmount.subtract(prior);
         if (unposted.signum() == 0)
             return;
+        // Never post new legacy cash-as-cost on a shipment using supplier bills.
+        if (entityManager != null) {
+            Number billCount = (Number) entityManager.createNativeQuery(
+                    "select count(*) from supplier_bills where tenant_id=:tenant and shipment_id=:shipment")
+                    .setParameter("tenant", tenantId).setParameter("shipment", shipmentId)
+                    .getSingleResult();
+            if (billCount.longValue() > 0)
+                throw new IllegalStateException(
+                        "Supplier bills already exist for this shipment: settle supplier invoices instead");
+        }
         postBalanced(tenantId, null, "SUPPLIER_PAYMENT", shipmentId, unposted, c,
                 OPERATING_EXPENSE, CASH, "Supplier payment " + shipmentReference);
+    }
+
+    /** Recognize supplier cost once, independently of settlement/cash. */
+    @Transactional
+    public void postSupplierBill(UUID tenantId, UUID billId, BigDecimal amount,
+            String currency, String vendorReference) {
+        validateTenant(tenantId);
+        validateAmount(amount);
+        validateSourceId(billId, "billId");
+        String c = normalizeCurrency(currency);
+        lockPosting(tenantId, "SUPPLIER_BILL", billId, "ALL");
+        List<FinanceLedgerEntry> existing = sourceEntries(tenantId, "SUPPLIER_BILL", billId);
+        if (!existing.isEmpty()) {
+            if (isExactBalancedPosting(existing, amount, c,
+                    OPERATING_EXPENSE, "DEBIT", ACCOUNTS_PAYABLE, "CREDIT"))
+                return;
+            throw new IllegalStateException("Supplier bill already has a conflicting ledger posting");
+        }
+        postBalanced(tenantId, null, "SUPPLIER_BILL", billId, amount, c,
+                OPERATING_EXPENSE, ACCOUNTS_PAYABLE, "Supplier invoice " + vendorReference);
+    }
+
+    /** Clear a specific approved payable; never expense the same cash again. */
+    @Transactional
+    public void postSupplierBillPayment(UUID tenantId, UUID paymentId, BigDecimal amount,
+            String currency, String paymentReference) {
+        validateTenant(tenantId);
+        validateAmount(amount);
+        validateSourceId(paymentId, "paymentId");
+        String c = normalizeCurrency(currency);
+        lockPosting(tenantId, "SUPPLIER_BILL_PAYMENT", paymentId, "ALL");
+        List<FinanceLedgerEntry> existing = sourceEntries(tenantId, "SUPPLIER_BILL_PAYMENT", paymentId);
+        if (!existing.isEmpty()) {
+            if (isExactBalancedPosting(existing, amount, c,
+                    ACCOUNTS_PAYABLE, "DEBIT", CASH, "CREDIT"))
+                return;
+            throw new IllegalStateException("Supplier settlement already has a conflicting ledger posting");
+        }
+        postBalanced(tenantId, null, "SUPPLIER_BILL_PAYMENT", paymentId, amount, c,
+                ACCOUNTS_PAYABLE, CASH, "Supplier settlement " + paymentReference);
     }
 
     private void postBalanced(UUID tenantId, UUID invoiceId, String sourceType, UUID sourceId,

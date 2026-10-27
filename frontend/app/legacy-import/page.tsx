@@ -6,6 +6,7 @@ import {
   ApiError,
   aalExcelImportApi,
   AalExcelImportResult,
+  AalExcelPreflight,
 } from "@/lib/api-client";
 
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -18,6 +19,7 @@ export default function LegacyImportPage() {
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<AalExcelImportResult | null>(null);
+  const [preview, setPreview] = useState<AalExcelPreflight | null>(null);
 
   const totalBytes = useMemo(
     () => files.reduce((sum, file) => sum + file.size, 0),
@@ -27,6 +29,7 @@ export default function LegacyImportPage() {
   function acceptFiles(next: File[]) {
     setError("");
     setResult(null);
+    setPreview(null);
 
     const invalid = next.find((file) => !ACCEPTED.test(file.name));
     if (invalid) {
@@ -73,9 +76,32 @@ export default function LegacyImportPage() {
     acceptFiles(Array.from(event.dataTransfer.files ?? []));
   }
 
+  async function inspectWorkbook() {
+    if (!files.length) return;
+    setBusy(true);
+    setError("");
+    setResult(null);
+    setPreview(null);
+    try {
+      const inspection = await aalExcelImportApi.previewWorkbooks(files);
+      setPreview(inspection);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Workbook preview failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submit() {
     if (!files.length) {
       setError("Select at least one AAL workbook before starting the import.");
+      return;
+    }
+
+    if (!preview || !preview.readyToImport) {
+      setError(
+        "Run the workbook preview and resolve all BLOCKER issues before importing.",
+      );
       return;
     }
 
@@ -92,7 +118,7 @@ export default function LegacyImportPage() {
 
       if (importedTotal === 0) {
         setError(
-          "The workbook was processed, but no records were imported. This usually means the workbook headers do not match a supported AAL sheet. No silent success is reported.",
+          "No new records were created. This may be a repeat import or references already present in the database. Verify the shipment register and reconciliation before retrying.",
         );
       } else {
         setResult(imported);
@@ -116,6 +142,7 @@ export default function LegacyImportPage() {
     );
     setError("");
     setResult(null);
+    setPreview(null);
   }
 
   return (
@@ -256,15 +283,92 @@ export default function LegacyImportPage() {
           style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}
         >
           <button
+            className="btn"
+            type="button"
+            onClick={inspectWorkbook}
+            disabled={busy || files.length === 0}
+          >
+            {busy ? "Inspecting…" : "1. Preview & validate"}
+          </button>
+          <button
             className="btn btn-primary"
             type="button"
             onClick={submit}
-            disabled={busy || files.length === 0}
+            disabled={busy || !preview?.readyToImport}
           >
-            {busy ? "Validating & importing…" : "Start controlled import"}
+            2. Import validated records
           </button>
         </div>
       </section>
+
+      {preview && (
+        <section className="card" style={{ marginTop: 20 }} aria-live="polite">
+          <div className="eyebrow">STEP 02 · READ-ONLY SOURCE VALIDATION</div>
+          <h2 style={{ marginTop: 6 }}>Workbook preflight</h2>
+          <div className="aal-kpi-grid" style={{ marginTop: 16 }}>
+            <Metric label="AWB rows" value={preview.shipmentRows} />
+            <Metric label="Distinct AWBs" value={preview.distinctAwbs} />
+            <Metric label="Blockers" value={preview.blockers} />
+            <Metric label="Warnings" value={preview.warnings} />
+            <Metric label="Billed (assumed USD)" value={preview.billed} />
+            <Metric label="Collected (assumed USD)" value={preview.collected} />
+            <Metric
+              label="Remaining (assumed USD)"
+              value={preview.receivable}
+            />
+            <Metric
+              label="Supplier paid (assumed USD)"
+              value={preview.supplierPayments}
+            />
+          </div>
+          <p className="page-subtitle" style={{ marginTop: 12 }}>
+            Preview changes nothing in the database. Resolve blockers in the
+            original workbook before import. Warning-free import still does not
+            certify bank, supplier, invoice or general-ledger reconciliation.
+          </p>
+          {preview.blockers > 0 && (
+            <div
+              className="alert alert-error"
+              role="alert"
+              style={{ marginTop: 14 }}
+            >
+              Import is blocked: {preview.blockers} source issue(s) require
+              correction.
+            </div>
+          )}
+          {preview.issues.length > 0 && (
+            <div style={{ overflowX: "auto", marginTop: 12 }}>
+              <table className="aal-table" style={{ width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th>Severity</th>
+                    <th>Sheet / row</th>
+                    <th>Issue</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.issues.map((issue, index) => (
+                    <tr
+                      key={`${issue.sheet}-${issue.row}-${issue.code}-${index}`}
+                    >
+                      <td>
+                        <strong>{issue.severity}</strong>
+                      </td>
+                      <td>
+                        {issue.sheet || issue.workbook}
+                        {issue.row > 0 ? ` / ${issue.row}` : ""}
+                      </td>
+                      <td>{issue.code}</td>
+                      <td>{issue.message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
 
       {result && (
         <section className="card" style={{ marginTop: 20 }}>

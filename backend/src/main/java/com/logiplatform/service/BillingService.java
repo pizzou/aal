@@ -506,7 +506,22 @@ public class BillingService {
                         String idempotencyKey,
                         String reference,
                         UUID incomeSourceId) {
+                return recordPayment(invoiceId, amount, currency, idempotencyKey,
+                                reference, incomeSourceId, "UNSPECIFIED");
+        }
 
+        /** Require an explicit payment channel for cashier-entered receipts. */
+        @Transactional
+        public CommercialInvoice recordPayment(
+                        UUID invoiceId,
+                        BigDecimal amount,
+                        String currency,
+                        String idempotencyKey,
+                        String reference,
+                        UUID incomeSourceId,
+                        String paymentMethod) {
+
+                String method = normalizePaymentMethod(paymentMethod);
                 UUID tenantId = TenantContext.getTenantId();
 
                 String key = normalizeIdempotencyKey(idempotencyKey);
@@ -548,7 +563,8 @@ public class BillingService {
                                                         reference)
                                         || !java.util.Objects.equals(
                                                         prior.getIncomeSourceId(),
-                                                        incomeSourceId)) {
+                                                        incomeSourceId)
+                                        || !method.equals(prior.getPaymentMethod())) {
 
                                 throw new ResponseStatusException(
                                                 HttpStatus.CONFLICT,
@@ -592,7 +608,8 @@ public class BillingService {
                                         || lockedPrior.getAmount().compareTo(amount) != 0
                                         || !lockedPrior.getCurrency().equalsIgnoreCase(requestedCurrency)
                                         || !sameNullable(lockedPrior.getReference(), reference)
-                                        || !java.util.Objects.equals(lockedPrior.getIncomeSourceId(), incomeSourceId)) {
+                                        || !java.util.Objects.equals(lockedPrior.getIncomeSourceId(), incomeSourceId)
+                                        || !method.equals(lockedPrior.getPaymentMethod())) {
                                 throw new ResponseStatusException(
                                                 HttpStatus.CONFLICT,
                                                 "Idempotency key was already used with different payment data");
@@ -619,16 +636,17 @@ public class BillingService {
 
                 String receiptNo = documentSequences.nextReceiptNumber();
 
-                CommercialPayment payment = payments.saveAndFlush(
-                                new CommercialPayment(
-                                                tenantId,
-                                                invoice.getId(),
-                                                amount,
-                                                invoiceCurrency,
-                                                key,
-                                                normalizeReference(reference),
-                                                incomeSourceId,
-                                                receiptNo));
+                CommercialPayment payment = new CommercialPayment(
+                                tenantId,
+                                invoice.getId(),
+                                amount,
+                                invoiceCurrency,
+                                key,
+                                normalizeReference(reference),
+                                incomeSourceId,
+                                receiptNo);
+                payment.setPaymentMethod(method);
+                payment = payments.saveAndFlush(payment);
 
                 /*
                  * Income allocation is metadata attached to the canonical payment.
@@ -672,6 +690,26 @@ public class BillingService {
                                 ? null
                                 : SecurityContextHolder.getContext().getAuthentication().getPrincipal();
                 return principal instanceof TenantPrincipal tp ? tp.userId() : null;
+        }
+
+        @Transactional(readOnly = true)
+        public java.util.List<CommercialPayment> paymentHistory(UUID invoiceId) {
+                UUID tenant = TenantContext.getTenantId();
+                invoices.findByTenantIdAndId(tenant, invoiceId).orElseThrow(
+                                () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invoice not found"));
+                return payments.findAllByTenantIdAndInvoiceIdOrderByCreatedAtAsc(tenant, invoiceId);
+        }
+
+        private static String normalizePaymentMethod(String value) {
+                if (value == null)
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Payment method is required");
+                String method = value.trim().toUpperCase(Locale.ROOT);
+                if (!java.util.Set.of("CASH", "MOBILE_MONEY", "BANK_TRANSFER", "CARD", "OTHER", "UNSPECIFIED")
+                                .contains(method))
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Unsupported payment method");
+                return method;
         }
 
         private static String normalizeCurrency(String currency) {

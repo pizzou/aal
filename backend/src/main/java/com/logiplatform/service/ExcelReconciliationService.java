@@ -64,14 +64,28 @@ public class ExcelReconciliationService {
                 "expenses", delta(expected.expenses(), number(actual.get("expenses")))));
 
         result.put("financial", Map.of(
-                "invoiceRevenue", scalar("SELECT COALESCE(SUM(invoice_amount),0) FROM commercial_invoices WHERE tenant_id=? AND COALESCE(lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')", tenant),
-                "shipmentClientRevenue", scalar("SELECT COALESCE(SUM(COALESCE(amount_billed_to_client,client_revenue,0)),0) FROM shipments WHERE tenant_id=?", tenant),
-                "supplierCost", scalar("SELECT COALESCE(SUM(COALESCE(supplier_cost,0)),0) FROM shipments WHERE tenant_id=?", tenant)));
+                "invoiceRevenue",
+                scalar("SELECT COALESCE(SUM(invoice_amount),0) FROM commercial_invoices WHERE tenant_id=? AND COALESCE(lifecycle_status,'ISSUED') NOT IN ('DRAFT','VOID','CANCELLED')",
+                        tenant),
+                "shipmentClientRevenue",
+                scalar("SELECT COALESCE(SUM(COALESCE(amount_billed_to_client,client_revenue,0)),0) FROM shipments WHERE tenant_id=?",
+                        tenant),
+                "supplierCost",
+                scalar("SELECT COALESCE(SUM(COALESCE(supplier_cost,0)),0) FROM shipments WHERE tenant_id=?", tenant)));
 
         boolean countsMatch = ((Map<?, ?>) result.get("deltas")).values().stream()
                 .allMatch(v -> number(v) == 0L);
-        result.put("reconciled", countsMatch && "COMPLETED".equalsIgnoreCase(batch.getStatus()));
-        result.put("status", countsMatch ? "PASS" : "REVIEW");
+        // Imported *new* rows cannot be compared with total tenant counts as
+        // proof of reconciliation: existing rows and merges distort the delta.
+        // Neither the batch receipt nor row counts prove that customer payments,
+        // supplier settlement, tax, AR and the GL agree with the source workbook.
+        result.put("reconciled", false);
+        result.put("countsOnly", true);
+        result.put("financiallyReconciled", false);
+        result.put("status", countsMatch ? "COUNTS_ONLY_NOT_FINANCIALLY_RECONCILED" : "REVIEW_REQUIRED");
+        result.put("limitations", "Counts are tenant totals, not per-batch matched rows. "
+                + "A signed source-to-system balance comparison, transaction-level payments, "
+                + "and accounting ledger reconciliation remain mandatory before Excel retirement.");
         return result;
     }
 
@@ -97,11 +111,15 @@ public class ExcelReconciliationService {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    private static long delta(long expected, long actual) { return actual - expected; }
+    private static long delta(long expected, long actual) {
+        return actual - expected;
+    }
 
     private static long number(Object value) {
-        if (value instanceof Number n) return n.longValue();
-        if (value == null) return 0L;
+        if (value instanceof Number n)
+            return n.longValue();
+        if (value == null)
+            return 0L;
         return Long.parseLong(value.toString());
     }
 }

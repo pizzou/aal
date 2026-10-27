@@ -1,4 +1,4 @@
-package com.logiplatform.service;
+package com.logiplatform;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -45,10 +45,12 @@ class CustomsAuthorityCallbackServiceTest {
         String body = "{\"eventType\":\"RELEASED\"}";
         assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(ResponseStatusException.class,
                 () -> service.verify(body, String.valueOf(Instant.now().minusSeconds(3600).getEpochSecond()),
-                        "provider-event-1002", "x")).getStatusCode());
+                        "provider-event-1002", "x"))
+                .getStatusCode());
         assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(ResponseStatusException.class,
                 () -> service.verify(body, String.valueOf(Instant.now().getEpochSecond()),
-                        "provider-event-1002", null)).getStatusCode());
+                        "provider-event-1002", null))
+                .getStatusCode());
     }
 
     @Test

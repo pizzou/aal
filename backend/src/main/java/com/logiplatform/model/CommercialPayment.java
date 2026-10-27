@@ -7,183 +7,167 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(
-        name = "commercial_payments",
-        uniqueConstraints = {
-                @UniqueConstraint(
-                        name = "uk_commercial_payment_idempotency",
-                        columnNames = {
+@Table(name = "commercial_payments", uniqueConstraints = {
+                @UniqueConstraint(name = "uk_commercial_payment_idempotency", columnNames = {
                                 "tenant_id",
                                 "idempotency_key"
-                        })
-        })
+                })
+})
 public class CommercialPayment {
 
-    @Id
-    @GeneratedValue
-    private UUID id;
+        @Id
+        @GeneratedValue
+        private UUID id;
 
-    @Column(
-            name = "tenant_id",
-            nullable = false,
-            updatable = false)
-    private UUID tenantId;
+        @Column(name = "tenant_id", nullable = false, updatable = false)
+        private UUID tenantId;
 
-    @Column(
-            name = "invoice_id",
-            nullable = false,
-            updatable = false)
-    private UUID invoiceId;
+        @Column(name = "invoice_id", nullable = false, updatable = false)
+        private UUID invoiceId;
 
-    @Column(
-            name = "amount",
-            nullable = false,
-            precision = 19,
-            scale = 4)
-    private BigDecimal amount;
+        @Column(name = "amount", nullable = false, precision = 19, scale = 4)
+        private BigDecimal amount;
 
-    @Column(
-            name = "currency",
-            nullable = false,
-            length = 10)
-    private String currency;
+        @Column(name = "currency", nullable = false, length = 10)
+        private String currency;
 
-    @Column(
-            name = "idempotency_key",
-            nullable = false,
-            length = 255)
-    private String idempotencyKey;
+        @Column(name = "idempotency_key", nullable = false, length = 255)
+        private String idempotencyKey;
 
-    @Column(
-            name = "reference",
-            length = 255)
-    private String reference;
+        @Column(name = "reference", length = 255)
+        private String reference;
 
-    @Column(
-            name = "receipt_no",
-            length = 120)
-    private String receiptNo;
+        @Column(name = "payment_method", nullable = false, length = 40)
+        private String paymentMethod = "UNSPECIFIED";
 
-    @Column(name = "income_source_id")
-    private UUID incomeSourceId;
+        @Column(name = "receipt_no", length = 120)
+        private String receiptNo;
 
-    @Column(
-            name = "created_at",
-            nullable = false,
-            updatable = false)
-    private Instant createdAt = Instant.now();
+        @Column(name = "income_source_id")
+        private UUID incomeSourceId;
 
-    protected CommercialPayment() {
-    }
+        @Column(name = "created_at", nullable = false, updatable = false)
+        private Instant createdAt = Instant.now();
 
-    /**
-     * Backward-compatible constructor.
-     */
-    public CommercialPayment(
-            UUID tenantId,
-            UUID invoiceId,
-            BigDecimal amount,
-            String currency,
-            String key,
-            String reference) {
+        protected CommercialPayment() {
+        }
 
-        this(
-                tenantId,
-                invoiceId,
-                amount,
-                currency,
-                key,
-                reference,
-                null,
-                null);
-    }
+        /**
+         * Backward-compatible constructor.
+         */
+        public CommercialPayment(
+                        UUID tenantId,
+                        UUID invoiceId,
+                        BigDecimal amount,
+                        String currency,
+                        String key,
+                        String reference) {
 
-    /**
-     * Backward-compatible constructor with income classification.
-     */
-    public CommercialPayment(
-            UUID tenantId,
-            UUID invoiceId,
-            BigDecimal amount,
-            String currency,
-            String key,
-            String reference,
-            UUID incomeSourceId) {
+                this(
+                                tenantId,
+                                invoiceId,
+                                amount,
+                                currency,
+                                key,
+                                reference,
+                                null,
+                                null);
+        }
 
-        this(
-                tenantId,
-                invoiceId,
-                amount,
-                currency,
-                key,
-                reference,
-                incomeSourceId,
-                null);
-    }
+        /**
+         * Backward-compatible constructor with income classification.
+         */
+        public CommercialPayment(
+                        UUID tenantId,
+                        UUID invoiceId,
+                        BigDecimal amount,
+                        String currency,
+                        String key,
+                        String reference,
+                        UUID incomeSourceId) {
 
-    /**
-     * Canonical constructor.
-     *
-     * receiptNo is generated by FinanceDocumentSequenceService before the
-     * payment is persisted.
-     */
-    public CommercialPayment(
-            UUID tenantId,
-            UUID invoiceId,
-            BigDecimal amount,
-            String currency,
-            String key,
-            String reference,
-            UUID incomeSourceId,
-            String receiptNo) {
+                this(
+                                tenantId,
+                                invoiceId,
+                                amount,
+                                currency,
+                                key,
+                                reference,
+                                incomeSourceId,
+                                null);
+        }
 
-        this.tenantId = tenantId;
-        this.invoiceId = invoiceId;
-        this.amount = amount;
-        this.currency = currency;
-        this.idempotencyKey = key;
-        this.reference = reference;
-        this.incomeSourceId = incomeSourceId;
-        this.receiptNo = receiptNo;
-    }
+        /**
+         * Canonical constructor.
+         *
+         * receiptNo is generated by FinanceDocumentSequenceService before the
+         * payment is persisted.
+         */
+        public CommercialPayment(
+                        UUID tenantId,
+                        UUID invoiceId,
+                        BigDecimal amount,
+                        String currency,
+                        String key,
+                        String reference,
+                        UUID incomeSourceId,
+                        String receiptNo) {
 
-    public UUID getId() {
-        return id;
-    }
+                this.tenantId = tenantId;
+                this.invoiceId = invoiceId;
+                this.amount = amount;
+                this.currency = currency;
+                this.idempotencyKey = key;
+                this.reference = reference;
+                this.incomeSourceId = incomeSourceId;
+                this.receiptNo = receiptNo;
+        }
 
-    public UUID getTenantId() {
-        return tenantId;
-    }
+        public UUID getId() {
+                return id;
+        }
 
-    public UUID getInvoiceId() {
-        return invoiceId;
-    }
+        public UUID getTenantId() {
+                return tenantId;
+        }
 
-    public BigDecimal getAmount() {
-        return amount;
-    }
+        public UUID getInvoiceId() {
+                return invoiceId;
+        }
 
-    public String getCurrency() {
-        return currency;
-    }
+        public BigDecimal getAmount() {
+                return amount;
+        }
 
-    public String getIdempotencyKey() {
-        return idempotencyKey;
-    }
+        public String getCurrency() {
+                return currency;
+        }
 
-    public String getReference() {
-        return reference;
-    }
+        public String getIdempotencyKey() {
+                return idempotencyKey;
+        }
 
-    public String getReceiptNo() {
-        return receiptNo;
-    }
+        public String getReference() {
+                return reference;
+        }
 
-    public UUID getIncomeSourceId() {
-        return incomeSourceId;
-    }
+        public String getReceiptNo() {
+                return receiptNo;
+        }
 
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
+        public String getPaymentMethod() {
+                return paymentMethod;
+        }
+
+        public void setPaymentMethod(String paymentMethod) {
+                this.paymentMethod = paymentMethod;
+        }
+
+        public UUID getIncomeSourceId() {
+                return incomeSourceId;
+        }
+
+        public Instant getCreatedAt() {
+                return createdAt;
+        }
 }

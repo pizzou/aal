@@ -1,6 +1,7 @@
 package com.logiplatform.controller;
 
 import com.logiplatform.service.AalExcelImportService;
+import com.logiplatform.service.AalExcelPreflightService;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,9 +17,18 @@ import java.util.List;
 @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
 public class AalExcelImportController {
     private final AalExcelImportService service;
+    private final AalExcelPreflightService preflight;
 
-    public AalExcelImportController(AalExcelImportService service) {
+    public AalExcelImportController(AalExcelImportService service, AalExcelPreflightService preflight) {
         this.service = service;
+        this.preflight = preflight;
+    }
+
+    /** Preflight does not write any shipment, invoice or journal entries. */
+    @PostMapping(value = "/excel/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public AalExcelPreflightService.Preview preview(
+            @RequestPart("files") List<MultipartFile> files) {
+        return preflight.preview(files);
     }
 
     /**

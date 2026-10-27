@@ -1,6 +1,7 @@
-package com.logiplatform.service;
+package com.logiplatform;
 
 import com.logiplatform.security.TenantPrincipal;
+import com.logiplatform.service.EnterpriseCompletionService;
 import com.logiplatform.tenancy.TenantContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -51,7 +52,8 @@ class EnterpriseSafetyControlsTest {
         UUID declaration = UUID.randomUUID();
         TenantContext.setTenantId(tenant);
         when(db.queryForMap(anyString(), any(Object[].class))).thenReturn(
-                Map.of("id", declaration, "status", "DRAFT", "hs_codes", "0901", "declared_value", new BigDecimal("100.00")),
+                Map.of("id", declaration, "status", "DRAFT", "hs_codes", "0901", "declared_value",
+                        new BigDecimal("100.00")),
                 Map.of("declaration_id", declaration, "status", "QUEUED"));
         var result = service.submitCustoms(new com.logiplatform.dto.EnterpriseCompletionDtos.CustomsSubmissionRequest(
                 declaration, "customs-idem-1", "FAKE-RELEASE"));

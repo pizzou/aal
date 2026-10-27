@@ -1099,7 +1099,41 @@ export interface AalExcelImportResult {
   expenses: number;
 }
 
+export interface AalExcelPreflightIssue {
+  workbook: string;
+  sheet: string;
+  row: number;
+  severity: "BLOCKER" | "WARNING";
+  code: string;
+  message: string;
+}
+
+export interface AalExcelPreflight {
+  shipmentRows: number;
+  distinctAwbs: number;
+  billed: number;
+  collected: number;
+  receivable: number;
+  supplierPayments: number;
+  blockers: number;
+  warnings: number;
+  readyToImport: boolean;
+  sheetsReviewed: string[];
+  issues: AalExcelPreflightIssue[];
+}
+
 export const aalExcelImportApi = {
+  previewWorkbooks: async (files: File[]): Promise<AalExcelPreflight> => {
+    const body = new FormData();
+    files.forEach((file) => body.append("files", file));
+    return apiFetch<AalExcelPreflight>(
+      "/api/command-center/import/excel/preview",
+      {
+        method: "POST",
+        body,
+      },
+    );
+  },
   importWorkbooks: async (files: File[]) => {
     const body = new FormData();
     files.forEach((file) => body.append("files", file));

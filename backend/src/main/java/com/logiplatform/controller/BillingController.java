@@ -28,7 +28,8 @@ public class BillingController {
         }
 
         public record PaymentRequest(@NotNull @Positive BigDecimal amount,
-                        String currency, String reference, UUID incomeSourceId) {
+                        String currency, String reference, UUID incomeSourceId,
+                        @jakarta.validation.constraints.NotBlank String paymentMethod) {
         }
 
         @GetMapping("/shipments/{shipmentId}/invoice/vat-preview")
@@ -58,11 +59,18 @@ public class BillingController {
                                 request.taxJurisdictionCode(), request.taxCode());
         }
 
+        @GetMapping("/invoices/{invoiceId}/payments")
+        public java.util.List<com.logiplatform.model.CommercialPayment> paymentHistory(
+                        @PathVariable UUID invoiceId) {
+                return service.paymentHistory(invoiceId);
+        }
+
         @PostMapping("/invoices/{invoiceId}/payments")
         public CommercialInvoice payment(@PathVariable UUID invoiceId,
                         @RequestHeader("Idempotency-Key") String idempotencyKey,
                         @Valid @RequestBody PaymentRequest request) {
                 return service.recordPayment(invoiceId, request.amount(), request.currency(),
-                                idempotencyKey, request.reference(), request.incomeSourceId());
+                                idempotencyKey, request.reference(), request.incomeSourceId(),
+                                request.paymentMethod());
         }
 }

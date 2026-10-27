@@ -52,6 +52,7 @@ public class AalExcelImportService {
         private final TaskRecordRepository tasks;
         private final ExpenseRecordRepository expenses;
         private final FinancePostingService financePostingService;
+        private final AalExcelPreflightService preflightService;
         private final com.logiplatform.repository.AalImportBatchRepository importBatches;
 
         @PersistenceContext
@@ -70,6 +71,7 @@ public class AalExcelImportService {
                         TaskRecordRepository tasks,
                         ExpenseRecordRepository expenses,
                         FinancePostingService financePostingService,
+                        AalExcelPreflightService preflightService,
                         com.logiplatform.repository.AalImportBatchRepository importBatches) {
 
                 this.shipments = shipments;
@@ -80,6 +82,7 @@ public class AalExcelImportService {
                 this.tasks = tasks;
                 this.expenses = expenses;
                 this.financePostingService = financePostingService;
+                this.preflightService = preflightService;
                 this.importBatches = importBatches;
         }
 
@@ -133,6 +136,18 @@ public class AalExcelImportService {
                                 throw new IllegalArgumentException(
                                                 "Combined workbook size exceeds the 200 MB batch limit");
                         }
+                }
+
+                AalExcelPreflightService.Preview preflight = preflightService.preview(files);
+                if (!preflight.readyToImport()) {
+                        String first = preflight.issues().stream()
+                                        .filter(issue -> "BLOCKER".equals(issue.severity()))
+                                        .findFirst()
+                                        .map(issue -> issue.sheet() + " row " + issue.row() + ": " + issue.message())
+                                        .orElse("Financial preflight did not pass");
+                        throw new IllegalArgumentException("Excel import refused (" + preflight.blockers()
+                                        + " blocker(s)). " + first
+                                        + ". Run the Preview first and correct the workbook.");
                 }
 
                 UUID tenant = TenantContext.getTenantId();
@@ -232,6 +247,16 @@ public class AalExcelImportService {
                                                         item.descriptor().headerRow());
                                         default -> {
                                         }
+                                }
+                        }
+
+                        // MOTHERSHIP records store customers as plain names. Populate
+                        // customer master records *after* any structured Clients
+                        // sheet so richer customer data takes precedence.
+                        for (SheetAndDescriptor item : detected) {
+                                if (item.descriptor().kind() == SheetKind.SHIPMENT_MOTHERSHIP) {
+                                        clients += importMonthlyClients(item.sheet(), tenant,
+                                                        item.descriptor().headerRow());
                                 }
                         }
 
@@ -799,6 +824,39 @@ public class AalExcelImportService {
                 }
 
                 return count;
+        }
+
+        /**
+         * Creates one customer master record for each distinct MOTHERSHIP client.
+         * Customer contact data is carried forward; it is not fabricated.
+         */
+        private int importMonthlyClients(Sheet sheet, UUID tenant, int headerRow) {
+                Map<String, Integer> h = headers(sheet.getRow(headerRow));
+                int created = 0;
+                for (int i = headerRow + 1; i <= sheet.getLastRowNum(); i++) {
+                        Row row = sheet.getRow(i);
+                        if (row == null || blank(value(row, h, "AWB NO")))
+                                continue;
+                        String company = value(row, h, "NAME OF CLIENT").trim();
+                        if (company.isEmpty() || clients.findFirstByTenantIdAndClientCompanyIgnoreCase(tenant, company)
+                                        .isPresent()) {
+                                continue;
+                        }
+                        String key = tenant + "|AAL-MOTHERSHIP-CLIENT|" + company.toUpperCase(Locale.ROOT);
+                        String stableId = UUID.nameUUIDFromBytes(key.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                                        .toString().substring(0, 18).toUpperCase(Locale.ROOT);
+                        String clientId = "LEGACY-" + stableId;
+                        if (clients.findByTenantIdAndClientId(tenant, clientId).isPresent()) {
+                                // Never overwrite a different existing customer on a generated-key collision.
+                                throw new IllegalStateException("Historical customer ID collision for " + company);
+                        }
+                        clients.save(new ClientRecord(tenant, clientId, company, "",
+                                        value(row, h, "CONTACT"), "", "", "", "", "MOTHERSHIP_IMPORT",
+                                        "ACTIVE", value(row, h, "OPERATOR"), null,
+                                        "Historical customer imported from AAL MOTHERSHIP; verify contact and onboarding details."));
+                        created++;
+                }
+                return created;
         }
 
         private int importQuotes(

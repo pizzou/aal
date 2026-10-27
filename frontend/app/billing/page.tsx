@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
   apiFetch,
@@ -124,6 +124,13 @@ export default function BillingPage() {
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("BANK_TRANSFER");
+  // Keep the same receipt identity across network retries. A second random ID
+  // after a timeout could record duplicate customer cash against one invoice.
+  const pendingPaymentKey = useRef<string | null>(null);
+  useEffect(() => {
+    pendingPaymentKey.current = null;
+  }, [paymentInvoice?.id]);
   const [incomeSources, setIncomeSources] = useState<FinanceIncomeSource[]>([]);
   const [incomeSourceId, setIncomeSourceId] = useState("");
   const [reconciliation, setReconciliation] = useState<any>(null);
@@ -409,17 +416,25 @@ export default function BillingPage() {
       if (amount > paymentInvoice.balance) {
         throw new Error("Payment cannot exceed the invoice balance.");
       }
+      if (!paymentReference.trim()) {
+        throw new Error(
+          "Payment evidence/reference is required for audit and reconciliation.",
+        );
+      }
 
       await apiFetch<Invoice>(
         `/api/billing/invoices/${paymentInvoice.id}/payments`,
         {
           method: "POST",
           headers: {
-            "Idempotency-Key": makeIdempotencyKey(),
+            "Idempotency-Key":
+              pendingPaymentKey.current ??
+              (pendingPaymentKey.current = makeIdempotencyKey()),
           },
           body: JSON.stringify({
             amount,
-            reference: paymentReference.trim() || undefined,
+            reference: paymentReference.trim(),
+            paymentMethod,
             incomeSourceId: incomeSourceId || undefined,
           }),
         },
@@ -440,6 +455,7 @@ export default function BillingPage() {
       }
 
       setLastReceipt(receipt);
+      pendingPaymentKey.current = null;
       setPaymentInvoice(null);
       setPaymentAmount("");
       setPaymentReference("");
@@ -1150,6 +1166,19 @@ export default function BillingPage() {
                 />
               </label>
 
+              <label className="field">
+                <span>Payment method</span>
+                <select
+                  value={paymentMethod}
+                  onChange={(event) => setPaymentMethod(event.target.value)}
+                >
+                  <option value="BANK_TRANSFER">Bank transfer</option>
+                  <option value="MOBILE_MONEY">Mobile money</option>
+                  <option value="CASH">Cash</option>
+                  <option value="CARD">Card</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </label>
               <label className="field">
                 <span>Payment reference</span>
                 <input

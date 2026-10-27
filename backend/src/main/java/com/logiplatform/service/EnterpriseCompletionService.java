@@ -12,6 +12,7 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +47,7 @@ public class EnterpriseCompletionService {
 
     @Transactional
     public MfaSetupResponse setupMfa(UUID userId) {
+        requireOwnAccount(userId);
         String secret = base32(randomBytes(20));
         String enc = encrypt(secret);
         db.update(
@@ -57,6 +59,7 @@ public class EnterpriseCompletionService {
 
     @Transactional
     public MfaStatusResponse verifyMfa(UUID userId, String code) {
+        requireOwnAccount(userId);
         String enc = db.query("SELECT mfa_secret_enc FROM users WHERE id=? AND tenant_id=?",
                 rs -> rs.next() ? rs.getString(1) : null,
                 userId, TenantContext.getTenantId());
@@ -73,12 +76,14 @@ public class EnterpriseCompletionService {
 
     @Transactional
     public void disableMfa(UUID userId) {
+        requireOwnAccount(userId);
         db.update(
                 "UPDATE users SET mfa_enabled=false, mfa_secret_enc=NULL, mfa_verified_at=NULL WHERE id=? AND tenant_id=?",
                 userId, TenantContext.getTenantId());
     }
 
     public MfaStatusResponse mfaStatus(UUID userId) {
+        requireOwnAccount(userId);
         return db.query("SELECT mfa_secret_enc,mfa_enabled,mfa_verified_at FROM users WHERE id=? AND tenant_id=?",
                 rs -> rs.next()
                         ? new MfaStatusResponse(rs.getString(1) != null, rs.getBoolean(2),
@@ -88,6 +93,7 @@ public class EnterpriseCompletionService {
     }
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public FxRateResponse upsertFx(FxRateRequest r) {
         UUID t = TenantContext.getTenantId();
         db.update(
@@ -109,28 +115,36 @@ public class EnterpriseCompletionService {
     }
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public PeriodResponse openPeriod(PeriodRequest r) {
         if (r.periodEnd().isBefore(r.periodStart()))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid financial period");
         UUID t = TenantContext.getTenantId();
+        // Serialize period creation per tenant, so concurrent staff cannot open
+        // overlapping periods after independently passing an existence check.
+        db.queryForList("SELECT pg_advisory_xact_lock(hashtext(?))", t.toString());
+        Integer overlaps = db.queryForObject(
+                "SELECT count(*) FROM finance_periods WHERE tenant_id=? AND period_start<=? AND period_end>=?",
+                Integer.class, t, r.periodEnd(), r.periodStart());
+        if (overlaps != null && overlaps > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Financial period overlaps an existing period; choose non-overlapping dates");
+        }
         db.update("INSERT INTO finance_periods(tenant_id,period_start,period_end,status,notes) VALUES(?,?,?,?,?)", t,
                 r.periodStart(), r.periodEnd(), "OPEN", r.notes());
         return period(t, r.periodStart(), r.periodEnd());
     }
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public PeriodResponse closePeriod(UUID id) {
-        UUID t = TenantContext.getTenantId();
-        int n = db.update(
-                "UPDATE finance_periods SET status='CLOSED',closed_at=now(),closed_by=? WHERE id=? AND tenant_id=? AND status='OPEN'",
-                currentUser(), id, t);
-        if (n == 0)
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Financial period not found or already closed");
+        closeFinancePeriod(id);
         return db.queryForObject(
                 "SELECT id,period_start,period_end,status,closed_at,notes FROM finance_periods WHERE id=? AND tenant_id=?",
-                this::periodRow, id, t);
+                this::periodRow, id, tenant());
     }
 
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public List<PeriodResponse> periods() {
         return db.query(
                 "SELECT id,period_start,period_end,status,closed_at,notes FROM finance_periods WHERE tenant_id=? ORDER BY period_start DESC",
@@ -138,6 +152,7 @@ public class EnterpriseCompletionService {
     }
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public AdjustmentResponse createAdjustment(AdjustmentRequest r) {
         UUID t = TenantContext.getTenantId();
         db.update(
@@ -150,6 +165,7 @@ public class EnterpriseCompletionService {
     }
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public AdjustmentResponse approveAdjustment(UUID id) {
         int n = db.update(
                 "UPDATE finance_adjustments SET status='APPROVED',approved_at=now() WHERE id=? AND tenant_id=? AND status='DRAFT'",
@@ -161,6 +177,7 @@ public class EnterpriseCompletionService {
                 this::adjustmentRow, id, TenantContext.getTenantId());
     }
 
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public List<AdjustmentResponse> adjustments() {
         return db.query(
                 "SELECT id,adjustment_no,adjustment_type,invoice_id,shipment_id,amount,currency,reason,status FROM finance_adjustments WHERE tenant_id=? ORDER BY created_at DESC",
@@ -482,26 +499,58 @@ public class EnterpriseCompletionService {
     }
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> createCarrierSettlement(CarrierSettlementRequest r) {
         ensureShipment(r.shipmentId());
+        if (r.amount() == null || r.amount().signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Carrier settlement must have a positive amount");
+        }
+        if (!currency(r.currency()).matches("[A-Z]{3}")) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Carrier settlement currency must be a three-letter ISO code");
+        }
         UUID id = UUID.randomUUID();
         db.update(
-                "INSERT INTO carrier_settlements(id,tenant_id,carrier_id,carrier_name,shipment_id,tender_id,settlement_no,amount,currency,notes) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO carrier_settlements(id,tenant_id,carrier_id,carrier_name,shipment_id,tender_id,settlement_no,amount,currency,notes,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 id, tenant(), r.carrierId(), r.carrierName(), r.shipmentId(), r.tenderId(), norm(r.settlementNo()),
-                r.amount(), currency(r.currency()), r.notes());
+                r.amount(), currency(r.currency()), r.notes(), currentUserId());
         return one("SELECT * FROM carrier_settlements WHERE settlement_no=?", norm(r.settlementNo()));
     }
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> approveCarrierSettlement(UUID id) {
-        Map<String, Object> row = one("SELECT id,status FROM carrier_settlements WHERE id=?", id);
-        db.update(
-                "UPDATE carrier_settlements SET status='APPROVED',approved_by=?,approved_at=now() WHERE id=? AND tenant_id=?",
-                currentUserId(), id, tenant());
-        return one("SELECT * FROM carrier_settlements WHERE id=?", id);
+        Map<String, Object> row = one(
+                "SELECT id,status,created_by,amount,currency FROM carrier_settlements WHERE id=? AND tenant_id=? FOR UPDATE",
+                id, tenant());
+        if (!"DRAFT".equalsIgnoreCase(Objects.toString(row.get("status")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only draft carrier settlements can be approved");
+        }
+        if (row.get("created_by") == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Legacy settlement has no identified preparer; verify and re-create it before approving");
+        }
+        if (currentUserId().equals(row.get("created_by"))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "The preparer cannot approve their own carrier settlement");
+        }
+        if (decimal((Number) row.get("amount")).signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Carrier settlement must have a positive amount");
+        }
+        int updated = db.update(
+                "UPDATE carrier_settlements SET status='APPROVED',approved_by=?,approved_at=now() "
+                        + "WHERE id=? AND tenant_id=? AND status='DRAFT' AND created_by<>?",
+                currentUserId(), id, tenant(), currentUserId());
+        if (updated != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Carrier settlement approval conflict");
+        }
+        return one("SELECT * FROM carrier_settlements WHERE id=? AND tenant_id=?", id, tenant());
     }
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> createFinanceNote(FinanceNoteRequest r) {
         if (!Set.of("CREDIT", "DEBIT").contains(norm(r.noteType())))
             throw bad("noteType must be CREDIT or DEBIT");
@@ -534,27 +583,143 @@ public class EnterpriseCompletionService {
     }
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> closeFinancePeriod(UUID periodId) {
-        Map<String, Object> p = one("SELECT * FROM finance_periods WHERE id=?", periodId);
-        if (!"OPEN".equalsIgnoreCase(Objects.toString(p.get("status"))))
-            throw bad("Financial period is already closed");
-        db.update("UPDATE finance_periods SET status='CLOSED',closed_at=now(),closed_by=? WHERE id=? AND tenant_id=?",
-                currentUserId(), periodId, tenant());
-        return one("SELECT * FROM finance_periods WHERE id=?", periodId);
+        Map<String, Object> p = one(
+                "SELECT id,status,period_start,period_end FROM finance_periods WHERE id=? AND tenant_id=? FOR UPDATE",
+                periodId, tenant());
+        if (!"OPEN".equalsIgnoreCase(Objects.toString(p.get("status")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Financial period is not open");
+        }
+        LocalDate start = sqlDate(p.get("period_start"));
+        LocalDate end = sqlDate(p.get("period_end"));
+        if (!end.isBefore(LocalDate.now(java.time.ZoneId.of("Africa/Kigali")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "The financial period may only be closed after its end date");
+        }
+        assertBalancedPeriod(ledgerRows(start, end));
+        int count = db.update("UPDATE finance_periods SET status='CLOSED',closed_at=now(),closed_by=? "
+                + "WHERE id=? AND tenant_id=? AND status='OPEN'", currentUserId(), periodId, tenant());
+        if (count != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Concurrent financial period close detected");
+        }
+        return one("SELECT * FROM finance_periods WHERE id=? AND tenant_id=?", periodId, tenant());
     }
 
+    /** A reproducible period-scoped, balanced, persisted GL export (not a summary). */
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> generateAccountingExport(AccountingExportRequest r) {
+        if (r.periodId() == null) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Select a closed financial period");
+        }
+        if (!"CSV".equals(norm(r.exportType()))) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Only CSV ledger export is implemented. No placeholder exports will be marked completed");
+        }
+        Map<String, Object> period = one(
+                "SELECT period_start,period_end,status FROM finance_periods WHERE id=? AND tenant_id=? FOR SHARE",
+                r.periodId(), tenant());
+        if (!"CLOSED".equalsIgnoreCase(Objects.toString(period.get("status")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Close and reconcile the financial period before exporting it");
+        }
+        LocalDate start = sqlDate(period.get("period_start"));
+        LocalDate end = sqlDate(period.get("period_end"));
+        List<Map<String, Object>> entries = ledgerRows(start, end);
+        assertBalancedPeriod(entries);
+        StringBuilder csv = new StringBuilder(
+                "entry_id,posted_at,invoice_id,source_type,source_id,entry_type,account_code,amount,currency,description\r\n");
+        for (Map<String, Object> e : entries) {
+            String[] fields = {
+                    field(e, "id"), field(e, "posted_at"), field(e, "invoice_id"),
+                    field(e, "source_type"), field(e, "source_id"), field(e, "entry_type"),
+                    field(e, "account_code"), field(e, "amount"), field(e, "currency"),
+                    field(e, "description")
+            };
+            for (int i = 0; i < fields.length; i++) {
+                if (i != 0) csv.append(',');
+                csv.append(csvCell(fields[i]));
+            }
+            csv.append("\r\n");
+            if (csv.length() > 5_000_000) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "Export exceeds 5 MB safety limit. A paginated object-storage export is required");
+            }
+        }
+        String payload = csv.toString();
         UUID id = UUID.randomUUID();
-        Map<String, Object> totals = one(
-                "SELECT COUNT(*) row_count,COALESCE(SUM(amount),0) amount FROM finance_ledger_entries WHERE tenant_id=?",
-                tenant());
-        String payload = toJson(Map.of("periodId", r.periodId(), "exportType", norm(r.exportType()), "totals", totals));
         db.update(
-                "INSERT INTO accounting_exports(id,tenant_id,period_id,export_type,status,row_count,payload_hash,exported_at) VALUES(?,?,?,?,?,?,?,now())",
-                id, tenant(), r.periodId(), norm(r.exportType()), "COMPLETED",
-                ((Number) totals.get("row_count")).intValue(), sha256(payload));
-        return one("SELECT * FROM accounting_exports WHERE id=?", id);
+                "INSERT INTO accounting_exports(id,tenant_id,period_id,export_type,status,row_count,payload_hash,payload_csv,exported_at) "
+                        + "VALUES(?,?,?,?,?,?,?,?,now())",
+                id, tenant(), r.periodId(), "CSV", "COMPLETED", entries.size(), sha256(payload), payload);
+        return one("SELECT id,period_id,export_type,status,row_count,payload_hash,created_at,exported_at "
+                + "FROM accounting_exports WHERE id=? AND tenant_id=?", id, tenant());
+    }
+
+    @Transactional(readOnly = true)
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
+    public byte[] accountingExportFile(UUID id) {
+        Map<String, Object> row = one(
+                "SELECT payload_csv,payload_hash,status FROM accounting_exports WHERE id=? AND tenant_id=? AND export_type='CSV'",
+                id, tenant());
+        String payload = Objects.toString(row.get("payload_csv"), "");
+        if (!"COMPLETED".equals(row.get("status")) || payload.isEmpty()
+                || !sha256(payload).equals(row.get("payload_hash"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Accounting export not complete or checksum mismatch");
+        }
+        return payload.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private List<Map<String, Object>> ledgerRows(LocalDate start, LocalDate end) {
+        return db.queryForList(
+                "SELECT id,posted_at,invoice_id,source_type,source_id,entry_type,account_code,amount,currency,description "
+                        + "FROM finance_ledger_entries WHERE tenant_id=? "
+                        + "AND posted_at >= (?::date::timestamp AT TIME ZONE 'Africa/Kigali') "
+                        + "AND posted_at < ((?::date + 1)::timestamp AT TIME ZONE 'Africa/Kigali') "
+                        + "ORDER BY posted_at,id",
+                tenant(), java.sql.Date.valueOf(start), java.sql.Date.valueOf(end));
+    }
+
+    /** Check debits and credits PER currency, never net different currencies together. */
+    private void assertBalancedPeriod(List<Map<String, Object>> entries) {
+        Map<String, BigDecimal> balances = new TreeMap<>();
+        for (Map<String, Object> row : entries) {
+            String currency = Objects.toString(row.get("currency"), "").toUpperCase(Locale.ROOT);
+            String type = Objects.toString(row.get("entry_type"), "").toUpperCase(Locale.ROOT);
+            if (currency.isBlank() || !Set.of("DEBIT", "CREDIT").contains(type)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Ledger contains invalid currency or entry type");
+            }
+            BigDecimal amount = decimal((Number) row.get("amount"));
+            if (amount.signum() < 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Ledger contains negative posting amount");
+            }
+            balances.merge(currency, "DEBIT".equals(type) ? amount : amount.negate(), BigDecimal::add);
+        }
+        for (var entry : balances.entrySet()) {
+            if (entry.getValue().signum() != 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Financial period unbalanced in " + entry.getKey() + ": " + entry.getValue());
+            }
+        }
+    }
+
+    private static LocalDate sqlDate(Object value) {
+        if (value instanceof java.sql.Date date) return date.toLocalDate();
+        if (value instanceof LocalDate date) return date;
+        return LocalDate.parse(String.valueOf(value));
+    }
+
+    private static String field(Map<String, Object> row, String name) {
+        Object value = row.get(name);
+        if (value instanceof java.sql.Timestamp time) return time.toInstant().toString();
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    /** RFC-4180 escaping plus prevention of spreadsheet formula injection. */
+    static String csvCell(String value) {
+        String sanitized = value == null ? "" : value;
+        if (!sanitized.isEmpty() && "=+-@".indexOf(sanitized.charAt(0)) >= 0) sanitized = "'" + sanitized;
+        return "\"" + sanitized.replace("\"", "\"\"") + "\"";
     }
 
     @Transactional
@@ -656,28 +821,51 @@ public class EnterpriseCompletionService {
         return one("SELECT * FROM cargo_documents WHERE id=?", documentId);
     }
 
+    /**
+     * Records an *intent* to submit. No customs authority has acknowledged it yet.
+     * A supplied external reference from a staff browser is NOT proof of acceptance.
+     * The idempotency key cannot be reused against a different declaration.
+     */
     @Transactional
     public Map<String, Object> submitCustoms(CustomsSubmissionRequest r) {
-        ensureDeclaration(r.declarationId());
+        Map<String, Object> declaration = one(
+                "SELECT id,status,hs_codes,declared_value FROM customs_declarations WHERE id=? AND tenant_id=? FOR UPDATE",
+                r.declarationId(), tenant());
+        String status = Objects.toString(declaration.get("status"), "DRAFT").toUpperCase(Locale.ROOT);
+        if (Set.of("RELEASED", "REJECTED", "HOLD").contains(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Customs declaration cannot be queued in its current state");
+        }
+        if (Objects.toString(declaration.get("hs_codes"), "").isBlank()
+                || declaration.get("declared_value") == null
+                || decimal((Number) declaration.get("declared_value")).signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "HS codes and positive declared value are required before customs submission");
+        }
         UUID id = UUID.randomUUID();
         db.update(
-                "INSERT INTO customs_submission_attempts(id,tenant_id,declaration_id,idempotency_key,status,external_reference,response_message) VALUES(?,?,?,?,?,?,?) ON CONFLICT(tenant_id,declaration_id,idempotency_key) DO NOTHING",
-                id, tenant(), r.declarationId(), r.idempotencyKey(), "QUEUED", r.externalReference(),
-                "Submission queued through provider adapter");
+                "INSERT INTO customs_submission_attempts(id,tenant_id,declaration_id,idempotency_key,status,response_message) "
+                        + "VALUES(?,?,?,?,?,'Awaiting verified customs or broker integration') "
+                        + "ON CONFLICT(tenant_id,declaration_id,idempotency_key) DO NOTHING",
+                id, tenant(), r.declarationId(), r.idempotencyKey().trim(), "QUEUED");
         db.update(
-                "UPDATE customs_declarations SET status='SUBMITTED',external_reference=COALESCE(?,external_reference),submitted_at=now(),submission_message='Submission queued through provider adapter' WHERE id=? AND tenant_id=?",
-                r.externalReference(), r.declarationId(), tenant());
-        return one("SELECT * FROM customs_submission_attempts WHERE declaration_id=? AND idempotency_key=?",
-                r.declarationId(), r.idempotencyKey());
+                "UPDATE customs_declarations SET status='QUEUED',submission_message='Awaiting verified customs or broker integration',updated_at=now() "
+                        + "WHERE id=? AND tenant_id=? AND status IN ('DRAFT','READY_FOR_SUBMISSION','QUEUED')",
+                r.declarationId(), tenant());
+        // Never record a user-supplied externalReference as authority-confirmed evidence.
+        return one("SELECT * FROM customs_submission_attempts WHERE tenant_id=? AND declaration_id=? AND idempotency_key=?",
+                tenant(), r.declarationId(), r.idempotencyKey().trim());
     }
 
+    /**
+     * Retained for older clients, but deliberately fail closed. Only independently
+     * authenticated authority acknowledgements may set RELEASED. A staff action
+     * cannot certify a customs decision.
+     */
     @Transactional
     public Map<String, Object> releaseCustoms(UUID declarationId) {
         ensureDeclaration(declarationId);
-        db.update(
-                "UPDATE customs_declarations SET status='RELEASED' WHERE id=? AND tenant_id=? AND status NOT IN ('REJECTED','HOLD')",
-                declarationId, tenant());
-        return one("SELECT * FROM customs_declarations WHERE id=?", declarationId);
+        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Manual customs release is disabled: verified customs authority acknowledgment is required");
     }
 
     @Transactional
@@ -1033,12 +1221,19 @@ public class EnterpriseCompletionService {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
     }
 
+    private void requireOwnAccount(UUID userId) {
+        if (userId == null || !userId.equals(currentUserId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "MFA credentials may only be managed by their account owner");
+        }
+    }
+
     private UUID currentUserId() {
-        Authentication a = SecurityContextHolder.getContext().getAuthentication();
-        if (a == null || a.getName() == null)
-            return null;
-        Map<String, Object> row = nullable("SELECT id FROM users WHERE tenant_id=? AND email=?", tenant(), a.getName());
-        return row == null ? null : (UUID) row.get("id");
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.getPrincipal() instanceof com.logiplatform.security.TenantPrincipal principal) {
+            return principal.userId();
+        }
+        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "An authenticated staff identity is required");
     }
 
     private boolean entityExists(String entityType, UUID id) {

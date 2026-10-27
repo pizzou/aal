@@ -117,9 +117,20 @@ function customerNames(invoices: Invoice[]) {
     ),
   ].sort();
 }
+function currencyDigits(currency = "USD") {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency.trim().toUpperCase(),
+    }).resolvedOptions().maximumFractionDigits;
+  } catch {
+    return 2;
+  }
+}
 function money(value: unknown, currency = "") {
   const n = Number(value ?? 0);
-  return `${currency ? `${currency} ` : ""}${Number.isFinite(n) ? n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}`;
+  const digits = currency ? currencyDigits(currency) : 2;
+  return `${currency ? `${currency} ` : ""}${Number.isFinite(n) ? n.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits }) : "—"}`;
 }
 function dateQuery(client: string, from: string, to: string) {
   const q = new URLSearchParams({ client });
@@ -1263,13 +1274,13 @@ export default function FinancialHardeningPage() {
           <div>
             <h2>VAT and tax rules</h2>
             <p>
-              Rules are versioned by effective date and jurisdiction. Saving an
-              active default jurisdiction automatically creates a
-              currency-neutral 18% VAT rule when none is effective, so invoice
-              creators do not enter tax codes. Existing effective rules are
-              preserved. Tax is posted to a separate tax-payable ledger account;
-              rules with withholding are blocked until withholding-certificate
-              settlement is implemented.
+              Rules are versioned by effective date and jurisdiction. Invoice
+              creation uses the server-selected active 18% VAT rule and stores
+              an immutable tax snapshot. Exclusive treatment adds 18% to the
+              subtotal; inclusive treatment extracts VAT from the entered gross
+              amount. The invoice PDF shows the subtotal, VAT, and total
+              payable. The active 18% invoice VAT rule must use 0% withholding
+              until withholding-certificate settlement is implemented.
             </p>
           </div>
         </div>

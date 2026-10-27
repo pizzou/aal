@@ -475,11 +475,24 @@ public class AirCargoDocumentService {
             reconciliation.enqueue("CUSTOMS", "CUSTOMS_SUBMIT", "CUSTOMS_DECLARATION", declaration.getId(), "CUSTOMS-" + declaration.getId(), null, ex.getMessage());
             throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.ACCEPTED, "Customs submission outcome is unknown and has been queued for reconciliation");
         }
-        declaration.submit(
-                String.valueOf(response.getOrDefault("reference", "PENDING-EXTERNAL-ACK")),
-                String.valueOf(response.getOrDefault(
-                        "message",
-                        "Submitted to configured customs/broker endpoint")));
+        // A 2xx response may only mean the provider queued our job. Require an
+        // explicit provider acknowledgement and non-placeholder tracking reference.
+        String providerStatus = String.valueOf(response.getOrDefault("status", "")).trim()
+                .toUpperCase(java.util.Locale.ROOT);
+        String providerReference = String.valueOf(response.getOrDefault("reference", "")).trim();
+        boolean acknowledged = java.util.Set.of("ACCEPTED", "ACKNOWLEDGED", "RECEIVED", "SUBMITTED")
+                .contains(providerStatus) && !providerReference.isBlank()
+                && !providerReference.startsWith("PENDING")
+                && !Boolean.TRUE.equals(response.get("mockData"));
+        if (!acknowledged) {
+            reconciliation.enqueue("CUSTOMS", "CUSTOMS_ACK_PENDING", "CUSTOMS_DECLARATION",
+                    declaration.getId(), "CUSTOMS-" + declaration.getId(), providerReference,
+                    "Provider response has no verified submission acknowledgement");
+            throw new ResponseStatusException(HttpStatus.ACCEPTED,
+                    "Customs submission is pending provider acknowledgement, not submitted");
+        }
+        declaration.submit(providerReference,
+                String.valueOf(response.getOrDefault("message", "Provider acknowledged receipt")));
         customs.save(declaration);
         return map(declaration);
     }

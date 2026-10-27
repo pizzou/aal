@@ -56,11 +56,25 @@ type Invoice = {
   status: string;
 };
 
+function currencyDigits(currency = "USD") {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency.trim().toUpperCase(),
+    }).resolvedOptions().maximumFractionDigits;
+  } catch {
+    return 2;
+  }
+}
+
 function money(value: number | null | undefined, currency = "USD") {
-  return `${currency} ${(value ?? 0).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+  const code = currency.trim().toUpperCase() || "USD";
+  const digits = currencyDigits(code);
+  const amount = new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value ?? 0);
+  return `${code} ${amount}`;
 }
 
 function statusClass(status: string) {
@@ -221,27 +235,52 @@ export default function BillingPage() {
     });
   }, [invoices, search, filter]);
 
-  const totalInvoiced = invoices.reduce(
-    (sum, invoice) => sum + (invoice.invoiceAmount || 0),
-    0,
-  );
+  // Keep receivables separated by invoice currency. Adding RWF, USD and EUR
+  // values together without conversion would produce a misleading financial KPI.
+  const totalsByCurrency = useMemo(() => {
+    const totals: Record<
+      string,
+      {
+        invoiced: number;
+        collected: number;
+        outstanding: number;
+        overdue: number;
+      }
+    > = {};
+    for (const invoice of invoices) {
+      const status = (invoice.status || "").trim().toUpperCase();
+      if (["DRAFT", "VOID", "CANCELLED", "CANCELED"].includes(status)) continue;
+      const currency = (invoice.currency || "USD").trim().toUpperCase();
+      const current = (totals[currency] ??= {
+        invoiced: 0,
+        collected: 0,
+        outstanding: 0,
+        overdue: 0,
+      });
+      current.invoiced += Number(invoice.invoiceAmount) || 0;
+      current.collected += Number(invoice.amountPaid) || 0;
+      current.outstanding += Math.max(Number(invoice.balance) || 0, 0);
+      if (
+        (Number(invoice.balance) || 0) > 0 &&
+        (Number(invoice.daysOverdue) || 0) > 0
+      ) {
+        current.overdue += Number(invoice.balance) || 0;
+      }
+    }
+    return Object.entries(totals)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([currency, values]) => ({ currency, ...values }));
+  }, [invoices]);
 
-  const totalCollected = invoices.reduce(
-    (sum, invoice) => sum + (invoice.amountPaid || 0),
-    0,
-  );
-
-  const totalOutstanding = invoices.reduce(
-    (sum, invoice) => sum + (invoice.balance || 0),
-    0,
-  );
-
-  const overdue = invoices.reduce(
-    (sum, invoice) =>
-      sum +
-      (invoice.balance > 0 && invoice.daysOverdue > 0 ? invoice.balance : 0),
-    0,
-  );
+  function formatTotals(
+    metric: "invoiced" | "collected" | "outstanding" | "overdue",
+  ) {
+    return (
+      totalsByCurrency
+        .map((entry) => money(entry[metric], entry.currency))
+        .join(" · ") || "—"
+    );
+  }
 
   const selectedInvoiceShipment = shipments.find(
     (shipment) => shipment.id === invoiceShipment,
@@ -607,11 +646,18 @@ export default function BillingPage() {
           <div className="workflow-completion-copy">
             <strong>Invoice {createdInvoice.invoiceNo} ready</strong>
             <p>
-              {createdInvoice.client || "Customer"} ·{" "}
+              {createdInvoice.client || "Customer"} · Subtotal{" "}
+              {money(
+                createdInvoice.subtotalAmount ?? createdInvoice.invoiceAmount,
+                createdInvoice.currency,
+              )}
+              {createdInvoice.taxCode || (createdInvoice.taxRate ?? 0) > 0
+                ? ` · VAT ${createdInvoice.taxRate ?? 18}% ${money(createdInvoice.taxAmount, createdInvoice.currency)} (${createdInvoice.taxInclusive ? "included" : "added"})`
+                : ""}{" "}
+              · Total due{" "}
               {money(createdInvoice.invoiceAmount, createdInvoice.currency)} ·
               Due {createdInvoice.dueDate || "on receipt"}. The invoice is
-              saved; PDF actions are available below and do not affect invoice
-              creation.
+              saved; PDF actions do not affect invoice creation.
             </p>
             {createdInvoice.shipmentId && (
               <Link
@@ -703,7 +749,7 @@ export default function BillingPage() {
 
         <div className="finance-hero-total">
           <span>OUTSTANDING RECEIVABLES</span>
-          <strong>{money(totalOutstanding)}</strong>
+          <strong>{formatTotals("outstanding")}</strong>
           <small>
             {invoices.filter((invoice) => invoice.balance > 0).length} open
             invoices
@@ -714,25 +760,25 @@ export default function BillingPage() {
       <div className="grid grid-4 finance-kpis">
         <div className="card kpi premium-kpi">
           <div className="kpi-label">Total invoiced</div>
-          <div className="kpi-value">{money(totalInvoiced)}</div>
+          <div className="kpi-value">{formatTotals("invoiced")}</div>
           <div className="kpi-meta">Across all AAL invoices</div>
         </div>
 
         <div className="card kpi premium-kpi">
           <div className="kpi-label">Collected</div>
-          <div className="kpi-value">{money(totalCollected)}</div>
+          <div className="kpi-value">{formatTotals("collected")}</div>
           <div className="kpi-meta">Customer payments recorded</div>
         </div>
 
         <div className="card kpi premium-kpi">
           <div className="kpi-label">Outstanding</div>
-          <div className="kpi-value">{money(totalOutstanding)}</div>
+          <div className="kpi-value">{formatTotals("outstanding")}</div>
           <div className="kpi-meta">Current receivables</div>
         </div>
 
         <div className="card kpi premium-kpi danger-kpi">
           <div className="kpi-label">Overdue</div>
-          <div className="kpi-value">{money(overdue)}</div>
+          <div className="kpi-value">{formatTotals("overdue")}</div>
           <div className="kpi-meta">Requires collection action</div>
         </div>
       </div>
@@ -1235,7 +1281,7 @@ export default function BillingPage() {
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={10} className="empty">
+                  <td colSpan={12} className="empty">
                     Loading billing register…
                   </td>
                 </tr>
@@ -1397,9 +1443,20 @@ export default function BillingPage() {
                       </td>
 
                       <td>
-                        {invoice.taxAmount && invoice.taxAmount > 0
-                          ? `${money(invoice.taxAmount, invoice.currency)}${invoice.taxRate ? ` (${invoice.taxRate}%)` : ""}`
-                          : "—"}
+                        {invoice.taxCode || (invoice.taxRate ?? 0) > 0 ? (
+                          <>
+                            {money(invoice.taxAmount, invoice.currency)}
+                            {invoice.taxRate ? ` (${invoice.taxRate}%)` : ""}
+                            <div className="card-muted">
+                              {invoice.taxInclusive
+                                ? "Included in charge"
+                                : "Added to charge"}
+                              {invoice.taxCode ? ` · ${invoice.taxCode}` : ""}
+                            </div>
+                          </>
+                        ) : (
+                          "—"
+                        )}
                       </td>
 
                       <td>
@@ -1468,7 +1525,7 @@ export default function BillingPage() {
 
               {!loading && !filtered.length && (
                 <tr>
-                  <td colSpan={10} className="empty">
+                  <td colSpan={12} className="empty">
                     No invoices match the selected view.
                   </td>
                 </tr>

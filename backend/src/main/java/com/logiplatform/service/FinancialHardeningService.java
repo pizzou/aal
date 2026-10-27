@@ -696,6 +696,13 @@ public class FinancialHardeningService {
             throw bad("Unsupported tax type");
         if (!Set.of("INVOICE", "ALL").contains(normalizedApplies))
             throw bad("Tax rule applies-to must be INVOICE or ALL");
+        if (active && "VAT".equals(normalizedType)
+                && rate.compareTo(new BigDecimal("18")) == 0
+                && withholdingRate.signum() > 0
+                && ("INVOICE".equals(normalizedApplies) || "ALL".equals(normalizedApplies))) {
+            throw bad(
+                    "The active 18% invoice VAT rule must use a 0% withholding rate. Customer-withholding settlement is not enabled; saving a withholding rate here would prevent invoices from being issued.");
+        }
         UUID t = tenant();
         Boolean configured = db.query(
                 "SELECT EXISTS(SELECT 1 FROM finance_tax_jurisdictions WHERE tenant_id=? AND jurisdiction_code=?)",
@@ -934,21 +941,23 @@ public class FinancialHardeningService {
         String ruleCurrency = Objects.toString(rule.get("currency"), "");
         if (!blank(ruleCurrency) && !ruleCurrency.equalsIgnoreCase(normalizedCurrency))
             throw bad("Tax rule currency does not match document currency");
-        BigDecimal rate = n(rule.get("rate")).divide(new BigDecimal("100"), 10, java.math.RoundingMode.HALF_UP);
         boolean inclusive = Boolean.TRUE.equals(rule.get("inclusive"));
-        BigDecimal base = amount;
-        BigDecimal tax;
-        if (inclusive) {
-            BigDecimal divisor = BigDecimal.ONE.add(rate);
-            base = rate.signum() == 0 ? amount : amount.divide(divisor, 4, java.math.RoundingMode.HALF_UP);
-            tax = amount.subtract(base).setScale(4, java.math.RoundingMode.HALF_UP);
-        } else
-            tax = amount.multiply(rate).setScale(4, java.math.RoundingMode.HALF_UP);
-        BigDecimal withholding = base.multiply(
-                n(rule.get("withholding_rate")).divide(new BigDecimal("100"), 10, java.math.RoundingMode.HALF_UP))
-                .setScale(4, java.math.RoundingMode.HALF_UP);
-        BigDecimal total = inclusive ? amount : amount.add(tax);
-        BigDecimal net = total.subtract(withholding);
+        InvoiceTaxCalculator.Calculation calculation;
+        try {
+            calculation = InvoiceTaxCalculator.calculate(
+                    amount,
+                    n(rule.get("rate")),
+                    n(rule.get("withholding_rate")),
+                    normalizedCurrency,
+                    inclusive);
+        } catch (IllegalArgumentException ex) {
+            throw bad(ex.getMessage());
+        }
+        BigDecimal base = calculation.taxableAmount();
+        BigDecimal tax = calculation.taxAmount();
+        BigDecimal withholding = calculation.withholdingAmount();
+        BigDecimal total = calculation.totalAmount();
+        BigDecimal net = calculation.netPayable();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("jurisdictionCode", jurisdiction);
         result.put("taxCode", rule.get("code"));

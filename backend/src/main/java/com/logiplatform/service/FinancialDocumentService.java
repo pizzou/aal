@@ -75,7 +75,9 @@ public class FinancialDocumentService {
         this.archive = archive;
     }
 
-    /** Compatibility constructor retained for unit tests and older direct callers. */
+    /**
+     * Compatibility constructor retained for unit tests and older direct callers.
+     */
     public FinancialDocumentService(
             CommercialInvoiceRepository invoices,
             CommercialPaymentRepository payments,
@@ -92,7 +94,8 @@ public class FinancialDocumentService {
         Shipment shipment = shipment(invoice.getShipmentId());
         ClientRecord client = client(invoice.getClient());
         List<InvoiceLine> lines = lines(invoiceId);
-        if (lines.isEmpty()) lines = fallbackLines(invoice, shipment);
+        if (lines.isEmpty())
+            lines = fallbackLines(invoice, shipment);
         byte[] pdf = buildInvoice(invoice, shipment, client, lines);
         archive.archive("INVOICE", invoice.getId(), "invoice-" + invoice.getInvoiceNo() + ".pdf",
                 "application/pdf", pdf);
@@ -114,15 +117,18 @@ public class FinancialDocumentService {
     public ReceiptReference latestReceipt(UUID invoiceId) {
         CommercialPayment p = payments.findTopByTenantIdAndInvoiceIdOrderByCreatedAtDesc(
                 requireTenant(), invoiceId).orElseThrow(
-                () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No payment receipt exists for this invoice"));
-        return new ReceiptReference(p.getId(), receiptNumber(p), p.getAmount(), p.getCurrency(), p.getCreatedAt().toString());
+                        () -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                "No payment receipt exists for this invoice"));
+        return new ReceiptReference(p.getId(), receiptNumber(p), p.getAmount(), p.getCurrency(),
+                p.getCreatedAt().toString());
     }
 
     public void emailInvoice(UUID invoiceId, String recipientEmail, String recipientName) {
         CommercialInvoice invoice = invoice(invoiceId);
         String to = recipient(invoiceId, recipientEmail);
-        if (to == null) throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "No client email is available. Supply recipientEmail or configure the shipment notification email.");
+        if (to == null)
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "No client email is available. Supply recipientEmail or configure the shipment notification email.");
         mail.sendFinancialDocument(
                 to,
                 blank(recipientName) ? invoice.getClient() : recipientName,
@@ -136,8 +142,9 @@ public class FinancialDocumentService {
         CommercialPayment payment = payment(paymentId);
         CommercialInvoice invoice = invoice(payment.getInvoiceId());
         String to = recipient(payment.getInvoiceId(), recipientEmail);
-        if (to == null) throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "No client email is available. Supply recipientEmail or configure the shipment notification email.");
+        if (to == null)
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "No client email is available. Supply recipientEmail or configure the shipment notification email.");
         mail.sendFinancialDocument(
                 to,
                 blank(recipientName) ? invoice.getClient() : recipientName,
@@ -149,23 +156,25 @@ public class FinancialDocumentService {
                 receiptPdf(paymentId));
     }
 
-
     public String invoiceSecureLink(UUID invoiceId, java.time.Duration ttl) {
         invoicePdf(invoiceId);
-        UUID id=archive.latestArchiveId("INVOICE",invoiceId);
-        if(id==null) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Archived invoice document not found");
-        return archive.issueLink(id,ttl);
+        UUID id = archive.latestArchiveId("INVOICE", invoiceId);
+        if (id == null)
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Archived invoice document not found");
+        return archive.issueLink(id, ttl);
     }
 
     public String receiptSecureLink(UUID paymentId, java.time.Duration ttl) {
         receiptPdf(paymentId);
-        UUID id=archive.latestArchiveId("RECEIPT",paymentId);
-        if(id==null) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Archived receipt document not found");
-        return archive.issueLink(id,ttl);
+        UUID id = archive.latestArchiveId("RECEIPT", paymentId);
+        if (id == null)
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Archived receipt document not found");
+        return archive.issueLink(id, ttl);
     }
 
     private String recipient(UUID invoiceId, String override) {
-        if (!blank(override)) return email(override);
+        if (!blank(override))
+            return email(override);
         CommercialInvoice invoice = invoice(invoiceId);
         if (invoice.getShipmentId() != null) {
             Shipment shipment = shipment(invoice.getShipmentId());
@@ -186,46 +195,57 @@ public class FinancialDocumentService {
     }
 
     private Shipment shipment(UUID id) {
-        if (id == null) return null;
+        if (id == null)
+            return null;
         return shipments.findByIdAndTenantId(id, requireTenant()).orElse(null);
     }
 
     private List<InvoiceLine> lines(UUID invoiceId) {
         return tenantDb.query("""
-            SELECT line_no, charge_code, description, quantity, unit_price, amount, currency
-              FROM commercial_invoice_lines
-             WHERE tenant_id=? AND invoice_id=?
-             ORDER BY line_no
-            """,
-            (rs, n) -> new InvoiceLine(
-                rs.getInt(1), rs.getString(2), rs.getString(3),
-                nz(rs.getBigDecimal(4), BigDecimal.ONE),
-                nz(rs.getBigDecimal(5), BigDecimal.ZERO),
-                nz(rs.getBigDecimal(6), BigDecimal.ZERO),
-                rs.getString(7)),
-            requireTenant(), invoiceId);
+                SELECT line_no, charge_code, description, quantity, unit_price, amount, currency
+                  FROM commercial_invoice_lines
+                 WHERE tenant_id=? AND invoice_id=?
+                 ORDER BY line_no
+                """,
+                (rs, n) -> new InvoiceLine(
+                        rs.getInt(1), rs.getString(2), rs.getString(3),
+                        nz(rs.getBigDecimal(4), BigDecimal.ONE),
+                        nz(rs.getBigDecimal(5), BigDecimal.ZERO),
+                        nz(rs.getBigDecimal(6), BigDecimal.ZERO),
+                        rs.getString(7)),
+                requireTenant(), invoiceId);
     }
 
     private ClientRecord client(String clientName) {
-        if (clients == null || blank(clientName)) return null;
+        if (clients == null || blank(clientName))
+            return null;
         return clients.findFirstByTenantIdAndClientCompanyIgnoreCase(requireTenant(), clientName).orElse(null);
     }
 
     private List<InvoiceLine> fallbackLines(CommercialInvoice invoice, Shipment shipment) {
         String description = "Freight and logistics services";
         if (shipment != null) {
-            String route = firstNonBlank(shipment.getOriginCityPort(), shipment.getOriginAddress(), shipment.getOriginCountry())
-                    + " to " + firstNonBlank(shipment.getDestinationCityPort(), shipment.getDestinationAddress(), shipment.getDestinationCountry());
+            String route = firstNonBlank(shipment.getOriginCityPort(), shipment.getOriginAddress(),
+                    shipment.getOriginCountry())
+                    + " to " + firstNonBlank(shipment.getDestinationCityPort(), shipment.getDestinationAddress(),
+                            shipment.getDestinationCountry());
             description += " - " + shipment.getReferenceCode() + " - " + route;
-            if (!blank(shipment.getCommodity())) description += " - " + shipment.getCommodity();
-            if (shipment.getChargeableWeightKg() != null) description += " - " + decimalText(shipment.getChargeableWeightKg()) + " kg chargeable weight";
+            if (!blank(shipment.getCommodity()))
+                description += " - " + shipment.getCommodity();
+            if (shipment.getChargeableWeightKg() != null)
+                description += " - " + decimalText(shipment.getChargeableWeightKg()) + " kg chargeable weight";
         }
+        // Invoice line items represent the charge before VAT. The summary below
+        // separately presents VAT and the gross amount due; using invoiceAmount
+        // here would duplicate VAT in the line table on every fallback invoice.
+        BigDecimal lineAmount = nz(invoice.getSubtotalAmount(), invoice.getInvoiceAmount());
         return List.of(new InvoiceLine(
                 1, "FREIGHT", description,
-                BigDecimal.ONE, invoice.getInvoiceAmount(), invoice.getInvoiceAmount(), invoice.getCurrency()));
+                BigDecimal.ONE, lineAmount, lineAmount, invoice.getCurrency()));
     }
 
-    private byte[] buildInvoice(CommercialInvoice invoice, Shipment shipment, ClientRecord client, List<InvoiceLine> lines) {
+    private byte[] buildInvoice(CommercialInvoice invoice, Shipment shipment, ClientRecord client,
+            List<InvoiceLine> lines) {
         try (PDDocument doc = new PDDocument(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             PDPage page = new PDPage(PDRectangle.A4);
             doc.addPage(page);
@@ -235,26 +255,52 @@ public class FinancialDocumentService {
                 text(c, companyName, 42, y, 18, true);
                 text(c, "INVOICE", 430, y, 16, true);
                 y -= 23;
-                if (!blank(companyAddress)) { text(c, companyAddress, 42, y, 8, false); y -= 12; }
+                if (!blank(companyAddress)) {
+                    text(c, companyAddress, 42, y, 8, false);
+                    y -= 12;
+                }
                 String contact = companyEmail;
-                if (!blank(companyPhone)) contact = blank(contact) ? companyPhone : contact + " | " + companyPhone;
-                if (!blank(companyWebsite)) contact = blank(contact) ? companyWebsite : contact + " | " + companyWebsite;
-                if (!blank(contact)) { text(c, truncate(contact, 90), 42, y, 8, false); y -= 12; }
+                if (!blank(companyPhone))
+                    contact = blank(contact) ? companyPhone : contact + " | " + companyPhone;
+                if (!blank(companyWebsite))
+                    contact = blank(contact) ? companyWebsite : contact + " | " + companyWebsite;
+                if (!blank(contact)) {
+                    text(c, truncate(contact, 90), 42, y, 8, false);
+                    y -= 12;
+                }
                 String regulatory = "";
-                if (!blank(companyRegistrationNumber)) regulatory += "Reg. No: " + companyRegistrationNumber;
-                if (!blank(companyTaxId)) regulatory += (regulatory.isBlank() ? "" : " | ") + "Tax ID: " + companyTaxId;
-                if (!blank(regulatory)) { text(c, truncate(regulatory, 90), 42, y, 8, false); y -= 12; }
-                if (!blank(invoice.getTaxLegalNameSnapshot())) { text(c, truncate("Tax jurisdiction: " + invoice.getTaxLegalNameSnapshot(), 90), 42, y, 8, false); y -= 12; }
-                if (!blank(invoice.getTaxRegistrationSnapshot())) { text(c, truncate("Tax registration: " + invoice.getTaxRegistrationSnapshot(), 90), 42, y, 8, false); y -= 12; }
-                if (!blank(invoice.getTaxAddressSnapshot())) { text(c, truncate(invoice.getTaxAddressSnapshot(), 90), 42, y, 8, false); y -= 12; }
-                if (!blank(invoice.getTaxCountrySnapshot())) { text(c, truncate("Tax country: " + invoice.getTaxCountrySnapshot(), 90), 42, y, 8, false); y -= 12; }
+                if (!blank(companyRegistrationNumber))
+                    regulatory += "Reg. No: " + companyRegistrationNumber;
+                if (!blank(companyTaxId))
+                    regulatory += (regulatory.isBlank() ? "" : " | ") + "Tax ID: " + companyTaxId;
+                if (!blank(regulatory)) {
+                    text(c, truncate(regulatory, 90), 42, y, 8, false);
+                    y -= 12;
+                }
+                if (!blank(invoice.getTaxLegalNameSnapshot())) {
+                    text(c, truncate("Tax jurisdiction: " + invoice.getTaxLegalNameSnapshot(), 90), 42, y, 8, false);
+                    y -= 12;
+                }
+                if (!blank(invoice.getTaxRegistrationSnapshot())) {
+                    text(c, truncate("Tax registration: " + invoice.getTaxRegistrationSnapshot(), 90), 42, y, 8, false);
+                    y -= 12;
+                }
+                if (!blank(invoice.getTaxAddressSnapshot())) {
+                    text(c, truncate(invoice.getTaxAddressSnapshot(), 90), 42, y, 8, false);
+                    y -= 12;
+                }
+                if (!blank(invoice.getTaxCountrySnapshot())) {
+                    text(c, truncate("Tax country: " + invoice.getTaxCountrySnapshot(), 90), 42, y, 8, false);
+                    y -= 12;
+                }
 
                 text(c, "Invoice No.", 430, 777, 8, true);
                 text(c, truncate(invoice.getInvoiceNo(), 28), 430, 764, 10, false);
                 text(c, "Issue date", 430, 746, 8, true);
                 text(c, invoice.getIssueDate() == null ? "—" : DATE.format(invoice.getIssueDate()), 430, 733, 9, false);
                 text(c, "Due date", 430, 716, 8, true);
-                text(c, invoice.getDueDate() == null ? "Due on receipt" : DATE.format(invoice.getDueDate()), 430, 703, 9, false);
+                text(c, invoice.getDueDate() == null ? "Due on receipt" : DATE.format(invoice.getDueDate()), 430, 703,
+                        9, false);
 
                 y = Math.min(y - 12, 715);
                 line(c, 42, y, 553);
@@ -267,17 +313,20 @@ public class FinancialDocumentService {
                 y -= 13;
                 text(c, "Currency: " + safe(invoice.getCurrency()), 350, y, 8, false);
                 String contactPerson = client == null ? null : client.getContactPerson();
-                if (blank(contactPerson) && shipment != null) contactPerson = shipment.getContact();
+                if (blank(contactPerson) && shipment != null)
+                    contactPerson = shipment.getContact();
                 if (!blank(contactPerson)) {
                     text(c, truncate("Attention: " + contactPerson, 58), 42, y, 8, false);
                     y -= 12;
                 }
                 String customerEmail = client == null ? null : client.getEmail();
-                if (blank(customerEmail) && shipment != null) customerEmail = shipment.getNotificationEmail();
+                if (blank(customerEmail) && shipment != null)
+                    customerEmail = shipment.getNotificationEmail();
                 String customerPhone = client == null ? null : client.getPhone();
                 if (!blank(customerEmail) || !blank(customerPhone)) {
                     String lineText = !blank(customerEmail) ? "Email: " + customerEmail : "";
-                    if (!blank(customerPhone)) lineText += (lineText.isBlank() ? "" : " | ") + "Phone: " + customerPhone;
+                    if (!blank(customerPhone))
+                        lineText += (lineText.isBlank() ? "" : " | ") + "Phone: " + customerPhone;
                     text(c, truncate(lineText, 76), 42, y, 8, false);
                     y -= 12;
                 }
@@ -296,27 +345,40 @@ public class FinancialDocumentService {
                 if (shipment != null) {
                     text(c, "SHIPMENT DETAILS", 42, y, 9, true);
                     y -= 14;
-                    String origin = firstNonBlank(shipment.getOriginCityPort(), shipment.getOriginAddress(), shipment.getOriginCountry());
-                    String destination = firstNonBlank(shipment.getDestinationCityPort(), shipment.getDestinationAddress(), shipment.getDestinationCountry());
+                    String origin = firstNonBlank(shipment.getOriginCityPort(), shipment.getOriginAddress(),
+                            shipment.getOriginCountry());
+                    String destination = firstNonBlank(shipment.getDestinationCityPort(),
+                            shipment.getDestinationAddress(), shipment.getDestinationCountry());
                     text(c, "Origin: " + truncate(origin, 55), 42, y, 8, false);
                     text(c, "Destination: " + truncate(destination, 50), 310, y, 8, false);
                     y -= 13;
-                    text(c, "Mode: " + safe(shipment.getTransportMode() == null ? null : shipment.getTransportMode().name()), 42, y, 8, false);
-                    text(c, "Carrier: " + truncate(firstNonBlank(shipment.getAirlineUsed(), shipment.getCarrierName()), 40), 200, y, 8, false);
-                    text(c, "AWB / Reference: " + truncate(firstNonBlank(shipment.getCarrierReferenceNumber(), shipment.getReferenceCode()), 28), 390, y, 8, false);
+                    text(c, "Mode: "
+                            + safe(shipment.getTransportMode() == null ? null : shipment.getTransportMode().name()), 42,
+                            y, 8, false);
+                    text(c, "Carrier: "
+                            + truncate(firstNonBlank(shipment.getAirlineUsed(), shipment.getCarrierName()), 40), 200, y,
+                            8, false);
+                    text(c, "AWB / Reference: " + truncate(
+                            firstNonBlank(shipment.getCarrierReferenceNumber(), shipment.getReferenceCode()), 28), 390,
+                            y, 8, false);
                     y -= 13;
                     String commodity = "Commodity: " + safe(shipment.getCommodity());
                     text(c, truncate(commodity, 58), 42, y, 8, false);
                     String weight = "Gross: " + decimalText(shipment.getGrossWeightKg()) + " kg";
-                    if (shipment.getVolumetricWeightKg() != null) weight += " | Vol: " + decimalText(shipment.getVolumetricWeightKg()) + " kg";
-                    if (shipment.getChargeableWeightKg() != null) weight += " | Chargeable: " + decimalText(shipment.getChargeableWeightKg()) + " kg";
+                    if (shipment.getVolumetricWeightKg() != null)
+                        weight += " | Vol: " + decimalText(shipment.getVolumetricWeightKg()) + " kg";
+                    if (shipment.getChargeableWeightKg() != null)
+                        weight += " | Chargeable: " + decimalText(shipment.getChargeableWeightKg()) + " kg";
                     text(c, truncate(weight, 68), 235, y, 8, false);
                     y -= 13;
-                    String packages = shipment.getPackages() == null ? "Packages: —" : "Packages: " + shipment.getPackages();
-                    String flight = !blank(shipment.getFlightNumber()) ? "Flight: " + shipment.getFlightNumber() : "Service: " + safe(shipment.getServiceType());
+                    String packages = shipment.getPackages() == null ? "Packages: —"
+                            : "Packages: " + shipment.getPackages();
+                    String flight = !blank(shipment.getFlightNumber()) ? "Flight: " + shipment.getFlightNumber()
+                            : "Service: " + safe(shipment.getServiceType());
                     text(c, packages, 42, y, 8, false);
                     text(c, truncate(flight, 48), 190, y, 8, false);
-                    text(c, "Status: " + safe(shipment.getStatus() == null ? null : shipment.getStatus().name()), 390, y, 8, false);
+                    text(c, "Status: " + safe(shipment.getStatus() == null ? null : shipment.getStatus().name()), 390,
+                            y, 8, false);
                     y -= 18;
                 } else {
                     y -= 4;
@@ -336,10 +398,13 @@ public class FinancialDocumentService {
                         text(c, "Invoice No: " + invoice.getInvoiceNo(), 42, y, 9, false);
                         y = drawInvoiceTableHeader(c, y - 22);
                     }
-                    text(c, truncate(firstNonBlank(invoiceLine.description(), invoiceLine.chargeCode()), 49), 42, y, 8, false);
+                    text(c, truncate(firstNonBlank(invoiceLine.description(), invoiceLine.chargeCode()), 49), 42, y, 8,
+                            false);
                     text(c, decimalText(invoiceLine.quantity()), 340, y, 8, false);
-                    text(c, money(invoiceLine.unitPrice(), firstNonBlank(invoiceLine.currency(), invoice.getCurrency())), 385, y, 8, false);
-                    text(c, money(invoiceLine.amount(), firstNonBlank(invoiceLine.currency(), invoice.getCurrency())), 475, y, 8, false);
+                    text(c, money(invoiceLine.unitPrice(),
+                            firstNonBlank(invoiceLine.currency(), invoice.getCurrency())), 385, y, 8, false);
+                    text(c, money(invoiceLine.amount(), firstNonBlank(invoiceLine.currency(), invoice.getCurrency())),
+                            475, y, 8, false);
                     y -= 16;
                 }
 
@@ -360,9 +425,13 @@ public class FinancialDocumentService {
                 text(c, "Invoice subtotal", 330, y, 8, false);
                 text(c, money(invoice.getSubtotalAmount(), invoice.getCurrency()), 465, y, 8, false);
                 y -= 15;
-                if (invoice.getTaxAmount() != null && invoice.getTaxAmount().signum() > 0) {
-                    String taxLabel = "Tax / VAT" + (blank(invoice.getTaxCode()) ? "" : " (" + invoice.getTaxCode() + ")")
-                            + (invoice.getTaxRate() == null ? "" : " " + decimalText(invoice.getTaxRate()) + "%");
+                if (invoice.getTaxAmount() != null
+                        && (invoice.getTaxAmount().signum() > 0
+                                || (invoice.getTaxCode() != null && !invoice.getTaxCode().isBlank()))) {
+                    String taxLabel = "VAT " + decimalText(invoice.getTaxRate()) + "% "
+                            + (invoice.isTaxInclusive() ? "(included)" : "(added)");
+                    if (!blank(invoice.getTaxCode()))
+                        taxLabel += " - " + invoice.getTaxCode();
                     text(c, truncate(taxLabel, 32), 330, y, 8, false);
                     text(c, money(invoice.getTaxAmount(), invoice.getCurrency()), 465, y, 8, false);
                     y -= 15;
@@ -398,10 +467,12 @@ public class FinancialDocumentService {
                     text(c, truncate(paymentInstructions, 112), 42, y, 8, false);
                     y -= 14;
                 }
-                text(c, "Please quote invoice " + safe(invoice.getInvoiceNo()) + " with your payment.", 42, 76, 8, false);
+                text(c, "Please quote invoice " + safe(invoice.getInvoiceNo()) + " with your payment.", 42, 76, 8,
+                        false);
                 text(c, "Thank you for your business.", 42, 60, 8, true);
             } finally {
-                if (c != null) c.close();
+                if (c != null)
+                    c.close();
             }
             doc.save(out);
             return out.toByteArray();
@@ -412,16 +483,18 @@ public class FinancialDocumentService {
 
     private static float drawInvoiceTableHeader(PDPageContentStream c, float y) throws Exception {
         line(c, 42, y + 8, 553);
-        text(c, "DESCRIPTION", 42, y - 4, 8, true);
+        text(c, "DESCRIPTION / CHARGE", 42, y - 4, 8, true);
         text(c, "QTY", 340, y - 4, 8, true);
-        text(c, "UNIT PRICE", 385, y - 4, 8, true);
-        text(c, "AMOUNT", 475, y - 4, 8, true);
+        text(c, "UNIT PRICE EX VAT", 385, y - 4, 8, true);
+        text(c, "AMOUNT EX VAT", 475, y - 4, 8, true);
         line(c, 42, y - 11, 553);
         return y - 26;
     }
 
     private static String firstNonBlank(String... values) {
-        for (String value : values) if (!blank(value)) return value;
+        for (String value : values)
+            if (!blank(value))
+                return value;
         return "—";
     }
 
@@ -448,7 +521,8 @@ public class FinancialDocumentService {
                 text(c, "RECEIVED FROM", 42, y, 10, true);
                 text(c, invoice.getClient(), 42, y - 16, 11, false);
                 text(c, "Invoice: " + invoice.getInvoiceNo(), 42, y - 32, 10, false);
-                if (shipment != null) text(c, "Shipment: " + shipment.getReferenceCode(), 42, y - 48, 10, false);
+                if (shipment != null)
+                    text(c, "Shipment: " + shipment.getReferenceCode(), 42, y - 48, 10, false);
 
                 y -= 90;
                 text(c, "AMOUNT RECEIVED", 42, y, 11, true);
@@ -462,7 +536,8 @@ public class FinancialDocumentService {
                 y -= 46;
                 line(c, 42, y, 550);
                 y -= 24;
-                text(c, "This receipt confirms that the payment was recorded in the AAL accounting system.", 42, y, 9, false);
+                text(c, "This receipt confirms that the payment was recorded in the AAL accounting system.", 42, y, 9,
+                        false);
                 text(c, "Thank you for your business.", 42, 64, 9, false);
             }
             doc.save(out);
@@ -472,7 +547,8 @@ public class FinancialDocumentService {
         }
     }
 
-    private static void text(PDPageContentStream c, String value, float x, float y, float size, boolean bold) throws Exception {
+    private static void text(PDPageContentStream c, String value, float x, float y, float size, boolean bold)
+            throws Exception {
         c.beginText();
         c.setFont(bold ? PDType1Font.HELVETICA_BOLD : PDType1Font.HELVETICA, size);
         c.newLineAtOffset(x, y);
@@ -481,7 +557,9 @@ public class FinancialDocumentService {
     }
 
     private static void line(PDPageContentStream c, float x1, float y, float x2) throws Exception {
-        c.moveTo(x1, y); c.lineTo(x2, y); c.stroke();
+        c.moveTo(x1, y);
+        c.lineTo(x2, y);
+        c.stroke();
     }
 
     private static String truncate(String value, int max) {
@@ -490,13 +568,30 @@ public class FinancialDocumentService {
     }
 
     private static String money(BigDecimal value, String currency) {
-        return safe(currency) + " " + nz(value, BigDecimal.ZERO).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
+        int scale = InvoiceTaxCalculator.currencyScale(blank(currency) ? "USD" : currency);
+        java.text.NumberFormat formatter = java.text.NumberFormat.getNumberInstance(Locale.US);
+        formatter.setMinimumFractionDigits(scale);
+        formatter.setMaximumFractionDigits(scale);
+        formatter.setRoundingMode(java.math.RoundingMode.HALF_UP);
+        return safe(currency) + " "
+                + formatter.format(nz(value, BigDecimal.ZERO).setScale(scale, java.math.RoundingMode.HALF_UP));
     }
 
-    private static BigDecimal nz(BigDecimal value, BigDecimal fallback) { return value == null ? fallback : value; }
-    private static String safe(String value) { return value == null ? "" : value; }
-    private static boolean blank(String value) { return value == null || value.isBlank(); }
-    private static String esc(String value) { return safe(value).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;"); }
+    private static BigDecimal nz(BigDecimal value, BigDecimal fallback) {
+        return value == null ? fallback : value;
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static boolean blank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static String esc(String value) {
+        return safe(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    }
 
     private static String email(String value) {
         String v = value.trim().toLowerCase(Locale.ROOT);
@@ -504,19 +599,25 @@ public class FinancialDocumentService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid recipient email");
         return v;
     }
-   private static String receiptNumber(CommercialPayment payment) {
-        if (payment.getReceiptNo() != null && !payment.getReceiptNo().isBlank()) return payment.getReceiptNo();
+
+    private static String receiptNumber(CommercialPayment payment) {
+        if (payment.getReceiptNo() != null && !payment.getReceiptNo().isBlank())
+            return payment.getReceiptNo();
         return "PAY-" + payment.getId();
     }
 
     private UUID requireTenant() {
         UUID tenant = TenantContext.getTenantId();
-        if (tenant == null) throw new IllegalStateException("Tenant context is required");
+        if (tenant == null)
+            throw new IllegalStateException("Tenant context is required");
         return tenant;
     }
 
-    public record ReceiptReference(UUID paymentId, String receiptNo, BigDecimal amount, String currency, String paidAt) {}
+    public record ReceiptReference(UUID paymentId, String receiptNo, BigDecimal amount, String currency,
+            String paidAt) {
+    }
 
     private record InvoiceLine(int lineNo, String chargeCode, String description,
-                               BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount, String currency) {}
+            BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount, String currency) {
+    }
 }

@@ -126,6 +126,13 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "COMMERCIAL & FINANCE",
+    label: "Ledger Export & Periods",
+    href: "/finance/ledger-export",
+    icon: "money",
+    roles: ["ADMIN", "FINANCE"],
+  },
+  {
+    section: "COMMERCIAL & FINANCE",
     label: "Management Reports",
     href: "/reports",
     icon: "chart",

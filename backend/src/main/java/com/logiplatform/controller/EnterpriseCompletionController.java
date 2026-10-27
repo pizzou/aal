@@ -3,6 +3,7 @@ package com.logiplatform.controller;
 import com.logiplatform.dto.EnterpriseCompletionDtos.*;
 import com.logiplatform.service.EnterpriseCompletionService;
 import jakarta.validation.Valid;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import java.time.LocalDate;
 import java.util.*;
@@ -18,14 +19,19 @@ public class EnterpriseCompletionController {
     @GetMapping("/mfa/{userId}") public MfaStatusResponse mfa(@PathVariable UUID userId){return service.mfaStatus(userId);}
     @DeleteMapping("/mfa/{userId}") public void disableMfa(@PathVariable UUID userId){service.disableMfa(userId);}
 
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     @PostMapping("/fx-rates") public FxRateResponse fx(@Valid @RequestBody FxRateRequest r){return service.upsertFx(r);}
     @GetMapping("/fx-rates") public List<FxRateResponse> fx(@RequestParam LocalDate from,@RequestParam LocalDate to){return service.fxRates(from,to);}
 
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     @PostMapping("/finance-periods") public PeriodResponse openPeriod(@Valid @RequestBody PeriodRequest r){return service.openPeriod(r);}
     @GetMapping("/finance-periods") public List<PeriodResponse> periods(){return service.periods();}
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     @PostMapping("/finance-periods/{id}/close") public PeriodResponse closePeriod(@PathVariable UUID id){return service.closePeriod(id);}
 
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     @PostMapping("/adjustments") public AdjustmentResponse adjustment(@Valid @RequestBody AdjustmentRequest r){return service.createAdjustment(r);}
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     @PostMapping("/adjustments/{id}/approve") public AdjustmentResponse approveAdjustment(@PathVariable UUID id){return service.approveAdjustment(id);}
     @GetMapping("/adjustments") public List<AdjustmentResponse> adjustments(){return service.adjustments();}
 

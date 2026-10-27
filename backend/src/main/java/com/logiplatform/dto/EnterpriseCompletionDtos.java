@@ -175,7 +175,7 @@ public final class EnterpriseCompletionDtos {
                         UUID shipmentId,
                         UUID tenderId,
                         @NotBlank String settlementNo,
-                        @NotNull @PositiveOrZero BigDecimal amount,
+                        @NotNull @Positive BigDecimal amount,
                         @NotBlank String currency,
                         String notes) {
         }

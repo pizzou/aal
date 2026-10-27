@@ -109,13 +109,29 @@ export default function PublicQuotePage({
           </section>
 
           <section className="quote-view-card quote-price-card">
-            <div className="quote-view-card-label">QUOTED TOTAL</div>
+            <div className="quote-view-card-label">QUOTED AMOUNT</div>
             <div className="quote-price">
               {quote.quotedAmount == null
                 ? "—"
-                : quote.quotedAmount.toLocaleString()}
+                : `${quote.currency || "USD"} ${new Intl.NumberFormat(
+                    undefined,
+                    {
+                      style: "decimal",
+                      minimumFractionDigits: currencyDigits(
+                        quote.currency || "USD",
+                      ),
+                      maximumFractionDigits: currencyDigits(
+                        quote.currency || "USD",
+                      ),
+                    },
+                  ).format(quote.quotedAmount)}`}
             </div>
-            <p>No account is required to respond or book.</p>
+            <p>
+              At invoicing, the configured tax rule is applied transparently.
+              Your invoice will itemize the subtotal, VAT amount, and total due,
+              showing whether VAT is included in the quoted charge or added to
+              it.
+            </p>
             {message && <div className="alert alert-success">{message}</div>}
             {error && <div className="alert alert-error">{error}</div>}
             {!quote.response && quote.actionable && (
@@ -158,6 +174,17 @@ export default function PublicQuotePage({
       </section>
     </main>
   );
+}
+
+function currencyDigits(currency = "USD") {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency.trim().toUpperCase(),
+    }).resolvedOptions().maximumFractionDigits;
+  } catch {
+    return 2;
+  }
 }
 
 function QuoteRow({ label, value }: { label: string; value: string }) {

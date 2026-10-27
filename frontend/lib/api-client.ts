@@ -1944,6 +1944,12 @@ export type InvoiceRecord = {
   shipmentId?: string | null;
   currency: string;
   invoiceAmount: number;
+  subtotalAmount?: number | null;
+  taxRate?: number | null;
+  taxAmount?: number | null;
+  taxCode?: string | null;
+  taxJurisdictionCode?: string | null;
+  taxInclusive?: boolean;
   amountPaid: number;
   balance: number;
   dueDate?: string | null;

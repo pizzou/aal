@@ -8,38 +8,23 @@ import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 @Entity
-@Table(
-        name = "commercial_invoices",
-        uniqueConstraints = @UniqueConstraint(
-                name = "uk_invoice_ref",
-                columnNames = {
-                        "tenant_id",
-                        "invoice_no"
-                }
-        )
-)
+@Table(name = "commercial_invoices", uniqueConstraints = @UniqueConstraint(name = "uk_invoice_ref", columnNames = {
+        "tenant_id",
+        "invoice_no"
+}))
 public class CommercialInvoice {
 
     @Id
     @GeneratedValue
     private UUID id;
 
-    @Column(
-            name = "tenant_id",
-            nullable = false
-    )
+    @Column(name = "tenant_id", nullable = false)
     private UUID tenantId;
 
-    @Column(
-            name = "invoice_no",
-            nullable = false
-    )
+    @Column(name = "invoice_no", nullable = false)
     private String invoiceNo;
 
-    @Column(
-            name = "issue_date",
-            nullable = false
-    )
+    @Column(name = "issue_date", nullable = false)
     private LocalDate issueDate;
 
     @Column(name = "client")
@@ -48,28 +33,14 @@ public class CommercialInvoice {
     @Column(name = "shipment_id")
     private UUID shipmentId;
 
-    @Column(
-            name = "currency",
-            nullable = false
-    )
+    @Column(name = "currency", nullable = false)
     private String currency;
 
-    @Column(
-            name = "invoice_amount",
-            nullable = false,
-            precision = 19,
-            scale = 4
-    )
+    @Column(name = "invoice_amount", nullable = false, precision = 19, scale = 4)
     private BigDecimal invoiceAmount;
 
-    @Column(
-            name = "amount_paid",
-            nullable = false,
-            precision = 19,
-            scale = 4
-    )
-    private BigDecimal amountPaid =
-            BigDecimal.ZERO;
+    @Column(name = "amount_paid", nullable = false, precision = 19, scale = 4)
+    private BigDecimal amountPaid = BigDecimal.ZERO;
 
     @Column(name = "due_date")
     private LocalDate dueDate;
@@ -83,10 +54,7 @@ public class CommercialInvoice {
     @Column(name = "owner")
     private String owner;
 
-    @Column(
-            name = "notes",
-            columnDefinition = "text"
-    )
+    @Column(name = "notes", columnDefinition = "text")
     private String notes;
 
     @Column(name = "lifecycle_status", nullable = false, length = 30)
@@ -132,10 +100,7 @@ public class CommercialInvoice {
     private BigDecimal debitNoteAmount = BigDecimal.ZERO;
 
     @Version
-    @Column(
-            name = "version",
-            nullable = false
-    )
+    @Column(name = "version", nullable = false)
     private long version;
 
     protected CommercialInvoice() {
@@ -150,39 +115,29 @@ public class CommercialInvoice {
             String currency,
             BigDecimal invoiceAmount,
             LocalDate dueDate,
-            String owner
-    ) {
+            String owner) {
 
-        this.tenantId =
-                tenantId;
+        this.tenantId = tenantId;
 
-        this.invoiceNo =
-                invoiceNo;
+        this.invoiceNo = invoiceNo;
 
-        this.issueDate =
-                issueDate;
+        this.issueDate = issueDate;
 
-        this.client =
-                client;
+        this.client = client;
 
-        this.shipmentId =
-                shipmentId;
+        this.shipmentId = shipmentId;
 
-        this.currency =
-                currency;
+        this.currency = currency;
 
-        this.invoiceAmount =
-                invoiceAmount;
+        this.invoiceAmount = invoiceAmount;
         this.subtotalAmount = invoiceAmount == null ? BigDecimal.ZERO : invoiceAmount;
         this.taxRate = BigDecimal.ZERO;
         this.taxAmount = BigDecimal.ZERO;
         this.withholdingAmount = BigDecimal.ZERO;
 
-        this.dueDate =
-                dueDate;
+        this.dueDate = dueDate;
 
-        this.owner =
-                owner;
+        this.owner = owner;
     }
 
     public UUID getId() {
@@ -225,27 +180,49 @@ public class CommercialInvoice {
         return amountPaid;
     }
 
-    public BigDecimal getSubtotalAmount() { return subtotalAmount == null ? invoiceAmount : subtotalAmount; }
+    public BigDecimal getSubtotalAmount() {
+        return subtotalAmount == null ? invoiceAmount : subtotalAmount;
+    }
 
-    public BigDecimal getTaxRate() { return taxRate == null ? BigDecimal.ZERO : taxRate; }
+    public BigDecimal getTaxRate() {
+        return taxRate == null ? BigDecimal.ZERO : taxRate;
+    }
 
-    public BigDecimal getTaxAmount() { return taxAmount == null ? BigDecimal.ZERO : taxAmount; }
+    public BigDecimal getTaxAmount() {
+        return taxAmount == null ? BigDecimal.ZERO : taxAmount;
+    }
 
-    public String getTaxCode() { return taxCode; }
+    public String getTaxCode() {
+        return taxCode;
+    }
 
-    public boolean isTaxInclusive() { return taxInclusive; }
+    public boolean isTaxInclusive() {
+        return taxInclusive;
+    }
 
-    public String getTaxJurisdictionCode() { return taxJurisdictionCode; }
+    public String getTaxJurisdictionCode() {
+        return taxJurisdictionCode;
+    }
 
-    public BigDecimal getWithholdingAmount() { return withholdingAmount == null ? BigDecimal.ZERO : withholdingAmount; }
+    public BigDecimal getWithholdingAmount() {
+        return withholdingAmount == null ? BigDecimal.ZERO : withholdingAmount;
+    }
 
-    public String getTaxLegalNameSnapshot() { return taxLegalNameSnapshot; }
+    public String getTaxLegalNameSnapshot() {
+        return taxLegalNameSnapshot;
+    }
 
-    public String getTaxRegistrationSnapshot() { return taxRegistrationSnapshot; }
+    public String getTaxRegistrationSnapshot() {
+        return taxRegistrationSnapshot;
+    }
 
-    public String getTaxAddressSnapshot() { return taxAddressSnapshot; }
+    public String getTaxAddressSnapshot() {
+        return taxAddressSnapshot;
+    }
 
-    public String getTaxCountrySnapshot() { return taxCountrySnapshot; }
+    public String getTaxCountrySnapshot() {
+        return taxCountrySnapshot;
+    }
 
     public BigDecimal getCreditNoteAmount() {
         return creditNoteAmount;
@@ -260,7 +237,8 @@ public class CommercialInvoice {
     }
 
     public BigDecimal getBalance() {
-        String lifecycle = lifecycleStatus == null ? "ISSUED" : lifecycleStatus.trim().toUpperCase(java.util.Locale.ROOT);
+        String lifecycle = lifecycleStatus == null ? "ISSUED"
+                : lifecycleStatus.trim().toUpperCase(java.util.Locale.ROOT);
         if ("DRAFT".equals(lifecycle) || "VOID".equals(lifecycle) || "CANCELLED".equals(lifecycle)) {
             return BigDecimal.ZERO;
         }
@@ -287,6 +265,14 @@ public class CommercialInvoice {
         return notes;
     }
 
+    /**
+     * Notes may be corrected before issuance; financial amounts remain separately
+     * guarded.
+     */
+    public void setNotes(String notes) {
+        this.notes = notes == null || notes.isBlank() ? null : notes.trim();
+    }
+
     public String getLifecycleStatus() {
         return lifecycleStatus;
     }
@@ -310,13 +296,12 @@ public class CommercialInvoice {
                 0,
                 ChronoUnit.DAYS.between(
                         dueDate,
-                        LocalDate.now()
-                )
-        );
+                        LocalDate.now()));
     }
 
     public String getAgingBucket() {
-        String lifecycle = lifecycleStatus == null ? "ISSUED" : lifecycleStatus.trim().toUpperCase(java.util.Locale.ROOT);
+        String lifecycle = lifecycleStatus == null ? "ISSUED"
+                : lifecycleStatus.trim().toUpperCase(java.util.Locale.ROOT);
         if ("DRAFT".equals(lifecycle) || "VOID".equals(lifecycle) || "CANCELLED".equals(lifecycle)) {
             return switch (lifecycle) {
                 case "DRAFT" -> "Draft";
@@ -349,38 +334,42 @@ public class CommercialInvoice {
     }
 
     public String getStatus() {
-        String lifecycle = lifecycleStatus == null ? "ISSUED" : lifecycleStatus.trim().toUpperCase(java.util.Locale.ROOT);
-        if ("DRAFT".equals(lifecycle)) return "Draft";
-        if ("VOID".equals(lifecycle)) return "Void";
-        if ("CANCELLED".equals(lifecycle)) return "Cancelled";
-        if (getBalance().signum() <= 0) return "Paid";
-        if ("OVERDUE".equals(lifecycle) || getDaysOverdue() > 0) return "Overdue";
-        if ("PARTIALLY_PAID".equals(lifecycle) || getAmountPaid().signum() > 0) return "Partially Paid";
-        if ("SENT".equals(lifecycle)) return "Sent";
+        String lifecycle = lifecycleStatus == null ? "ISSUED"
+                : lifecycleStatus.trim().toUpperCase(java.util.Locale.ROOT);
+        if ("DRAFT".equals(lifecycle))
+            return "Draft";
+        if ("VOID".equals(lifecycle))
+            return "Void";
+        if ("CANCELLED".equals(lifecycle))
+            return "Cancelled";
+        if (getBalance().signum() <= 0)
+            return "Paid";
+        if ("OVERDUE".equals(lifecycle) || getDaysOverdue() > 0)
+            return "Overdue";
+        if ("PARTIALLY_PAID".equals(lifecycle) || getAmountPaid().signum() > 0)
+            return "Partially Paid";
+        if ("SENT".equals(lifecycle))
+            return "Sent";
         return "ISSUED".equals(lifecycle) ? "Issued" : lifecycle;
     }
 
     public void applyPayment(
-            BigDecimal amount
-    ) {
+            BigDecimal amount) {
 
         if (amount == null
                 || amount.signum() <= 0) {
 
             throw new IllegalArgumentException(
-                    "Payment amount must be greater than zero"
-            );
+                    "Payment amount must be greater than zero");
         }
 
         if (getBalance().compareTo(amount) < 0) {
 
             throw new IllegalArgumentException(
-                    "Payment exceeds invoice balance"
-            );
+                    "Payment exceeds invoice balance");
         }
 
-        amountPaid =
-                amountPaid.add(amount);
+        amountPaid = amountPaid.add(amount);
     }
 
     /**
@@ -393,39 +382,30 @@ public class CommercialInvoice {
             BigDecimal paid,
             LocalDate lastFollowUp,
             LocalDate nextFollowUp,
-            String notes
-    ) {
+            String notes) {
 
-        BigDecimal value =
-                paid == null
-                        ? BigDecimal.ZERO
-                        : paid;
+        BigDecimal value = paid == null
+                ? BigDecimal.ZERO
+                : paid;
 
         if (value.signum() < 0) {
             throw new IllegalArgumentException(
-                    "Imported amount paid cannot be negative"
-            );
+                    "Imported amount paid cannot be negative");
         }
 
         if (value.compareTo(
-                invoiceAmount
-        ) > 0) {
+                invoiceAmount) > 0) {
 
             throw new IllegalArgumentException(
-                    "Imported amount paid cannot exceed invoice amount"
-            );
+                    "Imported amount paid cannot exceed invoice amount");
         }
 
-        this.amountPaid =
-                value;
+        this.amountPaid = value;
 
-        this.lastFollowUp =
-                lastFollowUp;
+        this.lastFollowUp = lastFollowUp;
 
-        this.nextFollowUp =
-                nextFollowUp;
+        this.nextFollowUp = nextFollowUp;
 
-        this.notes =
-                notes;
+        this.notes = notes;
     }
 }

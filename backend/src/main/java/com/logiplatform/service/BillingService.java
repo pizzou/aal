@@ -336,6 +336,125 @@ public class BillingService {
         }
 
         /**
+         * Canonical issue path for all invoice entry points, including invoices
+         * created manually or from accepted quotations. Tax is resolved on the
+         * server for the invoice issue date and currency, applied to a draft, and
+         * posted through the same lifecycle boundary as shipment invoices.
+         *
+         * The amount supplied here is the commercial amount before tax when the
+         * configured tax rule is exclusive, or the gross amount when the rule is
+         * inclusive. The rule's inclusive flag is authoritative; clients cannot
+         * select a different treatment in the request.
+         */
+        @Transactional
+        public CommercialInvoice createAndIssueCommercialInvoice(
+                        String requestedInvoiceNo,
+                        LocalDate issueDate,
+                        String client,
+                        UUID shipmentId,
+                        String requestedCurrency,
+                        BigDecimal amount,
+                        LocalDate dueDate,
+                        String owner,
+                        String notes) {
+                UUID tenantId = TenantContext.getTenantId();
+                if (issueDate == null) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice issue date is required");
+                }
+                if (client == null || client.isBlank()) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice customer is required");
+                }
+                if (amount == null || amount.signum() <= 0) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Invoice amount must be greater than zero");
+                }
+                if (dueDate != null && dueDate.isBefore(issueDate)) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Invoice due date cannot be before its issue date");
+                }
+
+                String currency = normalizeCurrency(requestedCurrency);
+                if (!currency.matches("[A-Z]{3}")) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Invoice currency must be a three-letter ISO currency code");
+                }
+                try {
+                        InvoiceTaxCalculator.currencyScale(currency);
+                } catch (IllegalArgumentException ex) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+                }
+
+                String invoiceNo = requestedInvoiceNo == null || requestedInvoiceNo.isBlank()
+                                ? documentSequences.nextInvoiceNumber()
+                                : requestedInvoiceNo.trim();
+                if (invoiceNo.length() > 80) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Invoice number cannot exceed 80 characters");
+                }
+                if (invoices.findByTenantIdAndInvoiceNo(tenantId, invoiceNo).isPresent()) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                        "Invoice number already exists. Use the existing invoice or a new invoice number.");
+                }
+
+                if (shipmentId != null) {
+                        Shipment shipment = shipments.findLockedByIdAndTenantId(shipmentId, tenantId)
+                                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                        "Shipment not found"));
+                        if (invoices.findByTenantIdAndShipmentId(tenantId, shipmentId).isPresent()) {
+                                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                                "This shipment already has a canonical invoice. Open that invoice instead of creating a duplicate.");
+                        }
+                        if (shipment.getCurrency() != null
+                                        && !shipment.getCurrency().isBlank()
+                                        && !shipment.getCurrency().equalsIgnoreCase(currency)) {
+                                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                                "Invoice currency must match the shipment currency");
+                        }
+                        BigDecimal governedAmount = shipment.getAmountBilledToClient();
+                        if (governedAmount == null || governedAmount.signum() <= 0) {
+                                governedAmount = shipment.getClientRevenue();
+                        }
+                        if (governedAmount != null && governedAmount.signum() > 0
+                                        && governedAmount.compareTo(amount) != 0) {
+                                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                                "Invoice amount must match the shipment's governed client revenue");
+                        }
+                }
+
+                java.util.Map<String, Object> defaultVatRule = financialHardening.defaultInvoiceVatRule(issueDate,
+                                currency);
+                String jurisdictionCode = java.util.Objects.toString(defaultVatRule.get("jurisdiction_code"), "");
+                String taxCode = java.util.Objects.toString(defaultVatRule.get("code"), "");
+                if (jurisdictionCode.isBlank() || taxCode.isBlank()) {
+                        throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                                        "No active default VAT rule is configured for this invoice date and currency");
+                }
+
+                CommercialInvoice invoice = new CommercialInvoice(
+                                tenantId,
+                                invoiceNo,
+                                issueDate,
+                                client.trim(),
+                                shipmentId,
+                                currency,
+                                amount,
+                                dueDate,
+                                owner == null || owner.isBlank() ? null : owner.trim());
+                invoice.setNotes(notes == null || notes.isBlank() ? null : notes.trim());
+                invoice.changeLifecycleStatus("DRAFT");
+                invoice = invoices.saveAndFlush(invoice);
+                invoices.insertLifecycleHistory(tenantId, invoice.getId(), null, "DRAFT",
+                                "Draft invoice created through canonical billing", currentUser());
+
+                financialHardening.applyTaxToDraftInvoice(invoice.getId(), jurisdictionCode, taxCode, issueDate);
+                entityManager.refresh(invoice);
+                financialHardening.transitionInvoice(invoice.getId(), "ISSUED",
+                                "Invoice issued through canonical billing with configured VAT");
+                entityManager.refresh(invoice);
+                return invoice;
+        }
+
+        /**
          * Compatibility entry point used by the existing billing controller.
          *
          * The invoice currency remains authoritative.

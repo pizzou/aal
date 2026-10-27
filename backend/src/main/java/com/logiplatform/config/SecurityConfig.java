@@ -104,6 +104,8 @@ public class SecurityConfig {
                         /*
                          * PUBLIC
                          */
+                        .requestMatchers(new AntPathRequestMatcher("/api/provider/customs/acknowledgments", HttpMethod.POST.name()))
+                        .permitAll()
                         .requestMatchers(
                                 new AntPathRequestMatcher("/api/auth/login"),
                                 new AntPathRequestMatcher("/api/auth/send-login-otp"),
@@ -155,6 +157,25 @@ public class SecurityConfig {
                         .requestMatchers(
                                 new AntPathRequestMatcher("/api/customer/**"))
                         .hasRole("CUSTOMER")
+
+                        /*
+                         * FINANCIAL MUTATIONS: must be evaluated before the broad
+                         * enterprise-completion/platform role rules below.
+                         */
+                        .requestMatchers(new AntPathRequestMatcher("/api/enterprise-completion/finance/**"))
+                        .hasAnyRole("ADMIN", "FINANCE")
+                        .requestMatchers(new AntPathRequestMatcher("/api/enterprise-completion/carriers/settlements", HttpMethod.POST.name()))
+                        .hasAnyRole("ADMIN", "FINANCE")
+                        .requestMatchers(new AntPathRequestMatcher("/api/enterprise-completion/carriers/settlements/*/approve", HttpMethod.POST.name()))
+                        .hasAnyRole("ADMIN", "FINANCE")
+                        .requestMatchers(new AntPathRequestMatcher("/api/platform/finance-periods"),
+                                new AntPathRequestMatcher("/api/platform/finance-periods/**"))
+                        .hasAnyRole("ADMIN", "FINANCE")
+                        .requestMatchers(new AntPathRequestMatcher("/api/platform/adjustments"),
+                                new AntPathRequestMatcher("/api/platform/adjustments/**"))
+                        .hasAnyRole("ADMIN", "FINANCE")
+                        .requestMatchers(new AntPathRequestMatcher("/api/platform/fx-rates/**", HttpMethod.POST.name()))
+                        .hasAnyRole("ADMIN", "FINANCE")
 
                         /*
                          * PLATFORM / SETTINGS
@@ -347,7 +368,10 @@ public class SecurityConfig {
                                 "MANAGER",
                                 "OPERATIONS",
                                 "SALES",
-                                "FINANCE")
+                                "FINANCE",
+                                "AIR_CARGO",
+                                "DISPATCH",
+                                "WAREHOUSE")
 
                         /*
                          * SHIPMENTS - CREATE

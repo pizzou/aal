@@ -4,8 +4,12 @@ import com.logiplatform.dto.EnterpriseCompletionDtos.*;
 import com.logiplatform.service.EnterpriseCompletionService;
 import com.logiplatform.service.FinancialHardeningService;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.server.ResponseStatusException;
 import jakarta.validation.Valid;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -35,16 +39,19 @@ public class EnterpriseCompletionExtrasController {
     }
 
     @PostMapping("/carriers/settlements")
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> carrierSettlement(@Valid @RequestBody CarrierSettlementRequest request) {
         return service.createCarrierSettlement(request);
     }
 
     @PostMapping("/carriers/settlements/{id}/approve")
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> approveCarrierSettlement(@PathVariable UUID id) {
         return service.approveCarrierSettlement(id);
     }
 
     @PostMapping("/finance/notes")
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> financeNote(@Valid @RequestBody FinanceNoteRequest request) {
         return service.createFinanceNote(request);
     }
@@ -55,6 +62,7 @@ public class EnterpriseCompletionExtrasController {
      * tax rows that bypass jurisdiction/effective-date validation.
      */
     @PostMapping("/finance/tax-rules")
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> taxRule(@Valid @RequestBody TaxRuleRequest request) {
         String jurisdictionCode = request.jurisdictionCode();
         if (jurisdictionCode == null || jurisdictionCode.isBlank()) {
@@ -78,23 +86,37 @@ public class EnterpriseCompletionExtrasController {
     }
 
     @GetMapping("/finance/customer-statements")
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public List<Map<String, Object>> customerStatement(@RequestParam String client) {
         return service.customerStatement(client);
     }
 
     @GetMapping("/finance/supplier-statements")
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public List<Map<String, Object>> supplierStatement(@RequestParam String supplier) {
         return service.supplierStatement(supplier);
     }
 
     @PostMapping("/finance/periods/{id}/close")
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> closePeriod(@PathVariable UUID id) {
         return service.closeFinancePeriod(id);
     }
 
     @PostMapping("/finance/accounting-export")
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
     public Map<String, Object> accountingExport(@Valid @RequestBody AccountingExportRequest request) {
         return service.generateAccountingExport(request);
+    }
+
+    @GetMapping("/finance/accounting-export/{id}/file")
+    @PreAuthorize("hasAnyRole('ADMIN','FINANCE')")
+    public ResponseEntity<byte[]> accountingExportFile(@PathVariable UUID id) {
+        return ResponseEntity.ok()
+                .contentType(new MediaType("text", "csv", java.nio.charset.StandardCharsets.UTF_8))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=aal-ledger-" + id + ".csv")
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(service.accountingExportFile(id));
     }
 
     @PostMapping("/sla/evaluate")

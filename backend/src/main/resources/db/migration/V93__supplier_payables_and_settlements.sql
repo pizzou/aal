@@ -23,7 +23,7 @@ CREATE TABLE supplier_bills (
         (status='APPROVED' AND approved_by IS NOT NULL AND approved_at IS NOT NULL))
 );
 CREATE INDEX ix_supplier_bills_shipment ON supplier_bills (tenant_id,shipment_id);
-CREATE INDEX ix_supplier_bills_due ON supplier_bills (tenant_id,status,due_date);
+CREATE INDEX ix_supplier_bills_tenant_status_due ON supplier_bills (tenant_id,status,due_date);
 
 CREATE TABLE supplier_bill_payments (
  id UUID PRIMARY KEY,

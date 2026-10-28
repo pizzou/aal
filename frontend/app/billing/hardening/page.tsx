@@ -294,35 +294,33 @@ export default function FinancialHardeningPage() {
         if (cancelled) return;
         const loaded = asArray<TaxRule>(response);
         setRules(loaded);
-        // Make the existing effective 18% VAT rule the selected edit target so
-        // finance can change inclusive/exclusive treatment without creating a
-        // second active rule by mistake.
-        const vat18 =
+        // Edit the actual configured VAT rule (including finance-approved rate
+        // changes), not only the original 18% seed.
+        const activeVat =
           loaded.find(
             (r) =>
               String(r.tax_type ?? "VAT").toUpperCase() === "VAT" &&
-              Number(r.rate) === 18 &&
               !r.currency,
           ) ??
           loaded.find(
-            (r) =>
-              String(r.tax_type ?? "VAT").toUpperCase() === "VAT" &&
-              Number(r.rate) === 18,
+            (r) => String(r.tax_type ?? "VAT").toUpperCase() === "VAT",
           );
-        if (vat18) {
-          setRuleCode(vat18.code);
+        if (activeVat) {
+          setRuleCode(activeVat.code);
           setRuleName(
-            vat18.tax_name ?? vat18.taxName ?? "Value Added Tax (VAT)",
+            activeVat.tax_name ?? activeVat.taxName ?? "Value Added Tax (VAT)",
           );
-          setRuleRate(String(vat18.rate));
+          setRuleRate(String(activeVat.rate));
           setRuleWithholding(
-            String(vat18.withholding_rate ?? vat18.withholdingRate ?? 0),
+            String(
+              activeVat.withholding_rate ?? activeVat.withholdingRate ?? 0,
+            ),
           );
-          setRuleCurrency(vat18.currency ?? "");
-          setRuleValidFrom(vat18.valid_from ?? today());
-          setRuleValidUntil(vat18.valid_until ?? "");
-          setRuleType(vat18.tax_type ?? "VAT");
-          setRuleInclusive(Boolean(vat18.inclusive));
+          setRuleCurrency(activeVat.currency ?? "");
+          setRuleValidFrom(activeVat.valid_from ?? today());
+          setRuleValidUntil(activeVat.valid_until ?? "");
+          setRuleType(activeVat.tax_type ?? "VAT");
+          setRuleInclusive(Boolean(activeVat.inclusive));
           setRuleActive(true);
         }
       })
@@ -476,7 +474,7 @@ export default function FinancialHardeningPage() {
           );
       },
       jurActive && jurDefault
-        ? "Tax jurisdiction saved. The backend ensures a standard 18% VAT rule exists unless an effective rule is already configured."
+        ? "Tax jurisdiction saved. Rwanda's initial 18% VAT rule is added only if no effective configured rule exists; finance can adjust the approved rate."
         : "Tax jurisdiction saved.",
     );
   }
@@ -1315,13 +1313,13 @@ export default function FinancialHardeningPage() {
                 <h2>VAT and tax rules</h2>
                 <p>
                   Rules are versioned by effective date and jurisdiction.
-                  Invoice creation uses the server-selected active 18% VAT rule
-                  and stores an immutable tax snapshot. Exclusive treatment adds
-                  18% to the subtotal; inclusive treatment extracts VAT from the
-                  entered gross amount. The invoice PDF shows the subtotal, VAT,
-                  and total payable. The active 18% invoice VAT rule must use 0%
-                  withholding until withholding-certificate settlement is
-                  implemented.
+                  Invoice creation uses the server-selected active configured
+                  VAT rule and stores an immutable tax snapshot. Exclusive
+                  treatment adds 18% to the subtotal; inclusive treatment
+                  extracts VAT from the entered gross amount. The invoice PDF
+                  shows the subtotal, VAT, and total payable. The active 18%
+                  invoice VAT rule must use 0% withholding until
+                  withholding-certificate settlement is implemented.
                 </p>
               </div>
             </div>

@@ -279,7 +279,7 @@ export default function StructuredAwbPage() {
                 Create an AIR shipment first. Once it is saved, this step will
                 prefill the AWB from it.
               </p>
-              <Link className="btn btn-primary" href="/new-shipment">
+              <Link className="btn btn-primary" href="/shipments?create=1">
                 Create shipment
               </Link>
             </div>

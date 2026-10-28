@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import ShipmentCreateForm from "@/components/ShipmentCreateForm";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -64,6 +67,22 @@ function statusClass(status: string): string {
 }
 
 export default function ShipmentsPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="page">
+          <p>Loading shipments…</p>
+        </main>
+      }
+    >
+      <ShipmentWorkspace />
+    </Suspense>
+  );
+}
+
+function ShipmentWorkspace() {
+  const searchParams = useSearchParams();
+  const creating = searchParams.get("create") === "1";
   const router = useRouter();
 
   const { accessToken, isLoading } = useAuth();
@@ -132,6 +151,7 @@ export default function ShipmentsPage() {
   if (isLoading || !accessToken) {
     return null;
   }
+  if (creating) return <ShipmentCreateForm />;
 
   const grossWeight = rows.reduce(
     (sum, shipment) => sum + (shipment.grossWeightKg ?? 0),
@@ -183,8 +203,8 @@ export default function ShipmentsPage() {
             Billing & receivables
           </Link>
 
-          <Link className="btn btn-primary" href="/new-shipment">
-            + New shipment
+          <Link className="btn btn-primary" href="/shipments?create=1">
+            + Create shipment
           </Link>
         </div>
       </div>

@@ -62,7 +62,7 @@ public class BillingService {
         }
 
         /**
-         * Preview using the tenant's configured default 18% VAT rule; the user does not
+         * Preview using the tenant's configured configured VAT rule; the user does not
          * type tax codes.
          */
         @Transactional(readOnly = true)
@@ -280,6 +280,15 @@ public class BillingService {
                                                 || !resolvedJurisdiction.equalsIgnoreCase(existingJurisdiction)) {
                                         throw new ResponseStatusException(HttpStatus.CONFLICT,
                                                         "This draft has a different tax rule. Review it in Financial hardening before issuing it; billing cannot silently replace an already-applied tax calculation.");
+                                }
+                                // An existing draft may have been previewed before finance
+                                // updated the rate or inclusive treatment under the same code.
+                                // Never issue that stale tax snapshot as if it were current.
+                                if (existing.getTaxRate().compareTo(n(defaultVatRule.get("rate"))) != 0
+                                                || existing.isTaxInclusive() != Boolean.TRUE
+                                                                .equals(defaultVatRule.get("inclusive"))) {
+                                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                                        "The VAT rate or inclusive treatment changed after this draft was prepared. Review and correct the draft tax calculation before issuing it.");
                                 }
                                 // Use the shared lifecycle transition as the single posting and
                                 // history boundary. Tax is guaranteed to be applied before issue.

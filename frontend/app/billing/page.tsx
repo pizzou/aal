@@ -664,7 +664,7 @@ export default function BillingPage() {
         </div>
 
         <div className="actions">
-          <Link className="btn" href="/new-shipment">
+          <Link className="btn" href="/shipments?create=1">
             <IconFallbackPlus />
             New shipment
           </Link>
@@ -968,8 +968,8 @@ export default function BillingPage() {
             The applicable invoice tax rule is selected by the server from the
             verified company setup. Complete{" "}
             <Link href="/billing/setup">Invoice Tax Setup</Link>
-            before billing. The current workflow requires one active 18% VAT
-            rule; finance must verify that this treatment applies to the
+            before billing. The current workflow requires one active configured
+            VAT rule; finance must verify that this treatment applies to the
             service. If setup is missing or ambiguous, the invoice remains
             blocked.
           </p>

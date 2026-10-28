@@ -96,6 +96,24 @@ public class FinancialHardeningService {
             }
         }
 
+        if ("DRAFT".equals(current) && "ISSUED".equals(next)) {
+            String selectedCode = Objects.toString(row.get("tax_code"), "");
+            String selectedJurisdiction = Objects.toString(row.get("tax_jurisdiction_code"), "");
+            Map<String, Object> configuredRule = defaultInvoiceVatRule(LocalDate.now(),
+                    Objects.toString(row.get("currency"), "USD"));
+            // Manually selected special tax treatments can have a different code;
+            // compare the rate snapshot when this draft uses the default tax rule.
+            if (selectedCode.equalsIgnoreCase(Objects.toString(configuredRule.get("code"), ""))
+                    && selectedJurisdiction
+                            .equalsIgnoreCase(Objects.toString(configuredRule.get("jurisdiction_code"), ""))
+                    && (n(row.get("tax_rate")).compareTo(n(configuredRule.get("rate"))) != 0
+                            || Boolean.TRUE.equals(row.get("tax_inclusive")) != Boolean.TRUE
+                                    .equals(configuredRule.get("inclusive")))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "The configured VAT rate or inclusive treatment changed after this draft was prepared. Correct the draft before issuing it.");
+            }
+        }
+
         BigDecimal paid = n(row.get("amount_paid"));
         BigDecimal total = n(row.get("invoice_amount")).add(n(row.get("debit_note_amount")))
                 .subtract(n(row.get("credit_note_amount")));
@@ -627,11 +645,10 @@ public class FinancialHardeningService {
         Map<String, Object> saved = one(
                 "SELECT * FROM finance_tax_jurisdictions WHERE tenant_id=? AND jurisdiction_code=?", t,
                 normalizedCode);
-        // Making a real, active jurisdiction the invoice default is the explicit
-        // administrator action that authorizes the tenant's standard 18% VAT rule.
-        // Do not invent legal identity/registration data; only create the rule after
-        // the administrator has saved the jurisdiction above.
-        if (active && defaultForInvoicing) {
+        // Create the 18% initial default only for a confirmed Rwanda jurisdiction.
+        // Other countries must have their own approved rule; do not assume 18%.
+        // Saving an existing jurisdiction must not overwrite a finance-adjusted rule.
+        if (active && defaultForInvoicing && "RW".equals(normalizedCountry)) {
             ensureDefaultInvoiceVatRule(t, normalizedCode, LocalDate.now());
         }
         return saved;
@@ -697,11 +714,10 @@ public class FinancialHardeningService {
         if (!Set.of("INVOICE", "ALL").contains(normalizedApplies))
             throw bad("Tax rule applies-to must be INVOICE or ALL");
         if (active && "VAT".equals(normalizedType)
-                && rate.compareTo(new BigDecimal("18")) == 0
                 && withholdingRate.signum() > 0
                 && ("INVOICE".equals(normalizedApplies) || "ALL".equals(normalizedApplies))) {
             throw bad(
-                    "The active 18% invoice VAT rule must use a 0% withholding rate. Customer-withholding settlement is not enabled; saving a withholding rate here would prevent invoices from being issued.");
+                    "The default invoice VAT rule must use a 0% withholding rate. Customer-withholding settlement is not enabled; saving a withholding rate here would prevent invoices from being issued.");
         }
         UUID t = tenant();
         Boolean configured = db.query(
@@ -709,12 +725,12 @@ public class FinancialHardeningService {
                 rs -> rs.next() && rs.getBoolean(1), t, jurisdiction);
         if (!Boolean.TRUE.equals(configured))
             throw bad("Configure the tax jurisdiction before adding tax rules");
-        if (active && "VAT".equals(normalizedType) && rate.compareTo(new BigDecimal("18")) == 0) {
+        if (active && "VAT".equals(normalizedType)) {
             Boolean overlappingRule = db.query("""
                     SELECT EXISTS(
                         SELECT 1 FROM finance_tax_rules r
                          WHERE r.tenant_id=? AND r.jurisdiction_code=? AND r.active=TRUE
-                           AND upper(r.tax_type)='VAT' AND r.rate=18
+                           AND upper(r.tax_type)='VAT'
                            AND r.currency IS NOT DISTINCT FROM ?
                            AND (r.applies_to='ALL' OR r.applies_to='INVOICE')
                            AND r.valid_from<=COALESCE(?::date, DATE '9999-12-31')
@@ -725,7 +741,7 @@ public class FinancialHardeningService {
                     validUntil, validFrom, taxCode, validFrom);
             if (Boolean.TRUE.equals(overlappingRule)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
-                        "Another active 18% VAT rule overlaps this currency and effective period. Edit the existing rule or change the dates/currency to avoid ambiguous invoice tax selection.");
+                        "Another active VAT rule overlaps this currency and effective period. Edit the existing rule or change the dates/currency to avoid ambiguous invoice tax selection.");
             }
         }
         db.update(
@@ -749,7 +765,8 @@ public class FinancialHardeningService {
     }
 
     /**
-     * Resolve the single effective 18% VAT rule for the tenant's default invoice
+     * Resolve the single effective configured VAT rule for the tenant's default
+     * invoice
      * jurisdiction when a document currency is not yet known. Kept for backwards
      * compatibility; invoice flows should use the currency-aware overload.
      */
@@ -833,7 +850,7 @@ public class FinancialHardeningService {
                       FROM finance_tax_jurisdictions j
                       JOIN finance_tax_rules r ON r.tenant_id=j.tenant_id AND r.jurisdiction_code=j.jurisdiction_code
                      WHERE j.tenant_id=? AND j.jurisdiction_code=? AND j.active=true AND j.default_for_invoicing=true
-                       AND r.active=true AND upper(r.tax_type)='VAT' AND r.rate=18
+                       AND r.active=true AND upper(r.tax_type)='VAT'
                        AND r.valid_from<=? AND (r.valid_until IS NULL OR r.valid_until>=?)
                        AND (r.applies_to='ALL' OR r.applies_to='INVOICE')
                      ORDER BY r.valid_from DESC
@@ -847,7 +864,7 @@ public class FinancialHardeningService {
                       FROM finance_tax_jurisdictions j
                       JOIN finance_tax_rules r ON r.tenant_id=j.tenant_id AND r.jurisdiction_code=j.jurisdiction_code
                      WHERE j.tenant_id=? AND j.jurisdiction_code=? AND j.active=true AND j.default_for_invoicing=true
-                       AND r.active=true AND upper(r.tax_type)='VAT' AND r.rate=18
+                       AND r.active=true AND upper(r.tax_type)='VAT'
                        AND r.valid_from<=? AND (r.valid_until IS NULL OR r.valid_until>=?)
                        AND (r.applies_to='ALL' OR r.applies_to='INVOICE')
                        AND upper(r.currency)=?
@@ -861,7 +878,7 @@ public class FinancialHardeningService {
                                   FROM finance_tax_jurisdictions j
                                   JOIN finance_tax_rules r ON r.tenant_id=j.tenant_id AND r.jurisdiction_code=j.jurisdiction_code
                                  WHERE j.tenant_id=? AND j.jurisdiction_code=? AND j.active=true AND j.default_for_invoicing=true
-                                   AND r.active=true AND upper(r.tax_type)='VAT' AND r.rate=18
+                                   AND r.active=true AND upper(r.tax_type)='VAT'
                                    AND r.valid_from<=? AND (r.valid_until IS NULL OR r.valid_until>=?)
                                    AND (r.applies_to='ALL' OR r.applies_to='INVOICE')
                                    AND r.currency IS NULL
@@ -873,30 +890,32 @@ public class FinancialHardeningService {
         if (rules.isEmpty()) {
             String currencyNote = documentCurrency == null ? "" : " for invoice currency " + documentCurrency;
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "No active 18% VAT rule is configured for default invoice jurisdiction " + jurisdiction
+                    "No active VAT rule is configured for default invoice jurisdiction " + jurisdiction
                             + currencyNote
                             + ". Open Invoice Tax Setup and ask an authorized finance user to review the applicable VAT rule.");
         }
         if (rules.size() > 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Multiple effective 18% VAT rules exist for default invoice jurisdiction " + jurisdiction
+                    "Multiple effective VAT rules exist for default invoice jurisdiction " + jurisdiction
                             + ". Ask a finance administrator to resolve the tax configuration before issuing invoices.");
         }
         return rules.get(0);
     }
 
     /**
-     * Create a currency-neutral standard VAT rule only after an administrator
+     * Seed an initial currency-neutral Rwanda 18% VAT rule only after an
+     * administrator
      * explicitly saves an active default jurisdiction. Existing effective rules
      * and scheduled future rules remain authoritative; this method only fills an
-     * effective-date gap. The rule is exclusive by default (VAT is added to the
+     * effective-date gap. Any active adjusted VAT rate prevents reseeding.
+     * The rule is exclusive by default (VAT is added to the
      * shipment's entered amount). Finance can edit the rule's inclusive setting.
      */
     private void ensureDefaultInvoiceVatRule(UUID tenantId, String jurisdictionCode, LocalDate effectiveDate) {
         List<Map<String, Object>> currentRules = db.queryForList("""
                 SELECT id FROM finance_tax_rules
                  WHERE tenant_id=? AND jurisdiction_code=? AND active=true
-                   AND upper(tax_type)='VAT' AND rate=18 AND currency IS NULL
+                   AND upper(tax_type)='VAT' AND currency IS NULL
                    AND valid_from<=? AND (valid_until IS NULL OR valid_until>=?)
                    AND (applies_to='ALL' OR applies_to='INVOICE')
                  ORDER BY valid_from DESC
@@ -907,7 +926,7 @@ public class FinancialHardeningService {
         java.sql.Date nextStart = db.queryForObject("""
                 SELECT MIN(valid_from) FROM finance_tax_rules
                  WHERE tenant_id=? AND jurisdiction_code=? AND active=true
-                   AND upper(tax_type)='VAT' AND rate=18 AND currency IS NULL
+                   AND upper(tax_type)='VAT' AND currency IS NULL
                    AND valid_from>? AND (applies_to='ALL' OR applies_to='INVOICE')
                 """, java.sql.Date.class, tenantId, jurisdictionCode, effectiveDate);
         LocalDate validUntil = nextStart == null ? null : nextStart.toLocalDate().minusDays(1);

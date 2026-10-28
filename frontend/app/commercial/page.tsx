@@ -1,7 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import CustomerWorkspace from "@/components/CustomerWorkspace";
 import { useAuth } from "@/lib/auth-context";
 import {
   ApiError,
@@ -25,6 +26,26 @@ function msg(e: unknown) {
 }
 
 export default function CommercialPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="page">
+          <p>Loading customers and sales…</p>
+        </main>
+      }
+    >
+      <CommercialWorkspace />
+    </Suspense>
+  );
+}
+
+function CommercialWorkspace() {
+  const searchParams = useSearchParams();
+  if (searchParams.get("tab") === "customers") return <CustomerWorkspace />;
+  return <CommercialQuotesWorkspace />;
+}
+
+function CommercialQuotesWorkspace() {
   const { accessToken, isLoading, role } = useAuth();
   const router = useRouter();
   const [quotes, setQuotes] = useState<QuoteRecord[]>([]);

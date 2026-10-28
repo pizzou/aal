@@ -14,13 +14,15 @@ type NavItem = {
   primary?: boolean;
 };
 
+// Six familiar daily destinations. Specialist routes remain available through
+// the Operations workspace or the collapsed administrative tools area.
 const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   {
-    section: "CONTROL TOWER",
-    label: "Command Center",
+    section: "DAILY WORK",
+    label: "Home",
     href: "/aal-control-tower",
-    primary: true,
     icon: "grid",
+    primary: true,
     roles: [
       "ADMIN",
       "MANAGER",
@@ -33,34 +35,19 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     ],
   },
   {
-    section: "CONTROL TOWER",
-    label: "Shipment Register",
+    section: "DAILY WORK",
+    label: "Shipments",
     href: "/shipments",
-    primary: true,
     icon: "ship",
+    primary: true,
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES", "FINANCE"],
   },
   {
-    section: "CONTROL TOWER",
-    label: "New Shipment",
-    href: "/new-shipment",
-    icon: "ship",
+    section: "DAILY WORK",
+    label: "Operations",
+    href: "/operations",
+    icon: "truck",
     primary: true,
-    roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES"],
-  },
-  {
-    section: "OPERATIONS",
-    label: "Air Cargo",
-    href: "/air-cargo",
-    primary: true,
-    icon: "plane",
-    roles: ["ADMIN", "MANAGER", "OPERATIONS", "AIR_CARGO"],
-  },
-  {
-    section: "OPERATIONS",
-    label: "Multimodal Control",
-    href: "/multimodal",
-    icon: "globe",
     roles: [
       "ADMIN",
       "MANAGER",
@@ -71,124 +58,95 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     ],
   },
   {
-    section: "OPERATIONS",
-    label: "Dispatch & Fleet",
-    href: "/trips",
-    primary: true,
-    icon: "truck",
-    roles: ["ADMIN", "MANAGER", "OPERATIONS", "DISPATCH"],
-  },
-  {
-    section: "OPERATIONS",
-    label: "Mobile Operations",
-    href: "/mobile-ops",
-    icon: "truck",
-    roles: ["ADMIN", "MANAGER", "OPERATIONS", "DISPATCH", "WAREHOUSE"],
-  },
-  {
-    section: "OPERATIONS",
-    label: "Warehouse Control",
-    href: "/warehouses",
-    primary: true,
-    icon: "warehouse",
-    roles: ["ADMIN", "MANAGER", "OPERATIONS", "WAREHOUSE"],
-  },
-  {
-    section: "OPERATIONS",
-    label: "Exceptions",
-    href: "/exceptions",
-    icon: "bell",
-    roles: ["ADMIN", "MANAGER", "OPERATIONS"],
-  },
-  {
-    section: "OPERATIONS",
-    label: "Documents & Customs",
-    href: "/documents",
-    icon: "file",
-    roles: ["ADMIN", "MANAGER", "OPERATIONS", "AIR_CARGO"],
-  },
-  {
-    section: "COMMERCIAL & FINANCE",
-    label: "Customers",
-    href: "/customers",
-    icon: "chart",
-    roles: ["ADMIN", "MANAGER", "SALES"],
-  },
-  {
-    section: "COMMERCIAL & FINANCE",
-    label: "Sales & Quotations",
+    section: "DAILY WORK",
+    label: "Customers & quotes",
     href: "/commercial",
     icon: "chart",
+    primary: true,
     roles: ["ADMIN", "MANAGER", "SALES"],
   },
   {
-    section: "COMMERCIAL & FINANCE",
-    label: "Invoice Tax Setup",
+    section: "DAILY WORK",
+    label: "Invoices & payments",
+    href: "/billing",
+    icon: "money",
+    primary: true,
+    roles: ["ADMIN", "MANAGER", "FINANCE"],
+  },
+  {
+    section: "DAILY WORK",
+    label: "Reports",
+    href: "/reports",
+    icon: "chart",
+    primary: true,
+    roles: ["ADMIN", "MANAGER", "FINANCE", "OPERATIONS", "SALES"],
+  },
+  {
+    section: "SETUP & CONTROLS",
+    label: "Company invoice setup",
     href: "/billing/setup",
     icon: "money",
     roles: ["ADMIN", "FINANCE"],
   },
   {
-    section: "COMMERCIAL & FINANCE",
-    label: "Billing & Receivables",
-    href: "/billing",
-    primary: true,
+    section: "SETUP & CONTROLS",
+    label: "Advanced finance",
+    href: "/billing/hardening",
     icon: "money",
-    roles: ["ADMIN", "MANAGER", "FINANCE"],
+    roles: ["ADMIN", "FINANCE"],
   },
   {
-    section: "COMMERCIAL & FINANCE",
-    label: "Income Allocation",
+    section: "SETUP & CONTROLS",
+    label: "Supplier bills",
+    href: "/finance/supplier-bills",
+    icon: "money",
+    roles: ["ADMIN", "FINANCE"],
+  },
+  {
+    section: "SETUP & CONTROLS",
+    label: "Income allocation",
     href: "/finance/income-allocation",
     icon: "money",
     roles: ["ADMIN", "MANAGER", "FINANCE"],
   },
   {
-    section: "COMMERCIAL & FINANCE",
-    label: "Profit Distribution",
+    section: "SETUP & CONTROLS",
+    label: "Profit distribution",
     href: "/finance/profit-allocation",
     icon: "money",
     roles: ["ADMIN", "MANAGER", "FINANCE"],
   },
   {
-    section: "COMMERCIAL & FINANCE",
-    label: "Ledger Export & Periods",
+    section: "SETUP & CONTROLS",
+    label: "Ledger & periods",
     href: "/finance/ledger-export",
     icon: "money",
     roles: ["ADMIN", "FINANCE"],
   },
   {
-    section: "COMMERCIAL & FINANCE",
-    label: "Management Reports",
-    href: "/reports",
-    primary: true,
-    icon: "chart",
-    roles: ["ADMIN", "MANAGER", "FINANCE", "OPERATIONS", "SALES"],
-  },
-  {
-    section: "GOVERNANCE",
-    label: "Legacy Excel Migration",
+    section: "SETUP & CONTROLS",
+    label: "Excel migration",
     href: "/legacy-import",
     icon: "file",
     roles: ["ADMIN", "MANAGER"],
   },
   {
-    section: "GOVERNANCE",
-    label: "Audit Trail",
+    section: "SETUP & CONTROLS",
+    label: "Audit trail",
     href: "/audit",
     icon: "shield",
     roles: ["ADMIN", "MANAGER"],
   },
   {
-    section: "GOVERNANCE",
+    section: "SETUP & CONTROLS",
     label: "Settings",
     href: "/settings",
     icon: "shield",
     roles: ["ADMIN", "MANAGER", "FINANCE", "OPERATIONS"],
   },
   {
-    section: "ADMINISTRATION",
-    label: "Users & Access",
+    section: "SETUP & CONTROLS",
+    label: "Users & permissions",
     href: "/users",
     icon: "shield",
     roles: ["ADMIN"],
@@ -309,7 +267,24 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             const section = item.section !== last;
             last = item.section;
             const active =
-              path === item.href || path.startsWith(`${item.href}/`);
+              path === item.href ||
+              path.startsWith(`${item.href}/`) ||
+              (item.href === "/operations" &&
+                [
+                  "/air-cargo",
+                  "/trips",
+                  "/warehouses",
+                  "/multimodal",
+                  "/ocean",
+                  "/road",
+                  "/rail",
+                  "/documents",
+                  "/exceptions",
+                  "/mobile-ops",
+                ].some(
+                  (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+                )) ||
+              (item.href === "/commercial" && path === "/customers");
 
             return (
               <div key={item.href}>
@@ -520,32 +495,31 @@ function GuidedNextStep({ path, role }: { path: string; role: string | null }) {
       ? {
           href: "/billing",
           label: "Create customer invoice",
-          context: "Continue after verified tax setup",
+          context: "After finance has verified tax setup",
         }
       : path === "/aal-control-tower" && canShip
         ? {
-            href: "/new-shipment",
-            label: "Register shipment",
-            context: "Start the daily workflow",
+            href: "/shipments",
+            label: "Open shipments",
+            context: "Start with the daily shipment register",
           }
-        : path === "/new-shipment"
+        : path === "/shipments" && canShip
           ? {
-              href: "/shipments",
-              label: "Open shipment register",
-              context: "Review the saved job",
+              href: "/shipments?create=1",
+              label: "Create shipment",
+              context: "Register a new job in this workspace",
             }
-          : (path === "/shipments" || path.startsWith("/shipments/")) &&
-              canInvoice
+          : path.startsWith("/shipments/") && canInvoice
             ? {
                 href: "/billing",
                 label: "Billing & collections",
-                context: "Continue after shipment verification",
+                context: "After verifying shipment charges",
               }
             : path === "/billing" && canReport
               ? {
                   href: "/reports",
                   label: "Review reports",
-                  context: "Monitor collections and results",
+                  context: "Monitor confirmed business records",
                 }
               : null;
   if (!next) return null;

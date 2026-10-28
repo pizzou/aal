@@ -62,6 +62,11 @@ class AalFinancialCalculationTest {
         // 400 / 1200 * 100 = 33.3333%
         assertEquals(new BigDecimal("33.3333"), shipment.getMarginPercent());
 
-        assertEquals(new BigDecimal("500.00"), shipment.getNetIncome());
+        // Net income is revenue minus supplier and other direct costs, then other
+        // expenses.
+        // 1200 - (700 + 100) - 50 = 350.00.
+        // Supplier cash paid (650) is not a second expense on top of supplier cost
+        // (700).
+        assertEquals(new BigDecimal("350.00"), shipment.getNetIncome());
     }
 }

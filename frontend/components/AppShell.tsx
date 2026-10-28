@@ -7,13 +7,19 @@ import { shipmentsApi, Shipment } from "@/lib/api-client";
 import Icon, { IconName } from "./Icon";
 import { useEffect, useState } from "react";
 
-type NavItem = { label: string; href: string; icon: IconName };
+type NavItem = {
+  label: string;
+  href: string;
+  icon: IconName;
+  primary?: boolean;
+};
 
 const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   {
     section: "CONTROL TOWER",
     label: "Command Center",
     href: "/aal-control-tower",
+    primary: true,
     icon: "grid",
     roles: [
       "ADMIN",
@@ -30,13 +36,23 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     section: "CONTROL TOWER",
     label: "Shipment Register",
     href: "/shipments",
+    primary: true,
     icon: "ship",
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES", "FINANCE"],
+  },
+  {
+    section: "CONTROL TOWER",
+    label: "New Shipment",
+    href: "/new-shipment",
+    icon: "ship",
+    primary: true,
+    roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES"],
   },
   {
     section: "OPERATIONS",
     label: "Air Cargo",
     href: "/air-cargo",
+    primary: true,
     icon: "plane",
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "AIR_CARGO"],
   },
@@ -58,6 +74,7 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     section: "OPERATIONS",
     label: "Dispatch & Fleet",
     href: "/trips",
+    primary: true,
     icon: "truck",
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "DISPATCH"],
   },
@@ -72,6 +89,7 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     section: "OPERATIONS",
     label: "Warehouse Control",
     href: "/warehouses",
+    primary: true,
     icon: "warehouse",
     roles: ["ADMIN", "MANAGER", "OPERATIONS", "WAREHOUSE"],
   },
@@ -105,8 +123,16 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "COMMERCIAL & FINANCE",
+    label: "Invoice Tax Setup",
+    href: "/billing/setup",
+    icon: "money",
+    roles: ["ADMIN", "FINANCE"],
+  },
+  {
+    section: "COMMERCIAL & FINANCE",
     label: "Billing & Receivables",
     href: "/billing",
+    primary: true,
     icon: "money",
     roles: ["ADMIN", "MANAGER", "FINANCE"],
   },
@@ -135,6 +161,7 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     section: "COMMERCIAL & FINANCE",
     label: "Management Reports",
     href: "/reports",
+    primary: true,
     icon: "chart",
     roles: ["ADMIN", "MANAGER", "FINANCE", "OPERATIONS", "SALES"],
   },
@@ -173,6 +200,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { logout, isLoading, accessToken, role, displayName } = useAuth();
   const [open, setOpen] = useState(false);
+  const [showTools, setShowTools] = useState(false);
   const [query, setQuery] = useState("");
   const [shipments, setShipments] = useState<Shipment[]>([]);
 
@@ -258,6 +286,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const visible = internalNav.filter(
     (item) => !item.roles || (role && item.roles.includes(role)),
   );
+  const primaryNav = visible.filter((item) => item.primary);
+  const toolsNav = visible.filter((item) => !item.primary);
+  const selectedTool = toolsNav.some(
+    (item) => path === item.href || path.startsWith(`${item.href}/`),
+  );
   let last = "";
 
   return (
@@ -272,7 +305,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <div className="nav-list">
-          {visible.map((item) => {
+          {primaryNav.map((item) => {
             const section = item.section !== last;
             last = item.section;
             const active =
@@ -296,6 +329,43 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             );
           })}
+          {toolsNav.length > 0 && (
+            <div className="nav-tools">
+              <button
+                type="button"
+                className="nav-link nav-button"
+                aria-expanded={showTools || selectedTool}
+                onClick={() => setShowTools((current) => !current)}
+              >
+                <span className="nav-icon">
+                  <Icon name="grid" size={17} />
+                </span>
+                <span className="nav-link-copy">
+                  <strong>
+                    {showTools || selectedTool
+                      ? "Hide advanced tools"
+                      : "More tools & setup"}
+                  </strong>
+                </span>
+              </button>
+              {(showTools || selectedTool) &&
+                toolsNav.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`nav-link nav-tool-link ${path === item.href || path.startsWith(`${item.href}/`) ? "active" : ""}`}
+                    onClick={() => setOpen(false)}
+                  >
+                    <span className="nav-icon">
+                      <Icon name={item.icon} size={15} />
+                    </span>
+                    <span className="nav-link-copy">
+                      <strong>{item.label}</strong>
+                    </span>
+                  </Link>
+                ))}
+            </div>
+          )}
         </div>
         <div className="sidebar-command">
           <div className="sidebar-command-icon">
@@ -349,11 +419,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div className="top-actions">
             <div className="live-indicator">
-              <span /> SYSTEM ONLINE
+              <span /> SECURE WORKSPACE
             </div>
-            <button className="icon-btn" aria-label="Notifications">
-              <Icon name="bell" />
-            </button>
             <div className="top-divider" />
             <div className="operator">
               <div className="avatar">
@@ -372,6 +439,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </header>
+        <GuidedNextStep path={path} role={role} />
         {children}
       </section>
     </div>
@@ -414,9 +482,8 @@ function SearchBox({
         className="global-search"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search shipment, AWB, client, invoice…"
+        placeholder="Search shipments, AWB or customer…"
       />
-      <kbd>⌘ K</kbd>
       {results.length > 0 && (
         <div className="search-results">
           {results.map((s) => (
@@ -431,5 +498,61 @@ function SearchBox({
         </div>
       )}
     </div>
+  );
+}
+
+/** Existing screens remain available by direct link; this guidance keeps
+ * normal staff on a predictable daily workflow without bypassing permissions. */
+function GuidedNextStep({ path, role }: { path: string; role: string | null }) {
+  const canShip = ["ADMIN", "MANAGER", "OPERATIONS", "SALES"].includes(
+    role ?? "",
+  );
+  const canInvoice = ["ADMIN", "MANAGER", "FINANCE"].includes(role ?? "");
+  const canReport = [
+    "ADMIN",
+    "MANAGER",
+    "FINANCE",
+    "OPERATIONS",
+    "SALES",
+  ].includes(role ?? "");
+  const next =
+    path === "/billing/setup" && ["ADMIN", "FINANCE"].includes(role ?? "")
+      ? {
+          href: "/billing",
+          label: "Create customer invoice",
+          context: "Continue after verified tax setup",
+        }
+      : path === "/aal-control-tower" && canShip
+        ? {
+            href: "/new-shipment",
+            label: "Register shipment",
+            context: "Start the daily workflow",
+          }
+        : path === "/new-shipment"
+          ? {
+              href: "/shipments",
+              label: "Open shipment register",
+              context: "Review the saved job",
+            }
+          : (path === "/shipments" || path.startsWith("/shipments/")) &&
+              canInvoice
+            ? {
+                href: "/billing",
+                label: "Billing & collections",
+                context: "Continue after shipment verification",
+              }
+            : path === "/billing" && canReport
+              ? {
+                  href: "/reports",
+                  label: "Review reports",
+                  context: "Monitor collections and results",
+                }
+              : null;
+  if (!next) return null;
+  return (
+    <nav className="aal-next-step" aria-label="Suggested next workflow step">
+      <span>{next.context}</span>
+      <Link href={next.href}>Next: {next.label} →</Link>
+    </nav>
   );
 }

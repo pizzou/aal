@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AdvancedDashboard,
+  DashboardOverview,
   ApiError,
   Shipment,
   commandCenterApi,
@@ -59,6 +60,9 @@ export default function AalControlTower() {
   const { accessToken, isLoading, tenantId, role } = useAuth();
   const router = useRouter();
   const [data, setData] = useState<AdvancedDashboard | null>(null);
+  const [overview, setOverview] = useState<DashboardOverview | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsWarning, setDetailsWarning] = useState("");
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [fleetLive, setFleetLive] = useState<
     import("@/lib/api-client").FleetLive[]
@@ -95,7 +99,7 @@ export default function AalControlTower() {
         data?: AdvancedDashboard;
         shipments?: Shipment[];
       };
-      if (!parsed.data) return;
+      if (!parsed.data || parsed.asOf !== asOf) return;
 
       if (parsed.asOf) setAsOf(parsed.asOf);
       setData(parsed.data);
@@ -133,58 +137,83 @@ export default function AalControlTower() {
 
   async function loadCore(forceRefresh = false) {
     if (!accessToken || !mountedRef.current) return;
-
     const run = ++coreRunRef.current;
     coreAbortRef.current?.abort();
     const controller = new AbortController();
     coreAbortRef.current = controller;
-
-    if (forceRefresh) setRefreshing(true);
-
     const requestOptions: RequestInit = {
       signal: controller.signal,
       ...(forceRefresh ? { cache: "no-store" as RequestCache } : {}),
     };
 
-    const dashboardPromise = commandCenterApi.advanced(asOf, requestOptions);
+    if (forceRefresh) setRefreshing(true);
+    setDetailsWarning("");
+
+    // Small, reliable business totals load first. Never make the main page wait
+    // for the 12 independent analytics queries and the fleet/health services.
     const recentPromise = shipmentsApi.list(
       { page: 0, size: 5 },
       requestOptions,
     );
-
     void recentPromise
       .then((result) => {
-        if (!mountedRef.current || run !== coreRunRef.current) return;
-        const recent = Array.isArray(result?.content) ? result.content : [];
-        setShipments(recent);
-        if (data) persistSnapshot(data, recent);
-      })
-      .catch((reason) => {
         if (
-          controller.signal.aborted ||
           !mountedRef.current ||
-          run !== coreRunRef.current
+          run !== coreRunRef.current ||
+          controller.signal.aborted
         )
           return;
-        setError(
-          (current) =>
-            current ||
-            (reason instanceof ApiError
-              ? reason.message
-              : "Recent shipment activity is temporarily unavailable."),
-        );
+        const recent = Array.isArray(result?.content) ? result.content : [];
+        setShipments(recent);
+      })
+      .catch(() => {
+        // The optional recent-shipments list must not conceal trustworthy KPIs.
       });
 
     try {
-      const dashboard = await dashboardPromise;
-
-      if (!mountedRef.current || run !== coreRunRef.current) return;
-
-      const updatedAt = new Date().toISOString();
-      setData(dashboard);
-      setLastUpdatedAt(updatedAt);
+      const quick = await commandCenterApi.overview(asOf, requestOptions);
+      if (
+        !mountedRef.current ||
+        run !== coreRunRef.current ||
+        controller.signal.aborted
+      )
+        return;
+      setOverview(quick);
+      setLastUpdatedAt(new Date().toISOString());
       setError("");
-      persistSnapshot(dashboard, shipments);
+      setDetailsLoading(true);
+
+      // Load detailed analytics progressively without blocking navigation.
+      void commandCenterApi
+        .advanced(asOf, requestOptions)
+        .then((dashboard) => {
+          if (
+            !mountedRef.current ||
+            run !== coreRunRef.current ||
+            controller.signal.aborted
+          )
+            return;
+          setData(dashboard);
+          setDetailsWarning("");
+          persistSnapshot(dashboard, shipments);
+        })
+        .catch((reason) => {
+          if (
+            !mountedRef.current ||
+            run !== coreRunRef.current ||
+            controller.signal.aborted
+          )
+            return;
+          setDetailsWarning(
+            reason instanceof Error
+              ? `Detailed analytics are unavailable: ${reason.message}`
+              : "Detailed analytics are temporarily unavailable. The core figures are still live.",
+          );
+        })
+        .finally(() => {
+          if (mountedRef.current && run === coreRunRef.current)
+            setDetailsLoading(false);
+        });
     } catch (reason) {
       if (
         controller.signal.aborted ||
@@ -192,18 +221,15 @@ export default function AalControlTower() {
         run !== coreRunRef.current
       )
         return;
-
+      const message =
+        reason instanceof Error ? reason.message : "Connection unavailable";
       setError(
-        reason instanceof ApiError
-          ? reason.message
-          : "Unable to load the operations control tower. Please retry.",
+        `Live figures could not be verified (${message}). Check backend/database health and retry. ` +
+          "Existing cached information, if shown, may be outdated.",
       );
     } finally {
       if (mountedRef.current && run === coreRunRef.current) {
         if (forceRefresh) setRefreshing(false);
-        if (coreAbortRef.current === controller) {
-          coreAbortRef.current = null;
-        }
       }
     }
   }
@@ -373,9 +399,15 @@ export default function AalControlTower() {
     return (
       <main className="dashboard-page">
         <section className="dashboard-loading card" aria-live="polite">
-          <img src="/branding/aal-logo.jpg" alt="Aviation Africa Logistics Ltd" />
+          <img
+            src="/branding/aal-logo.jpg"
+            alt="Aviation Africa Logistics Ltd"
+          />
           <strong>Restoring secure operations workspace…</strong>
-          <span>Restoring your existing AAL session. Live dashboard data will load automatically.</span>
+          <span>
+            Restoring your existing AAL session. Live dashboard data will load
+            automatically.
+          </span>
         </section>
       </main>
     );
@@ -386,27 +418,29 @@ export default function AalControlTower() {
   // response, or a transient cached snapshot omits one of those objects.
   // Without these guards, `data?.financial.currency` still throws when `data`
   // exists but `financial` is missing.
-  const operations = data?.operations ?? {
-    totalShipments: 0,
-    activeShipments: 0,
-    deliveredShipments: 0,
-    delayedShipments: 0,
-    exceptionShipments: 0,
-    unassignedShipments: 0,
-    dueToday: 0,
-    onTimeRatePercent: 0,
-    completionRatePercent: 0,
-  };
-  const financial = data?.financial ?? {
-    currency: "USD",
-    mixedCurrencies: false,
-    billed: 0,
-    collected: 0,
-    receivables: 0,
-    operatingCost: 0,
-    grossMargin: 0,
-    grossMarginPercent: 0,
-  };
+  const operations = overview?.operations ??
+    data?.operations ?? {
+      totalShipments: 0,
+      activeShipments: 0,
+      deliveredShipments: 0,
+      delayedShipments: 0,
+      exceptionShipments: 0,
+      unassignedShipments: 0,
+      dueToday: 0,
+      onTimeRatePercent: 0,
+      completionRatePercent: 0,
+    };
+  const financial = overview?.financial ??
+    data?.financial ?? {
+      currency: "USD",
+      mixedCurrencies: false,
+      billed: 0,
+      collected: 0,
+      receivables: 0,
+      operatingCost: 0,
+      grossMargin: 0,
+      grossMarginPercent: 0,
+    };
   const fleet = data?.fleet ?? {
     totalVehicles: 0,
     availableVehicles: 0,
@@ -444,7 +478,11 @@ export default function AalControlTower() {
               aria-label="As of date"
               type="date"
               value={asOf}
-              onChange={(e) => setAsOf(e.target.value)}
+              onChange={(e) => {
+                setData(null);
+                setOverview(null);
+                setAsOf(e.target.value);
+              }}
             />
           </div>
           <span
@@ -474,10 +512,26 @@ export default function AalControlTower() {
       </section>
 
       {error && (
-        <div className="alert alert-error dashboard-alert">{error}</div>
+        <div className="alert alert-error dashboard-alert" role="alert">
+          {error}{" "}
+          <button type="button" className="btn" onClick={() => void load()}>
+            Try again
+          </button>
+        </div>
+      )}
+      {detailsLoading && overview && !data && (
+        <div className="alert dashboard-alert" role="status">
+          Shipment and financial totals are available. Loading detailed charts
+          and activity…
+        </div>
+      )}
+      {detailsWarning && overview && (
+        <div className="alert dashboard-alert" role="status">
+          {detailsWarning}
+        </div>
       )}
 
-      {!data ? (
+      {!data && !overview ? (
         <section className="dashboard-loading card">
           <img
             src="/branding/aal-logo.jpg"
@@ -536,384 +590,411 @@ export default function AalControlTower() {
             />
           </section>
 
-          <section className="dashboard-main-grid">
-            <div className="dashboard-card dashboard-chart-card">
-              <DashboardCardHeader
-                eyebrow="NETWORK PERFORMANCE"
-                title="Shipment Overview"
-                href="/reports"
-              />
-              <div className="chart-legend">
-                {modeMix.slice(0, 4).map((item, index) => (
-                  <span key={item.mode}>
-                    <i className={`legend-dot dot-${index}`} />
-                    {modeLabel(item.mode)}
-                  </span>
-                ))}
-              </div>
-              <div className="line-chart">
-                <div className="chart-y-labels">
-                  <span>100%</span>
-                  <span>75%</span>
-                  <span>50%</span>
-                  <span>25%</span>
-                  <span>0</span>
-                </div>
-                <svg
-                  viewBox="0 0 760 250"
-                  role="img"
-                  aria-label="Shipment trend chart"
-                  preserveAspectRatio="none"
-                >
-                  {[20, 70, 120, 170, 220].map((y) => (
-                    <line
-                      key={y}
-                      x1="24"
-                      y1={y}
-                      x2="748"
-                      y2={y}
-                      className="chart-grid-line"
-                    />
-                  ))}
-                  {trend.length > 1 && (
-                    <>
-                      <polyline
-                        className="chart-line chart-line-red"
-                        points={trend
-                          .map(
-                            (x, i) =>
-                              `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.shipments / Math.max(1, total)) * 185}`,
-                          )
-                          .join(" ")}
-                      />
-                      <polyline
-                        className="chart-line chart-line-blue"
-                        points={trend
-                          .map(
-                            (x, i) =>
-                              `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.revenue / trendMax) * 165}`,
-                          )
-                          .join(" ")}
-                      />
-                      <polyline
-                        className="chart-line chart-line-yellow"
-                        points={trend
-                          .map(
-                            (x, i) =>
-                              `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.operatingCost / trendMax) * 145}`,
-                          )
-                          .join(" ")}
-                      />
-                    </>
-                  )}
-                </svg>
-              </div>
-              <div className="chart-x-labels">
-                {trend.map((x) => (
-                  <span key={x.date}>{x.date.slice(5)}</span>
-                ))}
-              </div>
-            </div>
-
-            <div className="dashboard-card tracking-card">
-              <DashboardCardHeader
-                eyebrow="LIVE VISIBILITY"
-                title="Global Tracking"
-                href="/track"
-              />
-              <div
-                className="tracking-map"
-                aria-label="Global shipment tracking visualization"
-              >
-                <div className="map-grid" />
-                {fleetLive
-                  .filter((x) => x.latitude != null && x.longitude != null)
-                  .slice(0, 40)
-                  .map((x) => (
-                    <MapPoint
-                      key={x.vehicleId}
-                      x={`${Math.max(3, Math.min(97, ((Number(x.longitude) + 180) / 360) * 100))}%`}
-                      y={`${Math.max(5, Math.min(95, ((90 - Number(x.latitude)) / 180) * 100))}%`}
-                      label={x.registrationNumber}
-                      tone={
-                        x.vehicleStatus === "ON_TRIP"
-                          ? "red"
-                          : x.vehicleStatus === "MAINTENANCE"
-                            ? "yellow"
-                            : "green"
-                      }
-                    />
-                  ))}
-                {!fleetLive.some(
-                  (x) => x.latitude != null && x.longitude != null,
-                ) && (
-                  <div className="map-empty-state">
-                    No live GPS positions available
-                  </div>
-                )}
-              </div>
-              <div className="tracking-legend">
-                <span>
-                  <i className="legend-dot dot-red" />
-                  In Transit
-                </span>
-                <span>
-                  <i className="legend-dot dot-green" />
-                  Delivered
-                </span>
-                <span>
-                  <i className="legend-dot dot-yellow" />
-                  Exception
-                </span>
-              </div>
-            </div>
-
-            <div className="dashboard-card quick-actions-card">
-              <DashboardCardHeader eyebrow="OPERATIONS" title="Quick Actions" />
-              <QuickAction
-                href="/new-shipment"
-                icon="ship"
-                label="Create Shipment"
-                tone="navy"
-              />
-              <QuickAction
-                href="/air-cargo"
-                icon="plane"
-                label="Book Air Freight"
-                tone="red"
-              />
-              <QuickAction
-                href="/track"
-                icon="search"
-                label="Track Shipment"
-                tone="yellow"
-              />
-              <QuickAction
-                href="/commercial"
-                icon="file"
-                label="Request Quote"
-                tone="navy"
-              />
-            </div>
-          </section>
-
-          <section className="dashboard-lower-grid">
-            <div className="dashboard-card recent-card">
-              <DashboardCardHeader
-                eyebrow="EXECUTION"
-                title="Recent Shipments"
-                href="/shipments"
-              />
-              <div className="dashboard-table-wrap">
-                <table className="dashboard-table">
-                  <thead>
-                    <tr>
-                      <th>Tracking No.</th>
-                      <th>Origin → Destination</th>
-                      <th>Mode</th>
-                      <th>Status</th>
-                      <th>ETA</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shipments.map((shipment) => (
-                      <tr key={shipment.id}>
-                        <td>
-                          <Link
-                            href={`/shipments/${shipment.id}`}
-                            className="dashboard-link"
-                          >
-                            {shipment.referenceCode}
-                          </Link>
-                        </td>
-                        <td>
-                          {shipment.originCityPort ||
-                            shipment.originCountry ||
-                            "—"}{" "}
-                          →{" "}
-                          {shipment.destinationCityPort ||
-                            shipment.destinationCountry ||
-                            "—"}
-                        </td>
-                        <td>
-                          <span className="mode-cell">
-                            <Icon
-                              name={
-                                shipment.transportMode === "AIR"
-                                  ? "plane"
-                                  : shipment.transportMode === "SEA"
-                                    ? "ship"
-                                    : shipment.transportMode === "RAIL"
-                                      ? "train"
-                                      : "truck"
-                              }
-                              size={14}
-                            />{" "}
-                            {modeLabel(shipment.transportMode)}
-                          </span>
-                        </td>
-                        <td>
-                          <span className={statusTone(shipment.status)}>
-                            {shipment.status.replaceAll("_", " ")}
-                          </span>
-                        </td>
-                        <td>
-                          {shipment.eta
-                            ? new Date(shipment.eta).toLocaleDateString(
-                                undefined,
-                                { day: "2-digit", month: "short" },
-                              )
-                            : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                    {!shipments.length && (
-                      <tr>
-                        <td colSpan={5} className="dashboard-empty">
-                          No shipments available.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="dashboard-card activity-card">
-              <DashboardCardHeader
-                eyebrow="OPERATIONS FEED"
-                title="Activity Feed"
-                href="/exceptions"
-              />
-              <div className="activity-feed">
-                {actions.slice(0, 5).map((item, index) => (
-                  <Link
-                    href={item.href}
-                    className="activity-item"
-                    key={`${item.title}-${index}`}
-                  >
-                    <span className={`activity-icon activity-${index % 4}`}>
-                      <Icon
-                        name={
-                          index === 0
-                            ? "check"
-                            : index === 1
-                              ? "bell"
-                              : index === 2
-                                ? "truck"
-                                : "file"
-                        }
-                        size={14}
-                      />
-                    </span>
-                    <span className="activity-copy">
-                      <strong>{item.title}</strong>
-                      <small>{item.detail}</small>
-                    </span>
-                    <span className="activity-arrow">→</span>
-                  </Link>
-                ))}
-                {!actions.length && (
-                  <div className="dashboard-empty">
-                    No new operational activity.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="dashboard-brand-card">
-              <img
-                src="/branding/aal-brand.png"
-                alt="Aviation Africa Logistics Ltd — Global Reach African Roots"
-              />
-              <div className="dashboard-brand-overlay">
-                <span>SMARTER LOGISTICS</span>
-                <strong>Across Africa &amp; Beyond</strong>
-                <small>Air · Ocean · Road · Rail · Warehousing</small>
-              </div>
-            </div>
-          </section>
-
-          <section className="dashboard-bottom-grid">
-            <div className="dashboard-card compact-performance">
-              <DashboardCardHeader
-                eyebrow="FLEET & CAPACITY"
-                title="Operational readiness"
-              />
-              <Readiness
-                label="Vehicles available"
-                value={`${fleet.availableVehicles} / ${fleet.totalVehicles}`}
-                percent={fleet.vehicleUtilizationPercent}
-              />
-              <Readiness
-                label="Drivers available"
-                value={`${fleet.availableDrivers} / ${fleet.totalDrivers}`}
-                percent={fleet.driverUtilizationPercent}
-              />
-              <Readiness
-                label="On-time delivery"
-                value={pct(operations.onTimeRatePercent)}
-                percent={operations.onTimeRatePercent}
-              />
-            </div>
-            <div className="dashboard-card compact-performance">
-              <DashboardCardHeader
-                eyebrow="FINANCE"
-                title="Cash exposure"
-                href="/billing"
-              />
-              <Readiness
-                label="Receivables"
-                value={money(financial.receivables, currency)}
-                percent={Math.min(
-                  100,
-                  (financial.receivables / Math.max(1, financial.billed)) * 100,
-                )}
-              />
-              <Readiness
-                label="Collected"
-                value={money(financial.collected, currency)}
-                percent={Math.min(
-                  100,
-                  (financial.collected / Math.max(1, financial.billed)) * 100,
-                )}
-              />
-              <Readiness
-                label="Gross margin"
-                value={pct(financial.grossMarginPercent)}
-                percent={financial.grossMarginPercent}
-              />
-            </div>
-            <div className="dashboard-card compact-performance">
-              <DashboardCardHeader
-                eyebrow="EXCEPTIONS"
-                title="Priority attention"
-                href="/exceptions"
-              />
-              {exceptionsList.slice(0, 3).map((item) => (
-                <Link
-                  key={`${item.reference}-${item.type}`}
-                  href={`/shipments?q=${encodeURIComponent(item.reference)}`}
-                  className="priority-row"
-                >
-                  <span
-                    className={
-                      item.severity.toUpperCase() === "CRITICAL"
-                        ? "priority-dot red"
-                        : "priority-dot yellow"
-                    }
+          {data ? (
+            <>
+              <section className="dashboard-main-grid">
+                <div className="dashboard-card dashboard-chart-card">
+                  <DashboardCardHeader
+                    eyebrow="NETWORK PERFORMANCE"
+                    title="Shipment Overview"
+                    href="/reports"
                   />
-                  <span>
-                    <strong>{item.reference}</strong>
-                    <small>{item.message}</small>
-                  </span>
-                </Link>
-              ))}
-              {!exceptionsList.length && (
-                <div className="dashboard-empty">No open exceptions.</div>
-              )}
-            </div>
-          </section>
+                  <div className="chart-legend">
+                    {modeMix.slice(0, 4).map((item, index) => (
+                      <span key={item.mode}>
+                        <i className={`legend-dot dot-${index}`} />
+                        {modeLabel(item.mode)}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="line-chart">
+                    <div className="chart-y-labels">
+                      <span>100%</span>
+                      <span>75%</span>
+                      <span>50%</span>
+                      <span>25%</span>
+                      <span>0</span>
+                    </div>
+                    <svg
+                      viewBox="0 0 760 250"
+                      role="img"
+                      aria-label="Shipment trend chart"
+                      preserveAspectRatio="none"
+                    >
+                      {[20, 70, 120, 170, 220].map((y) => (
+                        <line
+                          key={y}
+                          x1="24"
+                          y1={y}
+                          x2="748"
+                          y2={y}
+                          className="chart-grid-line"
+                        />
+                      ))}
+                      {trend.length > 1 && (
+                        <>
+                          <polyline
+                            className="chart-line chart-line-red"
+                            points={trend
+                              .map(
+                                (x, i) =>
+                                  `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.shipments / Math.max(1, total)) * 185}`,
+                              )
+                              .join(" ")}
+                          />
+                          <polyline
+                            className="chart-line chart-line-blue"
+                            points={trend
+                              .map(
+                                (x, i) =>
+                                  `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.revenue / trendMax) * 165}`,
+                              )
+                              .join(" ")}
+                          />
+                          <polyline
+                            className="chart-line chart-line-yellow"
+                            points={trend
+                              .map(
+                                (x, i) =>
+                                  `${30 + (i * 710) / Math.max(1, trend.length - 1)},${230 - (x.operatingCost / trendMax) * 145}`,
+                              )
+                              .join(" ")}
+                          />
+                        </>
+                      )}
+                    </svg>
+                  </div>
+                  <div className="chart-x-labels">
+                    {trend.map((x) => (
+                      <span key={x.date}>{x.date.slice(5)}</span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="dashboard-card tracking-card">
+                  <DashboardCardHeader
+                    eyebrow="LIVE VISIBILITY"
+                    title="Global Tracking"
+                    href="/track"
+                  />
+                  <div
+                    className="tracking-map"
+                    aria-label="Global shipment tracking visualization"
+                  >
+                    <div className="map-grid" />
+                    {fleetLive
+                      .filter((x) => x.latitude != null && x.longitude != null)
+                      .slice(0, 40)
+                      .map((x) => (
+                        <MapPoint
+                          key={x.vehicleId}
+                          x={`${Math.max(3, Math.min(97, ((Number(x.longitude) + 180) / 360) * 100))}%`}
+                          y={`${Math.max(5, Math.min(95, ((90 - Number(x.latitude)) / 180) * 100))}%`}
+                          label={x.registrationNumber}
+                          tone={
+                            x.vehicleStatus === "ON_TRIP"
+                              ? "red"
+                              : x.vehicleStatus === "MAINTENANCE"
+                                ? "yellow"
+                                : "green"
+                          }
+                        />
+                      ))}
+                    {!fleetLive.some(
+                      (x) => x.latitude != null && x.longitude != null,
+                    ) && (
+                      <div className="map-empty-state">
+                        No live GPS positions available
+                      </div>
+                    )}
+                  </div>
+                  <div className="tracking-legend">
+                    <span>
+                      <i className="legend-dot dot-red" />
+                      In Transit
+                    </span>
+                    <span>
+                      <i className="legend-dot dot-green" />
+                      Delivered
+                    </span>
+                    <span>
+                      <i className="legend-dot dot-yellow" />
+                      Exception
+                    </span>
+                  </div>
+                </div>
+
+                <div className="dashboard-card quick-actions-card">
+                  <DashboardCardHeader
+                    eyebrow="OPERATIONS"
+                    title="Quick Actions"
+                  />
+                  <QuickAction
+                    href="/new-shipment"
+                    icon="ship"
+                    label="Create Shipment"
+                    tone="navy"
+                  />
+                  <QuickAction
+                    href="/air-cargo"
+                    icon="plane"
+                    label="Book Air Freight"
+                    tone="red"
+                  />
+                  <QuickAction
+                    href="/track"
+                    icon="search"
+                    label="Track Shipment"
+                    tone="yellow"
+                  />
+                  <QuickAction
+                    href="/commercial"
+                    icon="file"
+                    label="Request Quote"
+                    tone="navy"
+                  />
+                </div>
+              </section>
+
+              <section className="dashboard-lower-grid">
+                <div className="dashboard-card recent-card">
+                  <DashboardCardHeader
+                    eyebrow="EXECUTION"
+                    title="Recent Shipments"
+                    href="/shipments"
+                  />
+                  <div className="dashboard-table-wrap">
+                    <table className="dashboard-table">
+                      <thead>
+                        <tr>
+                          <th>Tracking No.</th>
+                          <th>Origin → Destination</th>
+                          <th>Mode</th>
+                          <th>Status</th>
+                          <th>ETA</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shipments.map((shipment) => (
+                          <tr key={shipment.id}>
+                            <td>
+                              <Link
+                                href={`/shipments/${shipment.id}`}
+                                className="dashboard-link"
+                              >
+                                {shipment.referenceCode}
+                              </Link>
+                            </td>
+                            <td>
+                              {shipment.originCityPort ||
+                                shipment.originCountry ||
+                                "—"}{" "}
+                              →{" "}
+                              {shipment.destinationCityPort ||
+                                shipment.destinationCountry ||
+                                "—"}
+                            </td>
+                            <td>
+                              <span className="mode-cell">
+                                <Icon
+                                  name={
+                                    shipment.transportMode === "AIR"
+                                      ? "plane"
+                                      : shipment.transportMode === "SEA"
+                                        ? "ship"
+                                        : shipment.transportMode === "RAIL"
+                                          ? "train"
+                                          : "truck"
+                                  }
+                                  size={14}
+                                />{" "}
+                                {modeLabel(shipment.transportMode)}
+                              </span>
+                            </td>
+                            <td>
+                              <span className={statusTone(shipment.status)}>
+                                {shipment.status.replaceAll("_", " ")}
+                              </span>
+                            </td>
+                            <td>
+                              {shipment.eta
+                                ? new Date(shipment.eta).toLocaleDateString(
+                                    undefined,
+                                    { day: "2-digit", month: "short" },
+                                  )
+                                : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                        {!shipments.length && (
+                          <tr>
+                            <td colSpan={5} className="dashboard-empty">
+                              No shipments available.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="dashboard-card activity-card">
+                  <DashboardCardHeader
+                    eyebrow="OPERATIONS FEED"
+                    title="Activity Feed"
+                    href="/exceptions"
+                  />
+                  <div className="activity-feed">
+                    {actions.slice(0, 5).map((item, index) => (
+                      <Link
+                        href={item.href}
+                        className="activity-item"
+                        key={`${item.title}-${index}`}
+                      >
+                        <span className={`activity-icon activity-${index % 4}`}>
+                          <Icon
+                            name={
+                              index === 0
+                                ? "check"
+                                : index === 1
+                                  ? "bell"
+                                  : index === 2
+                                    ? "truck"
+                                    : "file"
+                            }
+                            size={14}
+                          />
+                        </span>
+                        <span className="activity-copy">
+                          <strong>{item.title}</strong>
+                          <small>{item.detail}</small>
+                        </span>
+                        <span className="activity-arrow">→</span>
+                      </Link>
+                    ))}
+                    {!actions.length && (
+                      <div className="dashboard-empty">
+                        No new operational activity.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="dashboard-brand-card">
+                  <img
+                    src="/branding/aal-brand.png"
+                    alt="Aviation Africa Logistics Ltd — Global Reach African Roots"
+                  />
+                  <div className="dashboard-brand-overlay">
+                    <span>SMARTER LOGISTICS</span>
+                    <strong>Across Africa &amp; Beyond</strong>
+                    <small>Air · Ocean · Road · Rail · Warehousing</small>
+                  </div>
+                </div>
+              </section>
+
+              <section className="dashboard-bottom-grid">
+                <div className="dashboard-card compact-performance">
+                  <DashboardCardHeader
+                    eyebrow="FLEET & CAPACITY"
+                    title="Operational readiness"
+                  />
+                  <Readiness
+                    label="Vehicles available"
+                    value={`${fleet.availableVehicles} / ${fleet.totalVehicles}`}
+                    percent={fleet.vehicleUtilizationPercent}
+                  />
+                  <Readiness
+                    label="Drivers available"
+                    value={`${fleet.availableDrivers} / ${fleet.totalDrivers}`}
+                    percent={fleet.driverUtilizationPercent}
+                  />
+                  <Readiness
+                    label="On-time delivery"
+                    value={pct(operations.onTimeRatePercent)}
+                    percent={operations.onTimeRatePercent}
+                  />
+                </div>
+                <div className="dashboard-card compact-performance">
+                  <DashboardCardHeader
+                    eyebrow="FINANCE"
+                    title="Cash exposure"
+                    href="/billing"
+                  />
+                  <Readiness
+                    label="Receivables"
+                    value={money(financial.receivables, currency)}
+                    percent={Math.min(
+                      100,
+                      (financial.receivables / Math.max(1, financial.billed)) *
+                        100,
+                    )}
+                  />
+                  <Readiness
+                    label="Collected"
+                    value={money(financial.collected, currency)}
+                    percent={Math.min(
+                      100,
+                      (financial.collected / Math.max(1, financial.billed)) *
+                        100,
+                    )}
+                  />
+                  <Readiness
+                    label="Gross margin"
+                    value={pct(financial.grossMarginPercent)}
+                    percent={financial.grossMarginPercent}
+                  />
+                </div>
+                <div className="dashboard-card compact-performance">
+                  <DashboardCardHeader
+                    eyebrow="EXCEPTIONS"
+                    title="Priority attention"
+                    href="/exceptions"
+                  />
+                  {exceptionsList.slice(0, 3).map((item) => (
+                    <Link
+                      key={`${item.reference}-${item.type}`}
+                      href={`/shipments?q=${encodeURIComponent(item.reference)}`}
+                      className="priority-row"
+                    >
+                      <span
+                        className={
+                          item.severity.toUpperCase() === "CRITICAL"
+                            ? "priority-dot red"
+                            : "priority-dot yellow"
+                        }
+                      />
+                      <span>
+                        <strong>{item.reference}</strong>
+                        <small>{item.message}</small>
+                      </span>
+                    </Link>
+                  ))}
+                  {!exceptionsList.length && (
+                    <div className="dashboard-empty">No open exceptions.</div>
+                  )}
+                </div>
+              </section>
+            </>
+          ) : (
+            <section
+              className="dashboard-card"
+              style={{ padding: 24 }}
+              role="status"
+            >
+              <strong>
+                Core operational and financial figures are available.
+              </strong>
+              <p>
+                Detailed trend charts, fleet statistics and exceptions are
+                loading separately. These figures are hidden until verified to
+                avoid displaying misleading zeros.
+              </p>
+              <Link href="/shipments" className="btn">
+                Open shipment register
+              </Link>
+            </section>
+          )}
         </>
       )}
     </main>

@@ -238,6 +238,19 @@ public class SecurityConfig {
                                                 .hasAnyRole("ADMIN", "FINANCE")
 
                                                 /*
+                                                 * Tax setup changes are finance-only. This must
+                                                 * appear before the broad /api/finance/** rule.
+                                                 */
+                                                .requestMatchers(
+                                                                new AntPathRequestMatcher(
+                                                                                "/api/finance/hardening/tax-jurisdictions",
+                                                                                HttpMethod.POST.name()),
+                                                                new AntPathRequestMatcher(
+                                                                                "/api/finance/hardening/tax-rules",
+                                                                                HttpMethod.POST.name()))
+                                                .hasAnyRole("ADMIN", "FINANCE")
+
+                                                /*
                                                  * REPORTING / FINANCE
                                                  */
                                                 .requestMatchers(

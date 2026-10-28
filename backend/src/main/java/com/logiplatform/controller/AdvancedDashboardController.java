@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.LocalDate;
 
 import static com.logiplatform.dto.AdvancedDashboardDtos.Response;
+import static com.logiplatform.dto.AdvancedDashboardDtos.Overview;
 
 /**
  * Extended, read-only command-centre analytics.
@@ -25,6 +26,11 @@ public class AdvancedDashboardController {
 
     public AdvancedDashboardController(AdvancedDashboardService advanced) {
         this.advanced = advanced;
+    }
+
+    @GetMapping("/advanced/overview")
+    public Overview overview(@RequestParam(required = false) String asOf) {
+        return advanced.overview(parseDate(asOf));
     }
 
     @GetMapping("/advanced")

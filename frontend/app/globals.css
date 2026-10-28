@@ -5061,3 +5061,10 @@ body {
     padding: 17px;
   }
 }
+
+/* Guided daily work; advanced modules remain accessible without crowding staff navigation. */
+.nav-tools { margin: 0.5rem 0 0; border-top: 1px solid rgba(255,255,255,.12); padding-top: .5rem; }
+.nav-tool-link { padding-left: 1.4rem; opacity: .92; }
+.aal-next-step { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem 1rem; align-items: center; padding: .6rem 1.25rem; background: #edf5fa; color: #17364b; font-size: .86rem; border-bottom: 1px solid #dce8f0; }
+.aal-next-step a { font-weight: 700; color: #144c83; text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 640px) { .aal-next-step { padding: .65rem 1rem; } }

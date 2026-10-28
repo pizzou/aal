@@ -772,6 +772,41 @@ public class FinancialHardeningService {
         return resolveDefaultInvoiceVatRule(onDate, currency);
     }
 
+    /**
+     * Read-only preflight for the billing UI. The backend remains the source of
+     * truth: an invoice still resolves its tax rule again on issuance.
+     * Never create company identities or VAT rules during a status request.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> invoiceTaxReadiness(String documentCurrency) {
+        try {
+            Map<String, Object> rule = defaultInvoiceVatRule(LocalDate.now(), documentCurrency);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("ready", true);
+            result.put("jurisdictionCode", rule.get("jurisdiction_code"));
+            result.put("taxCode", rule.get("code"));
+            result.put("taxRate", rule.get("rate"));
+            result.put("message",
+                    "Default invoicing jurisdiction and tax rule are configured. Review the invoice-specific tax preview before issuance.");
+            return result;
+        } catch (ResponseStatusException exception) {
+            // Tax setup and conflicting tax rules are actionable configuration
+            // issues, not successful invoice previews or transport failures.
+            int status = exception.getStatusCode().value();
+            if (status != 409 && status != 422)
+                throw exception;
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("ready", false);
+            result.put("jurisdictionCode", null);
+            result.put("taxCode", null);
+            result.put("taxRate", null);
+            result.put("message", exception.getReason() == null
+                    ? "Invoice tax configuration requires review by finance."
+                    : exception.getReason());
+            return result;
+        }
+    }
+
     private Map<String, Object> resolveDefaultInvoiceVatRule(LocalDate onDate, String documentCurrency) {
         LocalDate effective = onDate == null ? LocalDate.now() : onDate;
         UUID t = tenant();
@@ -783,7 +818,7 @@ public class FinancialHardeningService {
                 """, t);
         if (jurisdictions.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "No active default invoice tax jurisdiction is configured for this tenant. Open Billing > Financial hardening and save the company's verified tax jurisdiction as active and default before issuing invoices.");
+                    "No active default invoice tax jurisdiction is configured for this tenant. Open Invoice Tax Setup and save the company's verified invoicing jurisdiction as active and default before issuing invoices.");
         }
         if (jurisdictions.size() > 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -840,7 +875,7 @@ public class FinancialHardeningService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "No active 18% VAT rule is configured for default invoice jurisdiction " + jurisdiction
                             + currencyNote
-                            + ". Open Billing > Financial hardening; an active default jurisdiction can receive the standard VAT rule automatically when it is saved.");
+                            + ". Open Invoice Tax Setup and ask an authorized finance user to review the applicable VAT rule.");
         }
         if (rules.size() > 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,

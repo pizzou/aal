@@ -32,6 +32,12 @@ public class BillingController {
                         @jakarta.validation.constraints.NotBlank String paymentMethod) {
         }
 
+        @GetMapping("/invoice-readiness")
+        public java.util.Map<String, Object> invoiceReadiness(
+                        @RequestParam(required = false) String currency) {
+                return service.invoiceTaxReadiness(currency);
+        }
+
         @GetMapping("/shipments/{shipmentId}/invoice/vat-preview")
         public java.util.Map<String, Object> previewDefaultInvoiceVat(@PathVariable UUID shipmentId,
                         @RequestParam(required = false) LocalDate onDate) {

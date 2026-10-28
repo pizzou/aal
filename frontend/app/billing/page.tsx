@@ -30,6 +30,14 @@ type TaxPreview = {
   taxRegistrationNo?: string | null;
 };
 
+type InvoiceReadiness = {
+  ready: boolean;
+  message: string;
+  jurisdictionCode?: string | null;
+  taxCode?: string | null;
+  taxRate?: number | null;
+};
+
 type Invoice = {
   id: string;
   tenantId?: string;
@@ -120,6 +128,11 @@ export default function BillingPage() {
   const [taxPreview, setTaxPreview] = useState<TaxPreview | null>(null);
   const [taxPreviewError, setTaxPreviewError] = useState("");
   const [taxPreviewLoading, setTaxPreviewLoading] = useState(false);
+  const [taxReadiness, setTaxReadiness] = useState<InvoiceReadiness | null>(
+    null,
+  );
+  const [readinessLoading, setReadinessLoading] = useState(true);
+  const [readinessError, setReadinessError] = useState("");
 
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -293,11 +306,44 @@ export default function BillingPage() {
     (shipment) => shipment.id === invoiceShipment,
   );
 
+  // Check the finance prerequisites before staff enter an invoice.
+  // The server does not mutate tax configuration during this request.
+  useEffect(() => {
+    let cancelled = false;
+    setReadinessLoading(true);
+    setTaxReadiness(null);
+    setReadinessError("");
+    const currency = (selectedInvoiceShipment?.currency || "USD")
+      .trim()
+      .toUpperCase();
+    apiFetch<InvoiceReadiness>(
+      `/api/billing/invoice-readiness?currency=${encodeURIComponent(currency)}`,
+      { cache: "no-store" },
+    )
+      .then((result) => {
+        if (!cancelled) setTaxReadiness(result);
+      })
+      .catch((e) => {
+        if (!cancelled)
+          setReadinessError(
+            e instanceof Error
+              ? e.message
+              : "Unable to verify company invoice tax configuration.",
+          );
+      })
+      .finally(() => {
+        if (!cancelled) setReadinessLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedInvoiceShipment?.currency]);
+
   useEffect(() => {
     let cancelled = false;
     setTaxPreview(null);
     setTaxPreviewError("");
-    if (!invoiceShipment) {
+    if (!invoiceShipment || readinessLoading || !taxReadiness?.ready) {
       setTaxPreviewLoading(false);
       return () => {
         cancelled = true;
@@ -325,7 +371,7 @@ export default function BillingPage() {
     return () => {
       cancelled = true;
     };
-  }, [invoiceShipment]);
+  }, [invoiceShipment, readinessLoading, taxReadiness?.ready]);
 
   function shipmentForInvoice(invoice: Invoice) {
     return shipments.find((shipment) => shipment.id === invoice.shipmentId);
@@ -336,6 +382,13 @@ export default function BillingPage() {
     setError("");
     setSuccess("");
 
+    if (readinessLoading || !taxReadiness?.ready) {
+      setError(
+        "Complete and verify Invoice Tax Setup before creating a customer invoice.",
+      );
+      setSaving(false);
+      return;
+    }
     if (!invoiceShipment) {
       setError("Select a shipment before creating an invoice.");
       setSaving(false);
@@ -348,7 +401,7 @@ export default function BillingPage() {
     }
     if (!taxPreview) {
       setError(
-        "The server has not confirmed the applicable 18% VAT rule and totals. Resolve the tax configuration before creating this invoice.",
+        "Invoice tax has not been confirmed by the backend. Complete Invoice Tax Setup first, then refresh the invoice preview.",
       );
       setSaving(false);
       return;
@@ -379,11 +432,20 @@ export default function BillingPage() {
       }
 
       setCreatedInvoice(created);
+      // After successfully issuing an invoice, prepare the next step in the
+      // same workspace. Never record a payment without staff confirmation.
+      setPaymentInvoice(created.balance > 0 ? created : null);
+      setPaymentAmount("");
+      setPaymentReference("");
       setInvoiceShipment("");
       setInvoiceOwner("");
       setInvoiceDueDate("");
       setSuccess(
-        `Invoice ${created.invoiceNo || ""} is available in the invoice register. Use View / Print or Download PDF when you are ready.`,
+        `Invoice ${created.invoiceNo || ""} was created. ${
+          created.balance > 0
+            ? "The collection panel is ready for the next step; record payment only after receiving funds."
+            : "The invoice has no outstanding balance."
+        }`,
       );
       await load();
     } catch (exception) {
@@ -610,11 +672,54 @@ export default function BillingPage() {
           <Link className="btn btn-primary" href="/reports">
             Management reports
           </Link>
+          <Link className="btn" href="/billing/setup">
+            Invoice tax setup
+          </Link>
           <Link className="btn" href="/billing/hardening">
-            Financial hardening
+            Advanced finance controls
           </Link>
         </div>
       </div>
+
+      <section
+        className="form-panel"
+        style={{ marginBottom: 18 }}
+        aria-label="Invoice setup prerequisites"
+      >
+        <div className="section-heading">
+          <div className="section-number">01</div>
+          <div>
+            <h2>Invoice setup comes first</h2>
+            <p>
+              Finance verifies the legal company identity and applicable tax
+              rule once, before issuing customer invoices.
+            </p>
+          </div>
+        </div>
+        {readinessLoading ? (
+          <p className="form-hint">Checking company invoice setup…</p>
+        ) : taxReadiness?.ready ? (
+          <div className="alert alert-success" role="status">
+            Invoice setup configured: {taxReadiness.jurisdictionCode} ·{" "}
+            {taxReadiness.taxRate}% tax rule. Each selected shipment still
+            requires a server-calculated tax preview.
+          </div>
+        ) : (
+          <div className="alert alert-error" role="alert">
+            <strong>
+              Invoices are blocked until finance setup is completed.
+            </strong>
+            <p>
+              {taxReadiness?.message ||
+                readinessError ||
+                "The invoice setup could not be verified."}
+            </p>
+            <Link className="btn btn-primary" href="/billing/setup">
+              Configure invoice tax before billing
+            </Link>
+          </div>
+        )}
+      </section>
 
       {error && <div className="alert alert-error aal-alert">{error}</div>}
 
@@ -802,7 +907,7 @@ export default function BillingPage() {
       <div className="billing-layout">
         <section className="form-panel billing-create">
           <div className="section-heading">
-            <div className="section-number">01</div>
+            <div className="section-number">02</div>
 
             <div>
               <h2>Create invoice</h2>
@@ -860,11 +965,13 @@ export default function BillingPage() {
             </label>
           </div>
           <p className="form-hint">
-            VAT is selected automatically from the tenant's default invoice
-            jurisdiction. The server requires exactly one active,
-            effective-dated 18% VAT rule; tax codes are not entered manually. If
-            configuration is missing or ambiguous, invoice creation is blocked
-            and a finance administrator must correct it.
+            The applicable invoice tax rule is selected by the server from the
+            verified company setup. Complete{" "}
+            <Link href="/billing/setup">Invoice Tax Setup</Link>
+            before billing. The current workflow requires one active 18% VAT
+            rule; finance must verify that this treatment applies to the
+            service. If setup is missing or ambiguous, the invoice remains
+            blocked.
           </p>
 
           {invoiceShipment && selectedInvoiceShipment && (
@@ -895,8 +1002,8 @@ export default function BillingPage() {
                   </p>
                   <p style={{ marginBottom: 0 }}>
                     A finance administrator can review the active default
-                    jurisdiction and 18% VAT rule in{" "}
-                    <Link href="/billing/hardening">Financial hardening</Link>.
+                    jurisdiction and VAT rule in{" "}
+                    <Link href="/billing/setup">Invoice Tax Setup</Link>.
                     Invoice creation remains blocked until the server confirms a
                     valid rule.
                   </p>
@@ -1127,13 +1234,19 @@ export default function BillingPage() {
             className="btn btn-primary btn-large"
             type="button"
             onClick={createInvoice}
-            disabled={saving}
+            disabled={
+              saving ||
+              readinessLoading ||
+              !taxReadiness?.ready ||
+              !taxPreview ||
+              taxPreviewLoading
+            }
           >
             {saving ? "Creating invoice…" : "Create invoice"}
           </button>
         </section>
 
-        <section className="form-panel collection-panel">
+        <section id="record-collection" className="form-panel collection-panel">
           <div className="section-heading">
             <div className="section-number">02</div>
 

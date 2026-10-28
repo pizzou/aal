@@ -568,13 +568,16 @@ export default function FinancialHardeningPage() {
       <div className="page-head">
         <div>
           <div className="eyebrow">AAL / FINANCIAL CONTROLS</div>
-          <h1 className="page-title">Financial Hardening</h1>
+          <h1 className="page-title">Advanced Finance Controls</h1>
           <p className="page-subtitle">
             Invoice lifecycle, customer statements, controlled credit/debit
             notes and configurable tax rules.
           </p>
         </div>
         <div className="actions">
+          <Link className="btn btn-primary" href="/billing/setup">
+            Invoice tax setup
+          </Link>
           <Link className="btn" href="/billing">
             Back to billing
           </Link>
@@ -1127,344 +1130,390 @@ export default function FinancialHardeningPage() {
         </div>
       </section>
 
-      <section className="form-panel" style={{ marginBottom: 18 }}>
+      <section
+        className="form-panel"
+        style={{ marginBottom: 18 }}
+        aria-label="Specialist tax settings"
+      >
         <div className="section-heading">
           <div className="section-number">04</div>
           <div>
-            <h2>Tax jurisdiction configuration</h2>
+            <h2>Invoice tax setup is managed separately</h2>
             <p>
-              Configure the invoicing entity, registration data and numbering
-              prefix. The tax jurisdiction settings require
-              jurisdiction-specific professional review before live invoicing.
+              Complete the company's invoicing identity and the standard VAT
+              configuration before billing. Advanced tax rules are available
+              below only for authorized specialist review.
             </p>
           </div>
         </div>
-        <div className="form-grid">
-          <label className="field">
-            <span>Jurisdiction code</span>
-            <input
-              maxLength={80}
-              value={jurCode}
-              onChange={(e) => setJurCode(e.target.value.toUpperCase())}
-            />
-          </label>
-          <label className="field field-span-2">
-            <span>Legal entity name</span>
-            <input
-              value={jurLegalName}
-              onChange={(e) => setJurLegalName(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Tax registration no.</span>
-            <input
-              value={jurRegistration}
-              onChange={(e) => setJurRegistration(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Country code (ISO alpha-2/3)</span>
-            <input
-              maxLength={3}
-              value={jurCountry}
-              onChange={(e) => setJurCountry(e.target.value.toUpperCase())}
-            />
-          </label>
-          <label className="field">
-            <span>Invoice number prefix</span>
-            <input
-              value={jurPrefix}
-              onChange={(e) => setJurPrefix(e.target.value.toUpperCase())}
-            />
-          </label>
-          <label className="field">
-            <span>Default currency</span>
-            <input
-              maxLength={3}
-              value={jurCurrency}
-              onChange={(e) => setJurCurrency(e.target.value.toUpperCase())}
-            />
-          </label>
-          <label className="field field-span-2">
-            <span>Registered address</span>
-            <input
-              value={jurAddress}
-              onChange={(e) => setJurAddress(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Make active</span>
-            <select
-              value={jurActive ? "true" : "false"}
-              onChange={(e) => {
-                const active = e.target.value === "true";
-                setJurActive(active);
-                if (!active) setJurDefault(false);
-              }}
-            >
-              <option value="true">Active</option>
-              <option value="false">Inactive</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Default invoice-numbering jurisdiction</span>
-            <select
-              value={jurDefault ? "true" : "false"}
-              disabled={!jurActive}
-              onChange={(e) => setJurDefault(e.target.value === "true")}
-            >
-              <option value="true">Yes — use prefix for new invoices</option>
-              <option value="false">No</option>
-            </select>
-          </label>
-        </div>
-        <div className="actions" style={{ marginTop: 10 }}>
-          <button
-            className="btn btn-primary"
-            disabled={busy || !jurCode.trim() || !jurLegalName.trim()}
-            onClick={() => void createJurisdiction()}
+        <Link className="btn btn-primary" href="/billing/setup">
+          Open Invoice Tax Setup
+        </Link>
+        <details style={{ marginTop: 18 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+            Specialist tax jurisdiction and rule maintenance
+          </summary>
+          <p className="form-hint">
+            These advanced changes can affect future customer invoices. Tax
+            changes require Admin or Finance permissions and independent
+            professional review.
+          </p>
+          <section
+            id="tax-jurisdiction"
+            className="form-panel"
+            style={{ marginBottom: 18, scrollMarginTop: 18 }}
           >
-            Save jurisdiction
-          </button>
-        </div>
-        <div className="table-wrap" style={{ marginTop: 12 }}>
-          <table>
-            <thead>
-              <tr>
-                <th>Code</th>
-                <th>Legal name</th>
-                <th>Tax registration</th>
-                <th>Country</th>
-                <th>Prefix</th>
-                <th>Currency</th>
-                <th>Status</th>
-                <th>Invoice numbering</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jurisdictions.map((j, i) => (
-                <tr key={j.jurisdiction_code ?? j.jurisdictionCode ?? i}>
-                  <td>{j.jurisdiction_code ?? j.jurisdictionCode}</td>
-                  <td>{j.legal_name ?? j.legalName}</td>
-                  <td>{j.tax_registration_no ?? j.taxRegistrationNo ?? "—"}</td>
-                  <td>{j.country_code ?? j.countryCode}</td>
-                  <td>{j.invoice_prefix ?? j.invoicePrefix ?? "—"}</td>
-                  <td>{j.currency}</td>
-                  <td>{j.active ? "ACTIVE" : "INACTIVE"}</td>
-                  <td>
-                    {j.default_for_invoicing || j.defaultForInvoicing
-                      ? "DEFAULT PREFIX"
-                      : "—"}
-                  </td>
-                </tr>
-              ))}
-              {!jurisdictions.length && (
-                <tr>
-                  <td colSpan={8}>No tax jurisdiction configured.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="form-panel" style={{ marginBottom: 18 }}>
-        <div className="section-heading">
-          <div className="section-number">05</div>
-          <div>
-            <h2>VAT and tax rules</h2>
-            <p>
-              Rules are versioned by effective date and jurisdiction. Invoice
-              creation uses the server-selected active 18% VAT rule and stores
-              an immutable tax snapshot. Exclusive treatment adds 18% to the
-              subtotal; inclusive treatment extracts VAT from the entered gross
-              amount. The invoice PDF shows the subtotal, VAT, and total
-              payable. The active 18% invoice VAT rule must use 0% withholding
-              until withholding-certificate settlement is implemented.
-            </p>
-          </div>
-        </div>
-        <div className="form-grid">
-          <label className="field">
-            <span>Jurisdiction</span>
-            <select
-              value={selectedJurisdiction}
-              onChange={(e) => setTaxJurisdictionCode(e.target.value)}
-            >
-              <option value="">Select…</option>
-              {jurisdictions.map((j) => {
-                const c = j.jurisdiction_code ?? j.jurisdictionCode ?? "";
-                return (
-                  <option key={c} value={c}>
-                    {c} — {j.legal_name ?? j.legalName}
+            <div className="section-heading">
+              <div className="section-number">04</div>
+              <div>
+                <h2>Tax jurisdiction configuration</h2>
+                <p>
+                  Initial company and VAT configuration now starts in Invoice
+                  Tax Setup before billing. Advanced changes here require
+                  jurisdiction-specific professional review before live
+                  invoicing.
+                </p>
+              </div>
+            </div>
+            <div className="form-grid">
+              <label className="field">
+                <span>Jurisdiction code</span>
+                <input
+                  maxLength={80}
+                  value={jurCode}
+                  onChange={(e) => setJurCode(e.target.value.toUpperCase())}
+                />
+              </label>
+              <label className="field field-span-2">
+                <span>Legal entity name</span>
+                <input
+                  value={jurLegalName}
+                  onChange={(e) => setJurLegalName(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Tax registration no.</span>
+                <input
+                  value={jurRegistration}
+                  onChange={(e) => setJurRegistration(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Country code (ISO alpha-2/3)</span>
+                <input
+                  maxLength={3}
+                  value={jurCountry}
+                  onChange={(e) => setJurCountry(e.target.value.toUpperCase())}
+                />
+              </label>
+              <label className="field">
+                <span>Invoice number prefix</span>
+                <input
+                  value={jurPrefix}
+                  onChange={(e) => setJurPrefix(e.target.value.toUpperCase())}
+                />
+              </label>
+              <label className="field">
+                <span>Default currency</span>
+                <input
+                  maxLength={3}
+                  value={jurCurrency}
+                  onChange={(e) => setJurCurrency(e.target.value.toUpperCase())}
+                />
+              </label>
+              <label className="field field-span-2">
+                <span>Registered address</span>
+                <input
+                  value={jurAddress}
+                  onChange={(e) => setJurAddress(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Make active</span>
+                <select
+                  value={jurActive ? "true" : "false"}
+                  onChange={(e) => {
+                    const active = e.target.value === "true";
+                    setJurActive(active);
+                    if (!active) setJurDefault(false);
+                  }}
+                >
+                  <option value="true">Active</option>
+                  <option value="false">Inactive</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Default invoice-numbering jurisdiction</span>
+                <select
+                  value={jurDefault ? "true" : "false"}
+                  disabled={!jurActive}
+                  onChange={(e) => setJurDefault(e.target.value === "true")}
+                >
+                  <option value="true">
+                    Yes — use prefix for new invoices
                   </option>
-                );
-              })}
-            </select>
-          </label>
-          <label className="field">
-            <span>Tax code</span>
-            <input
-              value={ruleCode}
-              onChange={(e) => setRuleCode(e.target.value.toUpperCase())}
-            />
-          </label>
-          <label className="field field-span-2">
-            <span>Tax name</span>
-            <input
-              value={ruleName}
-              onChange={(e) => setRuleName(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Tax rate (%)</span>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              step="0.0001"
-              value={ruleRate}
-              onChange={(e) => setRuleRate(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Withholding rate (%)</span>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              step="0.0001"
-              value={ruleWithholding}
-              onChange={(e) => setRuleWithholding(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Rule currency (optional)</span>
-            <input
-              maxLength={3}
-              value={ruleCurrency}
-              onChange={(e) => setRuleCurrency(e.target.value.toUpperCase())}
-              placeholder="Blank = any invoice currency"
-            />
-          </label>
-          <label className="field">
-            <span>Tax type</span>
-            <select
-              value={ruleType}
-              onChange={(e) => setRuleType(e.target.value)}
-            >
-              {["VAT", "GST", "SALES_TAX", "WITHHOLDING", "OTHER"].map((t) => (
-                <option key={t}>{t}</option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Effective from</span>
-            <input
-              type="date"
-              value={ruleValidFrom}
-              onChange={(e) => setRuleValidFrom(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Effective until (optional)</span>
-            <input
-              type="date"
-              value={ruleValidUntil}
-              onChange={(e) => setRuleValidUntil(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Tax is inclusive?</span>
-            <select
-              value={ruleInclusive ? "true" : "false"}
-              onChange={(e) => setRuleInclusive(e.target.value === "true")}
-            >
-              <option value="false">Exclusive (add tax)</option>
-              <option value="true">Inclusive (extract tax)</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Rule status</span>
-            <select
-              value={ruleActive ? "true" : "false"}
-              onChange={(e) => setRuleActive(e.target.value === "true")}
-            >
-              <option value="true">Active</option>
-              <option value="false">Inactive</option>
-            </select>
-          </label>
-        </div>
-        <div className="actions" style={{ marginTop: 10 }}>
-          <button
-            className="btn btn-primary"
-            disabled={
-              busy ||
-              !selectedJurisdiction ||
-              !ruleCode.trim() ||
-              !ruleName.trim()
-            }
-            onClick={() => void createRule()}
-          >
-            Save tax rule
-          </button>
-          <button
-            className="btn"
-            disabled={busy || !selectedJurisdiction}
-            onClick={() =>
-              void apiFetch<TaxRule[]>(
-                `${base}/tax-rules?jurisdictionCode=${encodeURIComponent(selectedJurisdiction)}&onDate=${today()}`,
-                { cache: "no-store" },
-              )
-                .then((rows) => setRules(asArray<TaxRule>(rows)))
-                .catch((e) =>
-                  setError(
-                    e instanceof Error ? e.message : "Unable to load tax rules",
-                  ),
-                )
-            }
-          >
-            Refresh rules
-          </button>
-        </div>
-        <div className="table-wrap" style={{ marginTop: 12 }}>
-          <table>
-            <thead>
-              <tr>
-                <th>Code</th>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Rate</th>
-                <th>Withholding</th>
-                <th>Valid from</th>
-                <th>Inclusive</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rules.map((r) => (
-                <tr key={r.id}>
-                  <td>{r.code}</td>
-                  <td>{r.tax_name ?? r.taxName}</td>
-                  <td>{r.tax_type ?? "VAT"}</td>
-                  <td>{r.rate}%</td>
-                  <td>{r.withholding_rate ?? r.withholdingRate ?? 0}%</td>
-                  <td>{r.valid_from ?? ""}</td>
-                  <td>{r.inclusive ? "Yes" : "No"}</td>
-                  <td>ACTIVE</td>
-                </tr>
-              ))}
-              {!rules.length && (
-                <tr>
-                  <td colSpan={8}>
-                    No active rules were returned for this jurisdiction and
-                    date.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                  <option value="false">No</option>
+                </select>
+              </label>
+            </div>
+            <div className="actions" style={{ marginTop: 10 }}>
+              <button
+                className="btn btn-primary"
+                disabled={busy || !jurCode.trim() || !jurLegalName.trim()}
+                onClick={() => void createJurisdiction()}
+              >
+                Save jurisdiction
+              </button>
+            </div>
+            <div className="table-wrap" style={{ marginTop: 12 }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Legal name</th>
+                    <th>Tax registration</th>
+                    <th>Country</th>
+                    <th>Prefix</th>
+                    <th>Currency</th>
+                    <th>Status</th>
+                    <th>Invoice numbering</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jurisdictions.map((j, i) => (
+                    <tr key={j.jurisdiction_code ?? j.jurisdictionCode ?? i}>
+                      <td>{j.jurisdiction_code ?? j.jurisdictionCode}</td>
+                      <td>{j.legal_name ?? j.legalName}</td>
+                      <td>
+                        {j.tax_registration_no ?? j.taxRegistrationNo ?? "—"}
+                      </td>
+                      <td>{j.country_code ?? j.countryCode}</td>
+                      <td>{j.invoice_prefix ?? j.invoicePrefix ?? "—"}</td>
+                      <td>{j.currency}</td>
+                      <td>{j.active ? "ACTIVE" : "INACTIVE"}</td>
+                      <td>
+                        {j.default_for_invoicing || j.defaultForInvoicing
+                          ? "DEFAULT PREFIX"
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                  {!jurisdictions.length && (
+                    <tr>
+                      <td colSpan={8}>No tax jurisdiction configured.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="form-panel" style={{ marginBottom: 18 }}>
+            <div className="section-heading">
+              <div className="section-number">05</div>
+              <div>
+                <h2>VAT and tax rules</h2>
+                <p>
+                  Rules are versioned by effective date and jurisdiction.
+                  Invoice creation uses the server-selected active 18% VAT rule
+                  and stores an immutable tax snapshot. Exclusive treatment adds
+                  18% to the subtotal; inclusive treatment extracts VAT from the
+                  entered gross amount. The invoice PDF shows the subtotal, VAT,
+                  and total payable. The active 18% invoice VAT rule must use 0%
+                  withholding until withholding-certificate settlement is
+                  implemented.
+                </p>
+              </div>
+            </div>
+            <div className="form-grid">
+              <label className="field">
+                <span>Jurisdiction</span>
+                <select
+                  value={selectedJurisdiction}
+                  onChange={(e) => setTaxJurisdictionCode(e.target.value)}
+                >
+                  <option value="">Select…</option>
+                  {jurisdictions.map((j) => {
+                    const c = j.jurisdiction_code ?? j.jurisdictionCode ?? "";
+                    return (
+                      <option key={c} value={c}>
+                        {c} — {j.legal_name ?? j.legalName}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+              <label className="field">
+                <span>Tax code</span>
+                <input
+                  value={ruleCode}
+                  onChange={(e) => setRuleCode(e.target.value.toUpperCase())}
+                />
+              </label>
+              <label className="field field-span-2">
+                <span>Tax name</span>
+                <input
+                  value={ruleName}
+                  onChange={(e) => setRuleName(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Tax rate (%)</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.0001"
+                  value={ruleRate}
+                  onChange={(e) => setRuleRate(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Withholding rate (%)</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.0001"
+                  value={ruleWithholding}
+                  onChange={(e) => setRuleWithholding(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Rule currency (optional)</span>
+                <input
+                  maxLength={3}
+                  value={ruleCurrency}
+                  onChange={(e) =>
+                    setRuleCurrency(e.target.value.toUpperCase())
+                  }
+                  placeholder="Blank = any invoice currency"
+                />
+              </label>
+              <label className="field">
+                <span>Tax type</span>
+                <select
+                  value={ruleType}
+                  onChange={(e) => setRuleType(e.target.value)}
+                >
+                  {["VAT", "GST", "SALES_TAX", "WITHHOLDING", "OTHER"].map(
+                    (t) => (
+                      <option key={t}>{t}</option>
+                    ),
+                  )}
+                </select>
+              </label>
+              <label className="field">
+                <span>Effective from</span>
+                <input
+                  type="date"
+                  value={ruleValidFrom}
+                  onChange={(e) => setRuleValidFrom(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Effective until (optional)</span>
+                <input
+                  type="date"
+                  value={ruleValidUntil}
+                  onChange={(e) => setRuleValidUntil(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Tax is inclusive?</span>
+                <select
+                  value={ruleInclusive ? "true" : "false"}
+                  onChange={(e) => setRuleInclusive(e.target.value === "true")}
+                >
+                  <option value="false">Exclusive (add tax)</option>
+                  <option value="true">Inclusive (extract tax)</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Rule status</span>
+                <select
+                  value={ruleActive ? "true" : "false"}
+                  onChange={(e) => setRuleActive(e.target.value === "true")}
+                >
+                  <option value="true">Active</option>
+                  <option value="false">Inactive</option>
+                </select>
+              </label>
+            </div>
+            <div className="actions" style={{ marginTop: 10 }}>
+              <button
+                className="btn btn-primary"
+                disabled={
+                  busy ||
+                  !selectedJurisdiction ||
+                  !ruleCode.trim() ||
+                  !ruleName.trim()
+                }
+                onClick={() => void createRule()}
+              >
+                Save tax rule
+              </button>
+              <button
+                className="btn"
+                disabled={busy || !selectedJurisdiction}
+                onClick={() =>
+                  void apiFetch<TaxRule[]>(
+                    `${base}/tax-rules?jurisdictionCode=${encodeURIComponent(selectedJurisdiction)}&onDate=${today()}`,
+                    { cache: "no-store" },
+                  )
+                    .then((rows) => setRules(asArray<TaxRule>(rows)))
+                    .catch((e) =>
+                      setError(
+                        e instanceof Error
+                          ? e.message
+                          : "Unable to load tax rules",
+                      ),
+                    )
+                }
+              >
+                Refresh rules
+              </button>
+            </div>
+            <div className="table-wrap" style={{ marginTop: 12 }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Rate</th>
+                    <th>Withholding</th>
+                    <th>Valid from</th>
+                    <th>Inclusive</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rules.map((r) => (
+                    <tr key={r.id}>
+                      <td>{r.code}</td>
+                      <td>{r.tax_name ?? r.taxName}</td>
+                      <td>{r.tax_type ?? "VAT"}</td>
+                      <td>{r.rate}%</td>
+                      <td>{r.withholding_rate ?? r.withholdingRate ?? 0}%</td>
+                      <td>{r.valid_from ?? ""}</td>
+                      <td>{r.inclusive ? "Yes" : "No"}</td>
+                      <td>ACTIVE</td>
+                    </tr>
+                  ))}
+                  {!rules.length && (
+                    <tr>
+                      <td colSpan={8}>
+                        No active rules were returned for this jurisdiction and
+                        date.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </details>
       </section>
       <p className="card-muted">
         This screen manages application-level financial controls. Production use

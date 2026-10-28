@@ -55,6 +55,12 @@ public class BillingService {
                 this.financialHardening = financialHardening;
         }
 
+        /** Returns a side-effect-free configuration status before invoice entry. */
+        @Transactional(readOnly = true)
+        public java.util.Map<String, Object> invoiceTaxReadiness(String currency) {
+                return financialHardening.invoiceTaxReadiness(currency);
+        }
+
         /**
          * Preview using the tenant's configured default 18% VAT rule; the user does not
          * type tax codes.

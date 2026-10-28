@@ -210,8 +210,9 @@ function applyAuthenticationHeader(headers: Headers, path: string): void {
 
 const GET_CACHE_TTL_MS = 3_000;
 const GET_STALE_GRACE_MS = 60_000;
-const GET_TIMEOUT_MS = 8_000;
-const DASHBOARD_TIMEOUT_MS = 15_000;
+const GET_TIMEOUT_MS = 12_000;
+const DASHBOARD_TIMEOUT_MS = 25_000;
+const DASHBOARD_OVERVIEW_TIMEOUT_MS = 20_000;
 const AUTH_SESSION_TIMEOUT_MS = 4_000;
 const AUTH_LOGIN_TIMEOUT_MS = 20_000;
 const CSRF_TIMEOUT_MS = 6_000;
@@ -226,6 +227,8 @@ function requestTimeoutFor(path: string): number {
   if (path === "/api/auth/session") return AUTH_SESSION_TIMEOUT_MS;
   if (path === "/api/auth/login") return AUTH_LOGIN_TIMEOUT_MS;
   if (path === "/api/auth/send-login-otp") return AUTH_LOGIN_TIMEOUT_MS;
+  if (path.startsWith("/api/command-center/advanced/overview"))
+    return DASHBOARD_OVERVIEW_TIMEOUT_MS;
   if (path.startsWith("/api/command-center/advanced"))
     return DASHBOARD_TIMEOUT_MS;
   return path === "/api/air-cargo/flights/search"
@@ -1183,6 +1186,11 @@ export const commandCenterApi = {
   dailyOperations: (date: string) =>
     apiFetch<DailyOperationsResponse>(
       `/api/command-center/daily-operations?date=${encodeURIComponent(date)}`,
+    ),
+  overview: (asOf?: string, options: RequestInit = {}) =>
+    apiFetch<DashboardOverview>(
+      `/api/command-center/advanced/overview${asOf ? `?asOf=${encodeURIComponent(asOf)}` : ""}`,
+      options,
     ),
   advanced: (asOf?: string, options: RequestInit = {}) =>
     apiFetch<AdvancedDashboard>(
@@ -2570,6 +2578,11 @@ export type ManagementReport = {
     mode: string;
   }>;
 };
+
+export type DashboardOverview = Pick<
+  AdvancedDashboard,
+  "asOf" | "operations" | "financial"
+>;
 
 export type AdvancedDashboard = {
   asOf: string;

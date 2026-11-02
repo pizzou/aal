@@ -804,6 +804,21 @@ export default function BillingPage() {
             >
               Download PDF
             </button>
+            {createdInvoice.balance > 0 && (
+              <button
+                type="button"
+                className="btn btn-small btn-primary"
+                onClick={() => {
+                  setPaymentInvoice(createdInvoice);
+                  document.getElementById("record-collection")?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start",
+                  });
+                }}
+              >
+                Next: Record received payment
+              </button>
+            )}
           </div>
         </section>
       )}

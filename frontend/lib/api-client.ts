@@ -12,6 +12,7 @@ export const COOKIE_SESSION_SENTINEL = "__aal_cookie_session__";
 let csrfToken: string | null = null;
 let csrfRequest: Promise<string> | null = null;
 let accessToken: string | null = null;
+let authGeneration = 0;
 
 function readStoredAccessToken(): string | null {
   if (accessToken) return accessToken;
@@ -45,7 +46,15 @@ function readStoredAccessToken(): string | null {
 }
 
 export function setAccessToken(token: string | null): void {
-  accessToken = token && token.trim() ? token.trim() : null;
+  const next = token && token.trim() ? token.trim() : null;
+  const previous = readStoredAccessToken();
+  accessToken = next;
+  if (previous !== next) {
+    authGeneration += 1;
+    csrfToken = null;
+    getCache.clear();
+    getInflight.clear();
+  }
 
   if (typeof window === "undefined") return;
 
@@ -210,12 +219,12 @@ function applyAuthenticationHeader(headers: Headers, path: string): void {
 
 const GET_CACHE_TTL_MS = 3_000;
 const GET_STALE_GRACE_MS = 60_000;
-const GET_TIMEOUT_MS = 12_000;
-const DASHBOARD_TIMEOUT_MS = 25_000;
-const DASHBOARD_OVERVIEW_TIMEOUT_MS = 20_000;
-const AUTH_SESSION_TIMEOUT_MS = 4_000;
+const GET_TIMEOUT_MS = 20_000;
+const DASHBOARD_TIMEOUT_MS = 30_000;
+const DASHBOARD_OVERVIEW_TIMEOUT_MS = 25_000;
+const AUTH_SESSION_TIMEOUT_MS = 8_000;
 const AUTH_LOGIN_TIMEOUT_MS = 20_000;
-const CSRF_TIMEOUT_MS = 6_000;
+const CSRF_TIMEOUT_MS = 10_000;
 const AIR_CARGO_SEARCH_TIMEOUT_MS = 40_000;
 const getCache = new Map<
   string,
@@ -231,9 +240,11 @@ function requestTimeoutFor(path: string): number {
     return DASHBOARD_OVERVIEW_TIMEOUT_MS;
   if (path.startsWith("/api/command-center/advanced"))
     return DASHBOARD_TIMEOUT_MS;
-  return path === "/api/air-cargo/flights/search"
-    ? AIR_CARGO_SEARCH_TIMEOUT_MS
-    : GET_TIMEOUT_MS;
+  if (path.startsWith("/api/air-cargo/flights/search"))
+    return AIR_CARGO_SEARCH_TIMEOUT_MS;
+  // Financial and shipment mutations can involve transaction validation and
+  // persistence. Do not give up while an otherwise healthy backend commits.
+  return GET_TIMEOUT_MS;
 }
 
 function shouldRetryRequest(method: string, path: string): boolean {
@@ -286,7 +297,39 @@ async function fetchWithTimeout(
   }
 }
 
+/**
+ * Concurrent GET callers share the completed JSON value, never a raw Response.
+ * Previously a second caller received a Response object as T, breaking pages
+ * when multiple widgets requested the same resource simultaneously.
+ */
 export async function apiFetch<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const method = (options.method ?? "GET").toUpperCase();
+  if (method !== "GET" || options.cache === "no-store" || options.signal) {
+    // Abort signals belong to one caller. Sharing a request would allow a
+    // component unmount to cancel another component's active request.
+    return apiFetchInternal<T>(path, options);
+  }
+
+  const key = `${authGeneration}:${path}|${readStoredAccessToken() ?? "session"}`;
+  const cached = getCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value as T;
+
+  const existing = getInflight.get(key);
+  if (existing) return existing as Promise<T>;
+
+  const pending = apiFetchInternal<T>(path, options);
+  getInflight.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    if (getInflight.get(key) === pending) getInflight.delete(key);
+  }
+}
+
+async function apiFetchInternal<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
@@ -322,18 +365,11 @@ export async function apiFetch<T>(
   }
 
   const bypassLocalCache = options.cache === "no-store";
+  const requestGeneration = authGeneration;
   const cacheKey =
-    method === "GET" ? `${path}|${readStoredAccessToken() ?? "session"}` : "";
-  if (method === "GET" && !bypassLocalCache) {
-    const cached = getCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.value as T;
-    }
-    const pending = getInflight.get(cacheKey);
-    if (pending) {
-      return (await pending) as T;
-    }
-  }
+    method === "GET"
+      ? `${requestGeneration}:${path}|${readStoredAccessToken() ?? "session"}`
+      : "";
 
   const doRequest = async (): Promise<Response> => {
     const maxAttempts = maxAttemptsFor(method, path);
@@ -355,13 +391,10 @@ export async function apiFetch<T>(
         // Never retry an expensive dashboard request after a client-side timeout.
         // Render cold-start/network failures should surface quickly and can use
         // a previously cached snapshot where available.
-        if (
-          !shouldRetryRequest(method, path) ||
-          path.startsWith("/api/command-center/advanced") ||
-          attempt === maxAttempts - 1
-        ) {
-          throw error;
-        }
+        // A network failure or client timeout is not evidence that the
+        // backend failed before executing the request. Never multiply load
+        // on an already slow service; leave retries to explicit 502/503/504.
+        throw error;
       }
       await new Promise<void>((resolve) =>
         setTimeout(resolve, retryDelay(attempt)),
@@ -371,9 +404,6 @@ export async function apiFetch<T>(
   };
 
   const requestPromise = doRequest();
-  if (method === "GET" && !bypassLocalCache)
-    getInflight.set(cacheKey, requestPromise);
-
   let response: Response;
   try {
     response = await requestPromise;
@@ -394,9 +424,17 @@ export async function apiFetch<T>(
         return stale.value as T;
       }
     }
+    if (
+      error instanceof Error &&
+      (error.name === "TimeoutError" ||
+        (error.name === "AbortError" && !options.signal?.aborted))
+    ) {
+      throw new ApiError(
+        408,
+        "The server took too long to respond. Your request may have been processed. Check the record before trying again.",
+      );
+    }
     throw error;
-  } finally {
-    if (method === "GET" && !bypassLocalCache) getInflight.delete(cacheKey);
   }
 
   if (!response.ok) {
@@ -445,7 +483,11 @@ export async function apiFetch<T>(
   if (!contentType.includes("application/json")) return undefined as T;
 
   const value = (await response.json()) as T;
-  if (method === "GET" && !bypassLocalCache) {
+  if (
+    method === "GET" &&
+    !bypassLocalCache &&
+    requestGeneration === authGeneration
+  ) {
     const now = Date.now();
     getCache.set(cacheKey, {
       expiresAt: now + GET_CACHE_TTL_MS,

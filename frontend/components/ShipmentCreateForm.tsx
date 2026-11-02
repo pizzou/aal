@@ -214,13 +214,18 @@ export default function ShipmentCreateForm() {
   const steps = ["Customer", "Cargo", "Route", "Charges", "Operations"];
   const nextStep = () => {
     if (step === 1 && (!selectedClientId || !form.clientName.trim())) {
-      setError("Choose an existing customer before continuing."); return;
+      setError("Choose an existing customer before continuing.");
+      return;
     }
-    if (step === 3 && (!form.originAddress.trim() || !form.destinationAddress.trim())) {
-      setError("Enter the pickup and delivery addresses before continuing."); return;
+    if (
+      step === 3 &&
+      (!form.originAddress.trim() || !form.destinationAddress.trim())
+    ) {
+      setError("Enter the pickup and delivery addresses before continuing.");
+      return;
     }
     setError("");
-    setStep(current => Math.min(5, current + 1));
+    setStep((current) => Math.min(5, current + 1));
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const [clients, setClients] = useState<ClientRecord[]>([]);
@@ -229,6 +234,11 @@ export default function ShipmentCreateForm() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  // A shipment is created before its commercial details are patched. Preserve
+  // its ID if the second request fails so users never create duplicates.
+  const [partiallyCreatedId, setPartiallyCreatedId] = useState<string | null>(
+    null,
+  );
   const [submissionKey] = useState(() =>
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
@@ -307,7 +317,9 @@ export default function ShipmentCreateForm() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (saving || partiallyCreatedId) return;
 
+    let createdId: string | null = null;
     setSaving(true);
     setError("");
     setSuccess("");
@@ -338,6 +350,7 @@ export default function ShipmentCreateForm() {
         submissionKey,
       );
 
+      createdId = created.id;
       const payload: Record<string, unknown> = {
         clientName: form.clientName.trim(),
         contact: form.contact.trim() || undefined,
@@ -431,11 +444,21 @@ export default function ShipmentCreateForm() {
         );
       }
     } catch (exception) {
-      setError(
-        exception instanceof ApiError || exception instanceof Error
+      const message =
+        exception instanceof Error
           ? exception.message
-          : "Unable to create shipment.",
-      );
+          : "The request could not be completed.";
+      if (createdId) {
+        setPartiallyCreatedId(createdId);
+        setError(
+          `The shipment was created, but its remaining details were not confirmed: ${message}. ` +
+            "Open the existing shipment and complete its details. Do not create another record.",
+        );
+      } else {
+        setError(
+          `${message} If the request timed out, check the shipment register before submitting again.`,
+        );
+      }
     } finally {
       setSaving(false);
     }
@@ -460,21 +483,36 @@ export default function ShipmentCreateForm() {
           <Link className="btn" href="/shipments">
             Shipment register
           </Link>
-
-
         </div>
       </div>
-      <nav className="form-panel" aria-label="Shipment creation progress" style={{marginBottom:16}}>
-        <div className="actions" style={{flexWrap:"wrap"}}>
-          {steps.map((name, index) => <button key={name} type="button"
-            className={step === index + 1 ? "btn btn-primary" : "btn"}
-            disabled={index + 1 > step}
-            onClick={() => { if (index + 1 <= step) { setError(""); setStep(index + 1); } }}
-            aria-current={step === index + 1 ? "step" : undefined}>
-            {index + 1}. {name}
-          </button>)}
+      <nav
+        className="form-panel"
+        aria-label="Shipment creation progress"
+        style={{ marginBottom: 16 }}
+      >
+        <div className="actions" style={{ flexWrap: "wrap" }}>
+          {steps.map((name, index) => (
+            <button
+              key={name}
+              type="button"
+              className={step === index + 1 ? "btn btn-primary" : "btn"}
+              disabled={index + 1 > step}
+              onClick={() => {
+                if (index + 1 <= step) {
+                  setError("");
+                  setStep(index + 1);
+                }
+              }}
+              aria-current={step === index + 1 ? "step" : undefined}
+            >
+              {index + 1}. {name}
+            </button>
+          ))}
         </div>
-        <p className="form-hint">Complete each step. The shipment is saved only when you select “Save shipment” on the final step.</p>
+        <p className="form-hint">
+          Complete each step. The shipment is saved only when you select “Save
+          shipment” on the final step.
+        </p>
       </nav>
       <form onSubmit={submit} noValidate>
         <section className="aal-hero-panel">
@@ -502,7 +540,21 @@ export default function ShipmentCreateForm() {
           </div>
         </section>
 
-        {error && <div className="alert alert-error aal-alert">{error}</div>}
+        {error && (
+          <div className="alert alert-error aal-alert" role="alert">
+            {error}
+            {partiallyCreatedId && (
+              <div style={{ marginTop: 12 }}>
+                <Link
+                  className="btn btn-primary"
+                  href={`/shipments/${encodeURIComponent(partiallyCreatedId)}`}
+                >
+                  Open created shipment
+                </Link>
+              </div>
+            )}
+          </div>
+        )}
 
         {success && (
           <div className="alert alert-success aal-alert">{success}</div>
@@ -511,611 +563,639 @@ export default function ShipmentCreateForm() {
         <div className="record-layout">
           <div className="record-main">
             {step === 1 && (
-            <section className="form-panel">
-              <div className="section-heading">
-                <div className="section-number">01</div>
+              <section className="form-panel">
+                <div className="section-heading">
+                  <div className="section-number">01</div>
 
-                <div>
-                  <h2>Shipment identity</h2>
+                  <div>
+                    <h2>Shipment identity</h2>
 
-                  <p>The core information that identifies the AAL shipment.</p>
+                    <p>
+                      The core information that identifies the AAL shipment.
+                    </p>
+                  </div>
                 </div>
-              </div>
 
-              <div className="form-grid">
-                <label className="field">
-                  <span>Shipment / AWB number</span>
+                <div className="form-grid">
+                  <label className="field">
+                    <span>Shipment / AWB number</span>
 
-                  <input
-                    value={form.referenceCode}
-                    readOnly
-                    placeholder="Generated automatically by AAL"
-                    aria-readonly="true"
-                  />
-                  <small>System-generated; not entered manually.</small>
-                </label>
+                    <input
+                      value={form.referenceCode}
+                      readOnly
+                      placeholder="Generated automatically by AAL"
+                      aria-readonly="true"
+                    />
+                    <small>System-generated; not entered manually.</small>
+                  </label>
 
-                <label className="field">
-                  <span>Date opened *</span>
+                  <label className="field">
+                    <span>Date opened *</span>
 
-                  <input
-                    type="date"
-                    value={form.dateOpened}
-                    onChange={(e) => update("dateOpened", e.target.value)}
-                    required
-                  />
-                </label>
+                    <input
+                      type="date"
+                      value={form.dateOpened}
+                      onChange={(e) => update("dateOpened", e.target.value)}
+                      required
+                    />
+                  </label>
 
-                <label className="field field-span-2">
-                  <span>Assign shipment to customer *</span>
-                  <select
-                    value={selectedClientId}
-                    onChange={(event) => {
-                      const client = clients.find(
-                        (item) => item.id === event.target.value,
-                      );
-                      setSelectedClientId(event.target.value);
-                      setForm((current) => ({
-                        ...current,
-                        clientName: client?.clientCompany || "",
-                        contact: client?.contactPerson || "",
-                      }));
-                    }}
-                    required
-                    disabled={clientsLoading}
-                  >
-                    <option value="">
-                      {clientsLoading
-                        ? "Loading customers…"
-                        : "Select customer / customer number…"}
-                    </option>
-                    {clients.map((client) => (
-                      <option key={client.id} value={client.id}>
-                        {(client.clientCompany || "Unnamed customer") +
-                          " · " +
-                          client.clientId}
+                  <label className="field field-span-2">
+                    <span>Assign shipment to customer *</span>
+                    <select
+                      value={selectedClientId}
+                      onChange={(event) => {
+                        const client = clients.find(
+                          (item) => item.id === event.target.value,
+                        );
+                        setSelectedClientId(event.target.value);
+                        setForm((current) => ({
+                          ...current,
+                          clientName: client?.clientCompany || "",
+                          contact: client?.contactPerson || "",
+                        }));
+                      }}
+                      required
+                      disabled={clientsLoading}
+                    >
+                      <option value="">
+                        {clientsLoading
+                          ? "Loading customers…"
+                          : "Select customer / customer number…"}
                       </option>
-                    ))}
-                  </select>
-                  {!clientsLoading && clients.length === 0 && (
-                    <small>
-                      No active customers found.{" "}
-                      <Link href="/commercial?tab=customers">Create a customer first</Link>,
-                      then return to register the shipment.
-                    </small>
-                  )}
-                </label>
+                      {clients.map((client) => (
+                        <option key={client.id} value={client.id}>
+                          {(client.clientCompany || "Unnamed customer") +
+                            " · " +
+                            client.clientId}
+                        </option>
+                      ))}
+                    </select>
+                    {!clientsLoading && clients.length === 0 && (
+                      <small>
+                        No active customers found.{" "}
+                        <Link href="/commercial?tab=customers">
+                          Create a customer first
+                        </Link>
+                        , then return to register the shipment.
+                      </small>
+                    )}
+                  </label>
 
-                <label className="field">
-                  <span>Client contact</span>
+                  <label className="field">
+                    <span>Client contact</span>
 
-                  <input
-                    value={form.contact}
-                    onChange={(e) => update("contact", e.target.value)}
-                    placeholder="+250 ..."
-                  />
-                </label>
+                    <input
+                      value={form.contact}
+                      onChange={(e) => update("contact", e.target.value)}
+                      placeholder="+250 ..."
+                    />
+                  </label>
 
-                <label className="field">
-                  <span>Commodity</span>
+                  <label className="field">
+                    <span>Commodity</span>
 
-                  <input
-                    value={form.commodity}
-                    onChange={(e) => update("commodity", e.target.value)}
-                    placeholder="Cargo description"
-                  />
-                </label>
-              </div>
-            </section>)}
+                    <input
+                      value={form.commodity}
+                      onChange={(e) => update("commodity", e.target.value)}
+                      placeholder="Cargo description"
+                    />
+                  </label>
+                </div>
+              </section>
+            )}
 
             {step === 2 && (
-            <section className="form-panel">
-              <div className="section-heading">
-                <div className="section-number">02</div>
+              <section className="form-panel">
+                <div className="section-heading">
+                  <div className="section-number">02</div>
 
-                <div>
-                  <h2>Cargo & weight</h2>
+                  <div>
+                    <h2>Cargo & weight</h2>
 
-                  <p>
-                    These are the critical weight fields from the AAL MOTHERSHIP
-                    sheet.
-                  </p>
-                </div>
-              </div>
-
-              <div className="weight-grid">
-                <div className="weight-card">
-                  <span>GROSS WEIGHT</span>
-                  <strong>{form.grossWeightKg || "0"}</strong>
-                  <small>KG</small>
+                    <p>
+                      These are the critical weight fields from the AAL
+                      MOTHERSHIP sheet.
+                    </p>
+                  </div>
                 </div>
 
-                <div className="weight-card">
-                  <span>VOLUMETRIC WEIGHT</span>
-                  <strong>{form.volumetricWeightKg || "0"}</strong>
-                  <small>KG</small>
+                <div className="weight-grid">
+                  <div className="weight-card">
+                    <span>GROSS WEIGHT</span>
+                    <strong>{form.grossWeightKg || "0"}</strong>
+                    <small>KG</small>
+                  </div>
+
+                  <div className="weight-card">
+                    <span>VOLUMETRIC WEIGHT</span>
+                    <strong>{form.volumetricWeightKg || "0"}</strong>
+                    <small>KG</small>
+                  </div>
+
+                  <div className="weight-card featured">
+                    <span>CHARGEABLE WEIGHT</span>
+
+                    <strong>
+                      {chargeableWeight.toLocaleString(undefined, {
+                        maximumFractionDigits: 3,
+                      })}
+                    </strong>
+
+                    <small>MAX OF GROSS / VOLUMETRIC</small>
+                  </div>
                 </div>
 
-                <div className="weight-card featured">
-                  <span>CHARGEABLE WEIGHT</span>
+                <div className="form-grid">
+                  <label className="field">
+                    <span>Gross weight (kg) *</span>
 
-                  <strong>
-                    {chargeableWeight.toLocaleString(undefined, {
-                      maximumFractionDigits: 3,
-                    })}
-                  </strong>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.001"
+                      value={form.grossWeightKg}
+                      onChange={(e) => update("grossWeightKg", e.target.value)}
+                      placeholder="0.000"
+                    />
+                  </label>
 
-                  <small>MAX OF GROSS / VOLUMETRIC</small>
+                  <label className="field">
+                    <span>Volumetric weight (kg)</span>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.001"
+                      value={form.volumetricWeightKg}
+                      onChange={(e) =>
+                        update("volumetricWeightKg", e.target.value)
+                      }
+                      placeholder="0.000"
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Packages</span>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={form.packages}
+                      onChange={(e) => update("packages", e.target.value)}
+                      placeholder="0"
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Service type</span>
+
+                    <input
+                      value={form.serviceType}
+                      onChange={(e) => update("serviceType", e.target.value)}
+                      placeholder="Air Freight"
+                    />
+                  </label>
                 </div>
-              </div>
-
-              <div className="form-grid">
-                <label className="field">
-                  <span>Gross weight (kg) *</span>
-
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.001"
-                    value={form.grossWeightKg}
-                    onChange={(e) => update("grossWeightKg", e.target.value)}
-                    placeholder="0.000"
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Volumetric weight (kg)</span>
-
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.001"
-                    value={form.volumetricWeightKg}
-                    onChange={(e) =>
-                      update("volumetricWeightKg", e.target.value)
-                    }
-                    placeholder="0.000"
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Packages</span>
-
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={form.packages}
-                    onChange={(e) => update("packages", e.target.value)}
-                    placeholder="0"
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Service type</span>
-
-                  <input
-                    value={form.serviceType}
-                    onChange={(e) => update("serviceType", e.target.value)}
-                    placeholder="Air Freight"
-                  />
-                </label>
-              </div>
-            </section>)}
+              </section>
+            )}
 
             {step === 3 && (
-            <section className="form-panel">
-              <div className="section-heading">
-                <div className="section-number">03</div>
+              <section className="form-panel">
+                <div className="section-heading">
+                  <div className="section-number">03</div>
 
-                <div>
-                  <h2>Route & airline</h2>
+                  <div>
+                    <h2>Route & airline</h2>
 
-                  <p>
-                    Capture the same origin, destination and carrier information
-                    used by AAL daily operations.
-                  </p>
-                </div>
-              </div>
-
-              <div className="route-grid">
-                <div className="route-card">
-                  <div className="route-label">ORIGIN</div>
-
-                  <div className="form-grid">
-                    <label className="field">
-                      <span>Country</span>
-
-                      <input
-                        value={form.originCountry}
-                        onChange={(e) =>
-                          update("originCountry", e.target.value)
-                        }
-                      />
-                    </label>
-
-                    <label className="field">
-                      <span>City / Port</span>
-
-                      <input
-                        value={form.originCityPort}
-                        onChange={(e) =>
-                          update("originCityPort", e.target.value)
-                        }
-                        placeholder="Kigali"
-                      />
-                    </label>
-
-                    <label className="field field-span-2">
-                      <span>Address</span>
-
-                      <input
-                        value={form.originAddress}
-                        onChange={(e) =>
-                          update("originAddress", e.target.value)
-                        }
-                        placeholder="Pickup / origin address"
-                        required
-                      />
-                    </label>
+                    <p>
+                      Capture the same origin, destination and carrier
+                      information used by AAL daily operations.
+                    </p>
                   </div>
                 </div>
 
-                <div className="route-arrow">
-                  <ArrowIcon size={22} />
-                </div>
+                <div className="route-grid">
+                  <div className="route-card">
+                    <div className="route-label">ORIGIN</div>
 
-                <div className="route-card">
-                  <div className="route-label">DESTINATION</div>
+                    <div className="form-grid">
+                      <label className="field">
+                        <span>Country</span>
 
-                  <div className="form-grid">
-                    <label className="field">
-                      <span>Country</span>
+                        <input
+                          value={form.originCountry}
+                          onChange={(e) =>
+                            update("originCountry", e.target.value)
+                          }
+                        />
+                      </label>
 
-                      <input
-                        value={form.destinationCountry}
-                        onChange={(e) =>
-                          update("destinationCountry", e.target.value)
-                        }
-                      />
-                    </label>
+                      <label className="field">
+                        <span>City / Port</span>
 
-                    <label className="field">
-                      <span>City / Port</span>
+                        <input
+                          value={form.originCityPort}
+                          onChange={(e) =>
+                            update("originCityPort", e.target.value)
+                          }
+                          placeholder="Kigali"
+                        />
+                      </label>
 
-                      <input
-                        value={form.destinationCityPort}
-                        onChange={(e) =>
-                          update("destinationCityPort", e.target.value)
-                        }
-                        placeholder="Destination"
-                      />
-                    </label>
+                      <label className="field field-span-2">
+                        <span>Address</span>
 
-                    <label className="field field-span-2">
-                      <span>Address</span>
+                        <input
+                          value={form.originAddress}
+                          onChange={(e) =>
+                            update("originAddress", e.target.value)
+                          }
+                          placeholder="Pickup / origin address"
+                          required
+                        />
+                      </label>
+                    </div>
+                  </div>
 
-                      <input
-                        value={form.destinationAddress}
-                        onChange={(e) =>
-                          update("destinationAddress", e.target.value)
-                        }
-                        placeholder="Delivery / destination address"
-                        required
-                      />
-                    </label>
+                  <div className="route-arrow">
+                    <ArrowIcon size={22} />
+                  </div>
+
+                  <div className="route-card">
+                    <div className="route-label">DESTINATION</div>
+
+                    <div className="form-grid">
+                      <label className="field">
+                        <span>Country</span>
+
+                        <input
+                          value={form.destinationCountry}
+                          onChange={(e) =>
+                            update("destinationCountry", e.target.value)
+                          }
+                        />
+                      </label>
+
+                      <label className="field">
+                        <span>City / Port</span>
+
+                        <input
+                          value={form.destinationCityPort}
+                          onChange={(e) =>
+                            update("destinationCityPort", e.target.value)
+                          }
+                          placeholder="Destination"
+                        />
+                      </label>
+
+                      <label className="field field-span-2">
+                        <span>Address</span>
+
+                        <input
+                          value={form.destinationAddress}
+                          onChange={(e) =>
+                            update("destinationAddress", e.target.value)
+                          }
+                          placeholder="Delivery / destination address"
+                          required
+                        />
+                      </label>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="form-grid">
-                <label className="field">
-                  <span>Transport mode</span>
+                <div className="form-grid">
+                  <label className="field">
+                    <span>Transport mode</span>
 
-                  <select
-                    value={form.transportMode}
-                    onChange={(e) => update("transportMode", e.target.value)}
-                  >
-                    {modes.map((mode) => (
-                      <option key={mode} value={mode}>
-                        {mode.replaceAll("_", " ")}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    <select
+                      value={form.transportMode}
+                      onChange={(e) => update("transportMode", e.target.value)}
+                    >
+                      {modes.map((mode) => (
+                        <option key={mode} value={mode}>
+                          {mode.replaceAll("_", " ")}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-                <label className="field">
-                  <span>Airline / carrier</span>
+                  <label className="field">
+                    <span>Airline / carrier</span>
 
-                  <input
-                    value={form.airlineUsed}
-                    onChange={(e) => update("airlineUsed", e.target.value)}
-                    placeholder="Airline / carrier"
-                  />
-                </label>
+                    <input
+                      value={form.airlineUsed}
+                      onChange={(e) => update("airlineUsed", e.target.value)}
+                      placeholder="Airline / carrier"
+                    />
+                  </label>
 
-                <label className="field">
-                  <span>ETD</span>
+                  <label className="field">
+                    <span>ETD</span>
 
-                  <input
-                    type="datetime-local"
-                    value={form.etd}
-                    onChange={(e) => update("etd", e.target.value)}
-                  />
-                </label>
+                    <input
+                      type="datetime-local"
+                      value={form.etd}
+                      onChange={(e) => update("etd", e.target.value)}
+                    />
+                  </label>
 
-                <label className="field">
-                  <span>ETA</span>
+                  <label className="field">
+                    <span>ETA</span>
 
-                  <input
-                    type="datetime-local"
-                    value={form.eta}
-                    onChange={(e) => update("eta", e.target.value)}
-                  />
-                </label>
-              </div>
-            </section>)}
+                    <input
+                      type="datetime-local"
+                      value={form.eta}
+                      onChange={(e) => update("eta", e.target.value)}
+                    />
+                  </label>
+                </div>
+              </section>
+            )}
 
             {step === 4 && (
-            <section className="form-panel">
-              <div className="section-heading">
-                <div className="section-number">04</div>
+              <section className="form-panel">
+                <div className="section-heading">
+                  <div className="section-number">04</div>
 
-                <div>
-                  <h2>Commercial & finance</h2>
+                  <div>
+                    <h2>Commercial & finance</h2>
 
-                  <p>
-                    This section replaces the financial columns of the
-                    MOTHERSHIP sheet with controlled system records.
-                  </p>
-                </div>
-              </div>
-
-              <div className="finance-entry-grid">
-                <label className="field">
-                  <span>Currency</span>
-
-                  <select
-                    value={form.currency}
-                    onChange={(e) => update("currency", e.target.value)}
-                  >
-                    <option value="USD">USD</option>
-                    <option value="RWF">RWF</option>
-                    <option value="EUR">EUR</option>
-                    <option value="KES">KES</option>
-                    <option value="UGX">UGX</option>
-                    <option value="TZS">TZS</option>
-                  </select>
-                </label>
-
-                <label className="field">
-                  <span>Amount billed to client</span>
-
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.clientRevenue}
-                    onChange={(e) => update("clientRevenue", e.target.value)}
-                    placeholder="0.00"
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Amount paid by client</span>
-
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.amountPaidByClient}
-                    onChange={(e) =>
-                      update("amountPaidByClient", e.target.value)
-                    }
-                    placeholder="0.00"
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Supplier cost</span>
-
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.supplierCost}
-                    onChange={(e) => update("supplierCost", e.target.value)}
-                    placeholder="0.00"
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Other cost</span>
-
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.otherCost}
-                    onChange={(e) => update("otherCost", e.target.value)}
-                    placeholder="0.00"
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Amount paid to supply</span>
-
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.amountPaidToSupply}
-                    onChange={(e) =>
-                      update("amountPaidToSupply", e.target.value)
-                    }
-                    placeholder="0.00"
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Other expenses</span>
-
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.otherExpenses}
-                    onChange={(e) => update("otherExpenses", e.target.value)}
-                    placeholder="0.00"
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Invoice number</span>
-
-                  <input
-                    value={form.invoiceNo}
-                    readOnly
-                    placeholder="Generated automatically by AAL"
-                    aria-readonly="true"
-                  />
-                  <small>Allocated automatically and reused by billing.</small>
-                </label>
-              </div>
-
-              <div className="financial-preview">
-                <div>
-                  <span>AMOUNT REMAINING</span>
-
-                  <strong>
-                    {amountRemaining.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </strong>
+                    <p>
+                      This section replaces the financial columns of the
+                      MOTHERSHIP sheet with controlled system records.
+                    </p>
+                  </div>
                 </div>
 
-                <div>
-                  <span>ESTIMATED NET INCOME</span>
+                <div className="finance-entry-grid">
+                  <label className="field">
+                    <span>Currency</span>
 
-                  <strong>
-                    {estimatedNetIncome.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </strong>
+                    <select
+                      value={form.currency}
+                      onChange={(e) => update("currency", e.target.value)}
+                    >
+                      <option value="USD">USD</option>
+                      <option value="RWF">RWF</option>
+                      <option value="EUR">EUR</option>
+                      <option value="KES">KES</option>
+                      <option value="UGX">UGX</option>
+                      <option value="TZS">TZS</option>
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span>Amount billed to client</span>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.clientRevenue}
+                      onChange={(e) => update("clientRevenue", e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Amount paid by client</span>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.amountPaidByClient}
+                      onChange={(e) =>
+                        update("amountPaidByClient", e.target.value)
+                      }
+                      placeholder="0.00"
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Supplier cost</span>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.supplierCost}
+                      onChange={(e) => update("supplierCost", e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Other cost</span>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.otherCost}
+                      onChange={(e) => update("otherCost", e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Amount paid to supply</span>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.amountPaidToSupply}
+                      onChange={(e) =>
+                        update("amountPaidToSupply", e.target.value)
+                      }
+                      placeholder="0.00"
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Other expenses</span>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.otherExpenses}
+                      onChange={(e) => update("otherExpenses", e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Invoice number</span>
+
+                    <input
+                      value={form.invoiceNo}
+                      readOnly
+                      placeholder="Generated automatically by AAL"
+                      aria-readonly="true"
+                    />
+                    <small>
+                      Allocated automatically and reused by billing.
+                    </small>
+                  </label>
                 </div>
 
-                <div>
-                  <span>PAYMENT STATUS</span>
+                <div className="financial-preview">
+                  <div>
+                    <span>AMOUNT REMAINING</span>
 
-                  <strong>
-                    {amountRemaining === 0 && form.clientRevenue
-                      ? "PAID"
-                      : "OUTSTANDING"}
-                  </strong>
+                    <strong>
+                      {amountRemaining.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                      })}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span>ESTIMATED NET INCOME</span>
+
+                    <strong>
+                      {estimatedNetIncome.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                      })}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span>PAYMENT STATUS</span>
+
+                    <strong>
+                      {amountRemaining === 0 && form.clientRevenue
+                        ? "PAID"
+                        : "OUTSTANDING"}
+                    </strong>
+                  </div>
                 </div>
-              </div>
-            </section>)}
+              </section>
+            )}
 
             {step === 5 && (
-            <section className="form-panel">
-              <div className="section-heading">
-                <div className="section-number">05</div>
+              <section className="form-panel">
+                <div className="section-heading">
+                  <div className="section-number">05</div>
 
-                <div>
-                  <h2>Operations control</h2>
+                  <div>
+                    <h2>Operations control</h2>
 
-                  <p>Ownership, lifecycle and next-action information.</p>
+                    <p>Ownership, lifecycle and next-action information.</p>
+                  </div>
                 </div>
-              </div>
 
-              <div className="form-grid">
-                <label className="field">
-                  <span>Shipment status</span>
+                <div className="form-grid">
+                  <label className="field">
+                    <span>Shipment status</span>
 
-                  <select
-                    value={form.shipmentStatus}
-                    onChange={(e) => update("shipmentStatus", e.target.value)}
-                  >
-                    {statuses.map((status) => (
-                      <option key={status} value={status}>
-                        {status.replaceAll("_", " ")}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    <select
+                      value={form.shipmentStatus}
+                      onChange={(e) => update("shipmentStatus", e.target.value)}
+                    >
+                      {statuses.map((status) => (
+                        <option key={status} value={status}>
+                          {status.replaceAll("_", " ")}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-                <label className="field">
-                  <span>Payment status</span>
+                  <label className="field">
+                    <span>Payment status</span>
 
-                  <select
-                    value={form.paymentStatus}
-                    onChange={(e) => update("paymentStatus", e.target.value)}
-                  >
-                    {paymentStatuses.map((status) => (
-                      <option key={status} value={status}>
-                        {status}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    <select
+                      value={form.paymentStatus}
+                      onChange={(e) => update("paymentStatus", e.target.value)}
+                    >
+                      {paymentStatuses.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-                <label className="field">
-                  <span>Operator</span>
+                  <label className="field">
+                    <span>Operator</span>
 
-                  <input
-                    value={form.operatorName}
-                    onChange={(e) => update("operatorName", e.target.value)}
-                    placeholder="Responsible operator"
-                  />
-                </label>
+                    <input
+                      value={form.operatorName}
+                      onChange={(e) => update("operatorName", e.target.value)}
+                      placeholder="Responsible operator"
+                    />
+                  </label>
 
-                <label className="field">
-                  <span>Owner</span>
+                  <label className="field">
+                    <span>Owner</span>
 
-                  <input
-                    value={form.ownerName}
-                    onChange={(e) => update("ownerName", e.target.value)}
-                    placeholder="Account / operations owner"
-                  />
-                </label>
+                    <input
+                      value={form.ownerName}
+                      onChange={(e) => update("ownerName", e.target.value)}
+                      placeholder="Account / operations owner"
+                    />
+                  </label>
 
-                <label className="field field-span-2">
-                  <span>Next action</span>
+                  <label className="field field-span-2">
+                    <span>Next action</span>
 
-                  <input
-                    value={form.nextAction}
-                    onChange={(e) => update("nextAction", e.target.value)}
-                    placeholder="e.g. Confirm airline booking"
-                  />
-                </label>
+                    <input
+                      value={form.nextAction}
+                      onChange={(e) => update("nextAction", e.target.value)}
+                      placeholder="e.g. Confirm airline booking"
+                    />
+                  </label>
 
-                <label className="field">
-                  <span>Next action date</span>
+                  <label className="field">
+                    <span>Next action date</span>
 
-                  <input
-                    type="date"
-                    value={form.nextActionDate}
-                    onChange={(e) => update("nextActionDate", e.target.value)}
-                  />
-                </label>
+                    <input
+                      type="date"
+                      value={form.nextActionDate}
+                      onChange={(e) => update("nextActionDate", e.target.value)}
+                    />
+                  </label>
 
-                <label className="field field-span-2">
-                  <span>Notes</span>
+                  <label className="field field-span-2">
+                    <span>Notes</span>
 
-                  <textarea
-                    rows={5}
-                    value={form.notes}
-                    onChange={(e) => update("notes", e.target.value)}
-                    placeholder="Operational notes, special instructions, client requirements..."
-                  />
-                </label>
-              </div>
-            </section>)}
-            <div className="actions" style={{marginTop:16}}>
-              {step > 1 && <button type="button" className="btn"
-                onClick={() => { setError(""); setStep(current => current - 1); }}>← Back</button>}
-              {step < 5 && <button type="button" className="btn btn-primary"
-                onClick={nextStep}>Continue: {steps[step]} →</button>}
+                    <textarea
+                      rows={5}
+                      value={form.notes}
+                      onChange={(e) => update("notes", e.target.value)}
+                      placeholder="Operational notes, special instructions, client requirements..."
+                    />
+                  </label>
+                </div>
+              </section>
+            )}
+            <div className="actions" style={{ marginTop: 16 }}>
+              {step > 1 && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    setError("");
+                    setStep((current) => current - 1);
+                  }}
+                >
+                  ← Back
+                </button>
+              )}
+              {step < 5 && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={nextStep}
+                >
+                  Continue: {steps[step]} →
+                </button>
+              )}
             </div>
           </div>
 
@@ -1185,13 +1265,15 @@ export default function ShipmentCreateForm() {
                 </strong>
               </div>
 
-              {step === 5 && <button
-                type="submit"
-                className="btn btn-primary btn-large"
-                disabled={saving}
-              >
-                {saving ? "Saving shipment…" : "Save shipment and continue →"}
-              </button>}
+              {step === 5 && (
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-large"
+                  disabled={saving || Boolean(partiallyCreatedId)}
+                >
+                  {saving ? "Saving shipment…" : "Save shipment and continue →"}
+                </button>
+              )}
 
               <Link href="/shipments" className="btn btn-block">
                 Cancel

@@ -1,7 +1,9 @@
 package com.logiplatform.config;
 
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,10 +19,13 @@ public class DashboardExecutorConfig {
 
     @Bean(name = "dashboardExecutor", destroyMethod = "shutdown")
     public Executor dashboardExecutor() {
-        return Executors.newFixedThreadPool(6, runnable -> {
+        // Limit concurrent reporting queries and queue depth so multiple
+        // browser refreshes do not exhaust PostgreSQL connections or RAM.
+        return new ThreadPoolExecutor(3, 3, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(24), runnable -> {
             Thread thread = new Thread(runnable, "aal-dashboard");
             thread.setDaemon(true);
             return thread;
-        });
+        }, new ThreadPoolExecutor.CallerRunsPolicy());
     }
 }

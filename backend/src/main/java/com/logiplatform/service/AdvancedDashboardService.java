@@ -32,12 +32,28 @@ public class AdvancedDashboardService {
         private final JdbcTemplate jdbc;
         private final Executor dashboardExecutor;
         private final ConcurrentHashMap<CacheKey, CachedResponse> cache = new ConcurrentHashMap<>();
-        private final ConcurrentHashMap<CacheKey, Object> cacheLocks = new ConcurrentHashMap<>();
+        // Fixed lock stripes avoid an unbounded lock map and the remove/reacquire
+        // race that allowed two expensive snapshots for the same tenant/date.
+        private static final Object[] CACHE_LOCKS = new Object[64];
+        static {
+                java.util.Arrays.setAll(CACHE_LOCKS, ignored -> new Object());
+        }
+
 
         /** Lightweight, trustworthy KPI response used before full analytics load. */
         public Overview overview(LocalDate asOf) {
                 LocalDate date = asOf == null ? LocalDate.now() : asOf;
                 UUID tenantId = TenantContext.getTenantId();
+                if (tenantId == null) {
+                        throw new IllegalStateException("Tenant context is not available");
+                }
+                // Reuse a recent complete snapshot without duplicating SQL.
+                // This cache is tenant-scoped and short-lived; avoid returning
+                // a fake zero whenever a required financial query fails.
+                CachedResponse snapshot = cache.get(new CacheKey(tenantId, date));
+                if (snapshot != null && System.currentTimeMillis() - snapshot.createdAtMs() < CACHE_TTL_MS) {
+                        return new Overview(date, snapshot.response().operations(), snapshot.response().financial());
+                }
                 String currency = reportingCurrency(tenantId);
                 // Run essential tenant-scoped queries on the request thread. Errors are
                 // propagated: reporting zero for a failed financial query is unsafe.
@@ -66,9 +82,8 @@ public class AdvancedDashboardService {
                         return cached.response();
                 }
 
-                Object lock = cacheLocks.computeIfAbsent(key, ignored -> new Object());
-                try {
-                        synchronized (lock) {
+                Object lock = CACHE_LOCKS[Math.floorMod(key.hashCode(), CACHE_LOCKS.length)];
+                synchronized (lock) {
                                 final long currentTime = System.currentTimeMillis();
                                 cached = cache.get(key);
                                 if (cached != null && currentTime - cached.createdAtMs() < CACHE_TTL_MS) {
@@ -144,9 +159,6 @@ public class AdvancedDashboardService {
                                         log.debug("Control-tower dashboard snapshot took {} ms", elapsedMs);
                                 }
                                 return response;
-                        }
-                } finally {
-                        cacheLocks.remove(key, lock);
                 }
         }
 

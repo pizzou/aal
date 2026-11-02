@@ -111,6 +111,7 @@ function makeIdempotencyKey() {
 
 export default function BillingPage() {
   const [requestedShipmentId, setRequestedShipmentId] = useState("");
+  const [requestedInvoiceId, setRequestedInvoiceId] = useState("");
   const [workflowAwbNumber, setWorkflowAwbNumber] = useState("");
   const [workflowAwbStatus, setWorkflowAwbStatus] = useState("");
   const [createdInvoice, setCreatedInvoice] = useState<Invoice | null>(null);
@@ -208,6 +209,7 @@ export default function BillingPage() {
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     setRequestedShipmentId(query.get("shipmentId") || "");
+    setRequestedInvoiceId(query.get("invoiceId") || "");
     setWorkflowAwbNumber(query.get("awbNumber") || "");
     setWorkflowAwbStatus(query.get("awbStatus") || "");
   }, []);
@@ -224,6 +226,19 @@ export default function BillingPage() {
       setInvoiceShipment(requestedShipmentId);
     }
   }, [requestedShipmentId, shipments]);
+
+  useEffect(() => {
+    if (!requestedInvoiceId) return;
+    const invoice = invoices.find((item) => item.id === requestedInvoiceId);
+    if (invoice && invoice.balance > 0) {
+      setPaymentInvoice(invoice);
+      window.requestAnimationFrame(() =>
+        document
+          .getElementById("record-collection")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      );
+    }
+  }, [requestedInvoiceId, invoices]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -390,7 +405,19 @@ export default function BillingPage() {
       return;
     }
     if (!invoiceShipment) {
-      setError("Select a shipment before creating an invoice.");
+      setError(
+        "Select a delivered shipment with confirmed POD before creating an invoice.",
+      );
+      setSaving(false);
+      return;
+    }
+    if (
+      !selectedInvoiceShipment ||
+      !["DELIVERED", "COMPLETED"].includes(selectedInvoiceShipment.status)
+    ) {
+      setError(
+        "Complete delivery and proof of delivery before issuing an invoice.",
+      );
       setSaving(false);
       return;
     }
@@ -664,7 +691,7 @@ export default function BillingPage() {
         </div>
 
         <div className="actions">
-          <Link className="btn" href="/shipments?create=1">
+          <Link className="btn" href="/commercial">
             <IconFallbackPlus />
             New shipment
           </Link>
@@ -927,8 +954,9 @@ export default function BillingPage() {
             <div>
               <h2>Create invoice</h2>
               <p>
-                Select a shipment that already contains a billable client
-                revenue amount.
+                Only shipments marked delivered with successful proof of
+                delivery can be invoiced. Review governed revenue and the
+                confirmed VAT rule.
               </p>
             </div>
           </div>
@@ -943,20 +971,28 @@ export default function BillingPage() {
               >
                 <option value="">Select shipment…</option>
 
-                {shipments.map((shipment) => (
-                  <option key={shipment.id} value={shipment.id}>
-                    {shipment.referenceCode} —{" "}
-                    {shipment.clientName || "No client"} —{" "}
-                    {money(
-                      shipment.amountBilledToClient &&
-                        shipment.amountBilledToClient > 0
-                        ? shipment.amountBilledToClient
-                        : (shipment.clientRevenue ?? 0),
-                      shipment.currency || "USD",
-                    )}
-                  </option>
-                ))}
+                {shipments
+                  .filter((shipment) =>
+                    ["DELIVERED", "COMPLETED"].includes(shipment.status),
+                  )
+                  .map((shipment) => (
+                    <option key={shipment.id} value={shipment.id}>
+                      {shipment.referenceCode} —{" "}
+                      {shipment.clientName || "No client"} —{" "}
+                      {money(
+                        shipment.amountBilledToClient &&
+                          shipment.amountBilledToClient > 0
+                          ? shipment.amountBilledToClient
+                          : (shipment.clientRevenue ?? 0),
+                        shipment.currency || "USD",
+                      )}
+                    </option>
+                  ))}
               </select>
+              <small>
+                Not delivered?{" "}
+                <Link href="/deliveries">Go to Step 4 · Delivery / POD</Link>
+              </small>
             </label>
 
             <label className="field">
@@ -1262,6 +1298,14 @@ export default function BillingPage() {
         </section>
 
         <section id="record-collection" className="form-panel collection-panel">
+          <div className="actions" style={{ marginBottom: 12 }}>
+            <Link className="btn" href="/payments">
+              Step 6 · Payment register
+            </Link>
+            <Link className="btn" href="/reports">
+              Step 7 · Reports
+            </Link>
+          </div>
           <div className="section-heading">
             <div className="section-number">02</div>
 

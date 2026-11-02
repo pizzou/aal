@@ -424,24 +424,17 @@ export default function ShipmentCreateForm() {
       }));
 
       setSuccess(
-        `Shipment ${updated.referenceCode || created.referenceCode} was saved. Continue to the next document and commercial step to issue its invoice.`,
+        `Shipment ${updated.referenceCode || created.referenceCode} was saved. Complete transport and Delivery/POD before invoice creation.`,
       );
 
-      const billableRevenue =
-        Number(form.clientRevenue || 0) > 0 ||
-        Number(updated.amountBilledToClient || 0) > 0;
+      // Shipment execution and verified POD must precede invoice creation.
+      // Air freight first needs its AWB; all other modes open shipment operations.
       if (form.transportMode === "AIR") {
         router.replace(
           `/air-cargo/awb?shipmentId=${encodeURIComponent(created.id)}`,
         );
-      } else if (billableRevenue) {
-        router.replace(`/billing?shipmentId=${encodeURIComponent(created.id)}`);
       } else {
-        // Do not send a shipment with no billable value into invoice creation;
-        // the shipment workspace remains the next step for commercial review.
-        router.replace(
-          `/shipments/${encodeURIComponent(created.id)}?next=pricing`,
-        );
+        router.replace(`/shipments/${encodeURIComponent(created.id)}`);
       }
     } catch (exception) {
       const message =

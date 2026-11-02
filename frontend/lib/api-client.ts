@@ -2206,6 +2206,25 @@ export const operationsApi = {
 
 export const commercialApi = {
   quotes: () => apiFetch<QuoteRecord[]>("/api/commercial/quotes"),
+  convertAcceptedQuote: (
+    id: string,
+    route?: { origin: string; destination: string },
+  ) =>
+    apiFetch<{
+      quoteId: string;
+      quoteReference: string;
+      shipmentId: string;
+      shipmentReference: string;
+      status: string;
+      message: string;
+    }>(
+      `/api/commercial/quotes/${id}/convert${
+        route
+          ? `?origin=${encodeURIComponent(route.origin)}&destination=${encodeURIComponent(route.destination)}`
+          : ""
+      }`,
+      { method: "POST" },
+    ),
   createQuote: (data: Record<string, unknown>) =>
     apiFetch<QuoteRecord>("/api/commercial/quotes", {
       method: "POST",

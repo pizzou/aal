@@ -730,7 +730,7 @@ export default function AalControlTower() {
                     title="Quick Actions"
                   />
                   <QuickAction
-                    href="/shipments?create=1"
+                    href="/commercial"
                     icon="ship"
                     label="Create Shipment"
                     tone="navy"

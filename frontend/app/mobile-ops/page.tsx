@@ -271,17 +271,21 @@ export default function MobileOperationsPage() {
       if (!navigator.onLine) {
         await queueMobileOperation(operation);
         await refreshPending();
-        setStatus("Offline: POD safely queued on this device.");
+        setStatus(
+          "Evidence saved locally. It is NOT yet a confirmed POD; finish in Step 4 when online.",
+        );
         return;
       }
 
       try {
         await advancedLogisticsApi.mobileSync(operation);
-        setStatus("POD synchronized successfully.");
+        setStatus(
+          "Offline evidence uploaded to the sync queue. This does NOT complete the official POD. Confirm delivery in Step 4 · Delivery / POD.",
+        );
       } catch {
         await queueMobileOperation(operation);
         setStatus(
-          "Network unavailable: POD queued for automatic synchronization.",
+          "Network unavailable: evidence queued, NOT yet official POD. Return to Step 4 when online.",
         );
       }
       await refreshPending();
@@ -299,8 +303,9 @@ export default function MobileOperationsPage() {
           <div className="eyebrow">AAL / MOBILE OPERATIONS</div>
           <h1 className="page-title">Driver & Warehouse Mobile Workbench</h1>
           <p className="page-subtitle">
-            Offline-capable POD capture, device identity, evidence collection
-            and automatic synchronization.
+            Offline evidence collection and synchronization staging only.
+            Delivery is not complete until proof of delivery is saved and
+            verified in Step 4 · Delivery / POD.
           </p>
         </div>
         <div className="badge">
@@ -308,6 +313,12 @@ export default function MobileOperationsPage() {
         </div>
       </div>
 
+      <div className="alert" role="note">
+        This mobile workbench stores field evidence for synchronization. It does
+        not issue official delivery confirmation.{" "}
+        <a href="/deliveries">Open Step 4 · Delivery / POD</a> to save verified
+        proof and advance the shipment.
+      </div>
       <section className="card" style={{ maxWidth: 760 }}>
         <div className="eyebrow" style={{ marginTop: 24 }}>
           FIELD TRACEABILITY
@@ -410,7 +421,7 @@ export default function MobileOperationsPage() {
             Clear signature
           </button>
           <button className="btn btn-primary" onClick={syncPOD}>
-            {online ? "Save & synchronize POD" : "Save POD offline"}
+            {online ? "Queue captured evidence" : "Save evidence offline"}
           </button>
           {photoData && (
             <img

@@ -141,9 +141,37 @@ public class CommercialOperationsService {
                         String destination) {
 
                 UUID tenantId = TenantContext.getTenantId();
+                // Serialize competing conversions, including customer booking links and staff
+                // clicks.
+                // The database column and uniqueness are added by V94.
+                java.util.List<java.util.Map<String, Object>> lockedRows = tenantDb.queryForList(
+                                "SELECT status, converted_shipment_id FROM commercial_quotes WHERE id=? AND tenant_id=? FOR UPDATE",
+                                quoteId, tenantId);
+                if (lockedRows.isEmpty())
+                        throw notFound("Quote not found");
+                Object priorShipment = lockedRows.get(0).get("converted_shipment_id");
+                if (priorShipment instanceof UUID priorId) {
+                        ShipmentResponse previous = shipmentService.get(priorId);
+                        CommercialQuote existingQuote = quotes.findById(quoteId).orElseThrow();
+                        return new QuoteToShipmentResponse(quoteId, existingQuote.getQuoteId(), priorId,
+                                        previous.referenceCode(), "CONVERTED",
+                                        "Existing shipment returned; no duplicate created");
+                }
+                if ("CONVERTED".equalsIgnoreCase(String.valueOf(lockedRows.get(0).get("status")))) {
+                        throw conflict("This quote was converted before linkage was enabled. Locate the existing shipment; do not create another.");
+                }
+                if (!"WON".equalsIgnoreCase(String.valueOf(lockedRows.get(0).get("status")))) {
+                        throw conflict("Only a customer-accepted quotation can be converted into a shipment");
+                }
                 CommercialQuote quote = quotes.findById(quoteId)
                                 .filter(q -> tenantId.equals(q.getTenantId()))
                                 .orElseThrow(() -> notFound("Quote not found"));
+                if (quote.getLockedAmount() == null || quote.getPriceLockedAt() == null) {
+                        throw conflict("The accepted quotation must have a locked price");
+                }
+                if (quote.getAcceptedVersionId() == null) {
+                        throw conflict("Quotation acceptance must be recorded against an approved version before conversion");
+                }
 
                 String[] route = quote.getRoute() == null
                                 ? new String[] { origin == null ? "" : origin, destination == null ? "" : destination }
@@ -161,18 +189,24 @@ public class CommercialOperationsService {
                                         "Origin and destination are required for shipment conversion");
                 }
 
-                TransportMode mode;
-                try {
-                        mode = TransportMode.valueOf(
-                                        (quote.getServiceType() == null ? "ROAD" : quote.getServiceType())
-                                                        .toUpperCase(Locale.ROOT)
-                                                        .replace(" FREIGHT", "_FREIGHT")
-                                                        .replace("SEA_FREIGHT", "SEA")
-                                                        .replace("AIR_FREIGHT", "AIR")
-                                                        .replace("ROAD_FREIGHT", "ROAD"));
-                } catch (Exception e) {
-                        mode = TransportMode.ROAD;
-                }
+                // Never silently turn an unknown Air/Ocean service into ROAD.
+                // Keep the quote-to-shipment mode aligned with the accepted offer.
+                String service = quote.getServiceType() == null ? ""
+                                : quote.getServiceType()
+                                                .trim().toUpperCase(Locale.ROOT).replace('-', '_').replace(' ', '_');
+                String modeCode = switch (service) {
+                        case "AIR", "AIR_FREIGHT", "AIR_CARGO" -> "AIR";
+                        case "SEA", "SEA_FREIGHT", "OCEAN", "OCEAN_FREIGHT", "SEA_CARGO" -> "SEA";
+                        case "ROAD", "ROAD_FREIGHT", "TRUCKING", "ROAD_TRANSPORT" -> "ROAD";
+                        case "RAIL", "RAIL_FREIGHT" -> "RAIL";
+                        case "COURIER", "EXPRESS" -> "COURIER";
+                        case "LAST_MILE", "LAST_MILE_DELIVERY" -> "LAST_MILE";
+                        case "INLAND_WATERWAY", "RORO", "PROJECT_CARGO" -> service;
+                        default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Unsupported quotation service type '" + service
+                                                        + "'; correct the service before conversion");
+                };
+                TransportMode mode = TransportMode.valueOf(modeCode);
 
                 BigDecimal governedAmount = quote.getLockedAmount() != null
                                 ? quote.getLockedAmount()
@@ -246,6 +280,8 @@ public class CommercialOperationsService {
 
                 quote.changeStatus("CONVERTED");
                 quotes.save(quote);
+                tenantDb.update("UPDATE commercial_quotes SET converted_shipment_id=? WHERE id=? AND tenant_id=?",
+                                booked.id(), quoteId, tenantId);
 
                 return new QuoteToShipmentResponse(
                                 quote.getId(),
@@ -280,10 +316,17 @@ public class CommercialOperationsService {
                                 .orElseThrow(() -> notFound(
                                                 "Quote not found"));
 
-                if ("WON".equalsIgnoreCase(status) && quote.getPriceLockedAt() == null) {
-                        throw conflict("Quote price must be locked before acceptance");
+                String nextStatus = status == null ? "" : status.trim().toUpperCase(Locale.ROOT);
+                if ("WON".equals(nextStatus) || "CONVERTED".equals(nextStatus)) {
+                        throw conflict("Quote acceptance must be recorded via the approved quote-version/customer-response workflow; conversion is system-only");
                 }
-                quote.changeStatus(status);
+                if ("WON".equalsIgnoreCase(quote.getStatus()) || "CONVERTED".equalsIgnoreCase(quote.getStatus())) {
+                        throw conflict("Accepted or converted quotations cannot be changed by the generic status endpoint");
+                }
+                if (!java.util.Set.of("DRAFT", "REQUESTED", "SENT", "LOST", "EXPIRED").contains(nextStatus)) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid quotation status");
+                }
+                quote.changeStatus(nextStatus);
 
                 return QuoteResponse.from(
                                 quotes.save(quote));
@@ -306,66 +349,10 @@ public class CommercialOperationsService {
 
         @Transactional
         public InvoiceResponse createInvoiceFromQuote(UUID quoteId, String invoiceNo, LocalDate dueDate) {
-                UUID tenantId = TenantContext.getTenantId();
-                CommercialQuote q = quotes.findById(quoteId)
-                                .filter(x -> tenantId.equals(x.getTenantId()))
-                                .orElseThrow(() -> notFound("Quote not found"));
-
-                // Serialize quote-to-invoice conversion so a browser retry cannot issue a
-                // second receivable for the same accepted commercial version.
-                tenantDb.query("SELECT id FROM commercial_quotes WHERE tenant_id=? AND id=? FOR UPDATE",
-                                rs -> rs.next() ? rs.getObject(1, UUID.class) : null, tenantId, quoteId);
-                UUID existingInvoiceId = tenantDb.query("""
-                                SELECT id FROM commercial_invoices
-                                 WHERE tenant_id=? AND quote_id=? AND quote_version_id=?
-                                 ORDER BY issue_date, id
-                                 LIMIT 1
-                                """, rs -> rs.next() ? rs.getObject(1, UUID.class) : null,
-                                tenantId, quoteId, q.getAcceptedVersionId());
-                if (existingInvoiceId != null) {
-                        return invoices.findByTenantIdAndId(tenantId, existingInvoiceId)
-                                        .map(InvoiceResponse::from)
-                                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
-                                                        "A quotation invoice reference exists but its invoice record cannot be loaded; contact finance support."));
-                }
-
-                if (!"WON".equalsIgnoreCase(q.getStatus()) && !"CONVERTED".equalsIgnoreCase(q.getStatus())) {
-                        throw new ResponseStatusException(HttpStatus.CONFLICT,
-                                        "Quote must be accepted before invoicing");
-                }
-                if (q.getPriceLockedAt() == null || q.getLockedAmount() == null || q.getAcceptedVersionId() == null) {
-                        throw new ResponseStatusException(HttpStatus.CONFLICT,
-                                        "Quote must have an accepted locked version before invoicing");
-                }
-
-                String no = (invoiceNo == null || invoiceNo.isBlank())
-                                ? documentSequences.nextInvoiceNumber()
-                                : invoiceNo.trim();
-                InvoiceResponse invoice = createInvoice(new InvoiceRequest(
-                                no, LocalDate.now(), q.getClient(), null,
-                                q.getLockedCurrency() == null ? "USD" : q.getLockedCurrency(),
-                                q.getLockedAmount(), dueDate, q.getOwner(),
-                                "Generated from accepted quote version " + q.getAcceptedVersionId()
-                                                + ". VAT was calculated by the configured invoice tax rule."));
-                tenantDb.update("""
-                                UPDATE commercial_invoices
-                                   SET quote_id=?,quote_version_id=?,governed_amount=?,governed_currency=?
-                                 WHERE id=? AND tenant_id=?
-                                """, q.getId(), q.getAcceptedVersionId(), q.getLockedAmount(), q.getLockedCurrency(),
-                                invoice.id(), tenantId);
-                BigDecimal invoiceLineAmount = invoice.subtotalAmount() == null
-                                ? q.getLockedAmount()
-                                : invoice.subtotalAmount();
-                tenantDb.update("""
-                                INSERT INTO commercial_invoice_lines
-                                    (id,tenant_id,invoice_id,line_no,charge_code,description,quantity,unit_price,amount,currency,source_type,source_reference)
-                                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-                                ON CONFLICT(tenant_id,invoice_id,line_no) DO NOTHING
-                                """,
-                                UUID.randomUUID(), tenantId, invoice.id(), 1, "FREIGHT",
-                                "Governed quotation " + q.getQuoteId(), BigDecimal.ONE,
-                                invoiceLineAmount, invoiceLineAmount, invoice.currency(), "QUOTE", q.getQuoteId());
-                return invoice;
+                // The legacy shortcut bypasses shipment execution and delivery evidence.
+                // Use the canonical shipment invoice after a successful POD instead.
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                "Convert the accepted quotation to a shipment, complete delivery/POD, then create the invoice from Billing.");
         }
 
         @Transactional(readOnly = true)

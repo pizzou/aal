@@ -48,6 +48,8 @@ function CommercialWorkspace() {
 function CommercialQuotesWorkspace() {
   const { accessToken, isLoading, role } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const preselectedClientId = searchParams.get("clientId") || "";
   const [quotes, setQuotes] = useState<QuoteRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
@@ -58,6 +60,9 @@ function CommercialQuotesWorkspace() {
   const [success, setSuccess] = useState("");
   const [busy, setBusy] = useState(false);
   const [shareQuoteId, setShareQuoteId] = useState<string | null>(null);
+  const [convertingQuoteId, setConvertingQuoteId] = useState<string | null>(
+    null,
+  );
   const [shareEmail, setShareEmail] = useState("");
   const [sendImmediately, setSendImmediately] = useState(true);
   const [quote, setQuote] = useState({
@@ -89,20 +94,35 @@ function CommercialQuotesWorkspace() {
     if (!accessToken) return;
     setError("");
     try {
-      const [q, t, c] = await Promise.all([
-        commercialApi.quotes(),
-        commercialApi.tasks(),
-        commercialApi.clients(),
-      ]);
-      setQuotes(q);
-      setTasks(t);
-      setClients(
-        c.filter(
-          (client) =>
-            (client.clientStatus || "ACTIVE").toUpperCase() === "ACTIVE",
-        ),
-      );
-      if (canExpense) setExpenses(await commercialApi.expenses());
+      const [quotesResult, tasksResult, clientsResult, expensesResult] =
+        await Promise.allSettled([
+          commercialApi.quotes(),
+          commercialApi.tasks(),
+          commercialApi.clients(),
+          canExpense
+            ? commercialApi.expenses()
+            : Promise.resolve([] as ExpenseRecord[]),
+        ]);
+      const failures: string[] = [];
+      if (quotesResult.status === "fulfilled") setQuotes(quotesResult.value);
+      else failures.push("quotations");
+      if (tasksResult.status === "fulfilled") setTasks(tasksResult.value);
+      else failures.push("follow-up tasks");
+      if (clientsResult.status === "fulfilled")
+        setClients(
+          clientsResult.value.filter(
+            (client) =>
+              (client.clientStatus || "ACTIVE").toUpperCase() === "ACTIVE",
+          ),
+        );
+      else failures.push("customers");
+      if (expensesResult.status === "fulfilled")
+        setExpenses(expensesResult.value);
+      else if (canExpense) failures.push("expenses");
+      if (failures.length)
+        setError(
+          `The following sections could not be loaded: ${failures.join(", ")}. Other data remains available; retry when connected.`,
+        );
     } catch (e) {
       setError(msg(e));
     }
@@ -110,6 +130,18 @@ function CommercialQuotesWorkspace() {
   useEffect(() => {
     void load();
   }, [accessToken, role]);
+
+  useEffect(() => {
+    if (!preselectedClientId || selectedClientId || !clients.length) return;
+    const chosen = clients.find((client) => client.id === preselectedClientId);
+    if (!chosen) return;
+    setSelectedClientId(chosen.id);
+    setQuote((current) => ({
+      ...current,
+      client: chosen.clientCompany || "",
+      customerEmail: chosen.email || "",
+    }));
+  }, [preselectedClientId, clients, selectedClientId]);
 
   const openQuotes = useMemo(
     () =>
@@ -149,16 +181,26 @@ function CommercialQuotesWorkspace() {
         pricingMode: "RULES_BASED",
         customerEmail: quote.customerEmail || undefined,
       });
+      // Creating a quote and emailing it are separate operations. If email fails
+      // after persistence, do not suggest re-creating the quote (duplicate risk).
       if (sendImmediately) {
-        const sent = await commercialApi.shareQuote(
-          created.id,
-          quote.customerEmail.trim() || undefined,
-        );
-        setSuccess(
-          `Quotation ${sent.quoteReference} was created and sent to ${sent.recipientEmail}.`,
-        );
+        try {
+          const sent = await commercialApi.shareQuote(
+            created.id,
+            quote.customerEmail.trim() || undefined,
+          );
+          setSuccess(
+            `Quotation ${sent.quoteReference} created and sent to ${sent.recipientEmail}. Await customer acceptance before creating a shipment.`,
+          );
+        } catch (sendError) {
+          setSuccess(
+            `Quotation ${created.quoteId} was saved, but sending failed: ${msg(sendError)}. Use Send for acceptance in the quotation pipeline; do not create another quotation.`,
+          );
+        }
       } else {
-        setSuccess("Quotation created as a draft.");
+        setSuccess(
+          `Quotation ${created.quoteId} saved as a draft. Send it to the customer for acceptance.`,
+        );
       }
       setSelectedClientId("");
       setQuote({
@@ -201,6 +243,54 @@ function CommercialQuotesWorkspace() {
     } finally {
       setBusy(false);
       setShareQuoteId(null);
+    }
+  }
+
+  async function convertToShipment(quote: QuoteRecord) {
+    if (
+      !window.confirm(
+        `Create shipment from accepted quotation ${quote.quoteId}? This uses the approved price and will not create a duplicate on retry.`,
+      )
+    )
+      return;
+    // Existing quotations may have free-text routes. Ask for locations only
+    // when the quote does not contain a recognizable origin → destination.
+    let route: { origin: string; destination: string } | undefined;
+    const parsed = (quote.route || "").split(/\s*(?:→|->|\bTO\b)\s*/i);
+    if (parsed.length < 2 || !parsed[0]?.trim() || !parsed[1]?.trim()) {
+      const origin = window.prompt(
+        "Shipment origin (as accepted on the quote):",
+        "",
+      );
+      if (origin === null) return;
+      const destination = window.prompt(
+        "Shipment destination (as accepted on the quote):",
+        "",
+      );
+      if (destination === null) return;
+      if (!origin.trim() || !destination.trim()) {
+        setError(
+          "Both shipment origin and destination are required for conversion.",
+        );
+        return;
+      }
+      route = { origin: origin.trim(), destination: destination.trim() };
+    }
+    setConvertingQuoteId(quote.id);
+    setBusy(true);
+    setError("");
+    try {
+      const converted = await commercialApi.convertAcceptedQuote(
+        quote.id,
+        route,
+      );
+      router.push(`/shipments/${encodeURIComponent(converted.shipmentId)}`);
+    } catch (e) {
+      setError(msg(e));
+      await load();
+    } finally {
+      setConvertingQuoteId(null);
+      setBusy(false);
     }
   }
 
@@ -269,11 +359,11 @@ function CommercialQuotesWorkspace() {
       <div className="page-head">
         <div>
           <div className="eyebrow">COMMERCIAL CONTROL</div>
-          <h1 className="page-title">Sales & Commercial Operations</h1>
+          <h1 className="page-title">Step 2 · Customer quotations</h1>
           <p className="page-subtitle">
-            Quotations, operational follow-ups and controlled expenses. Customer
-            master data is maintained only in the canonical Customer 360
-            workspace.
+            Start with an existing customer. Issue a quotation, obtain customer
+            acceptance, then convert the accepted quote into one shipment.
+            Invoices are created only after delivery and POD.
           </p>
         </div>
       </div>
@@ -287,6 +377,22 @@ function CommercialQuotesWorkspace() {
           {success}
         </div>
       )}
+      <div className="actions" style={{ marginBottom: 14 }}>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => router.push("/commercial?tab=customers")}
+        >
+          ← Step 1: Customers
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => router.push("/shipments")}
+        >
+          Step 3: Shipment register →
+        </button>
+      </div>
       <section className="grid grid-3">
         <div className="card kpi">
           <div className="kpi-label">Open quotations</div>
@@ -351,7 +457,13 @@ function CommercialQuotesWorkspace() {
                 ] as const
               ).map(([k, l]) => (
                 <div className="field" key={k}>
-                  <label>{k === "client" ? "Assign to customer" : l}</label>
+                  <label>
+                    {k === "client"
+                      ? "Assign to customer"
+                      : k === "route"
+                        ? "Route (Origin → Destination)"
+                        : l}
+                  </label>
                   {k === "client" ? (
                     <select
                       value={selectedClientId}
@@ -459,7 +571,7 @@ function CommercialQuotesWorkspace() {
                     <th>Value</th>
                     <th>Profit</th>
                     <th>Status</th>
-                    <th>Customer delivery</th>
+                    <th>Customer delivery / next step</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -478,16 +590,39 @@ function CommercialQuotesWorkspace() {
                         </span>
                       </td>
                       <td>
-                        <button
-                          className="btn btn-primary"
-                          disabled={busy}
-                          onClick={() => shareQuote(q.id)}
-                          type="button"
-                        >
-                          {shareQuoteId === q.id
-                            ? "Sending…"
-                            : "Send to customer"}
-                        </button>
+                        {q.status?.toUpperCase() === "WON" ? (
+                          <button
+                            className="btn btn-primary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => convertToShipment(q)}
+                          >
+                            {convertingQuoteId === q.id
+                              ? "Converting…"
+                              : "Create shipment →"}
+                          </button>
+                        ) : q.status?.toUpperCase() === "CONVERTED" ? (
+                          <span className="status status-success">
+                            Shipment created · Open shipment register
+                          </span>
+                        ) : ["LOST", "EXPIRED"].includes(
+                            q.status?.toUpperCase() || "",
+                          ) ? (
+                          <span className="card-muted">
+                            Closed · Not convertible
+                          </span>
+                        ) : (
+                          <button
+                            className="btn"
+                            disabled={busy}
+                            type="button"
+                            onClick={() => shareQuote(q.id)}
+                          >
+                            {shareQuoteId === q.id
+                              ? "Sending…"
+                              : "Send for acceptance"}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-/** Compatibility link: one shipment workspace with list and guided create mode. */
-export default function FormerNewShipmentPage() {
-  redirect("/shipments?create=1");
+export default function LegacyNewShipmentRedirect() {
+  // New business starts from Customer and an accepted quotation.
+  redirect("/commercial");
 }

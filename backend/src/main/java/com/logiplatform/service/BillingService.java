@@ -7,6 +7,7 @@ import com.logiplatform.model.Shipment;
 import com.logiplatform.repository.CommercialInvoiceRepository;
 import com.logiplatform.repository.CommercialPaymentRepository;
 import com.logiplatform.repository.ShipmentRepository;
+import com.logiplatform.repository.ProofOfDeliveryRepository;
 import com.logiplatform.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ import jakarta.persistence.PersistenceContext;
 public class BillingService {
 
         private final ShipmentRepository shipments;
+        private final ProofOfDeliveryRepository proofOfDeliveryRepository;
         private final CommercialInvoiceRepository invoices;
         private final CommercialPaymentRepository payments;
         private final FinancePostingService finance;
@@ -39,6 +41,7 @@ public class BillingService {
 
         public BillingService(
                         ShipmentRepository shipments,
+                        ProofOfDeliveryRepository proofOfDeliveryRepository,
                         CommercialInvoiceRepository invoices,
                         CommercialPaymentRepository payments,
                         FinancePostingService finance,
@@ -47,6 +50,7 @@ public class BillingService {
                         FinancialHardeningService financialHardening) {
 
                 this.shipments = shipments;
+                this.proofOfDeliveryRepository = proofOfDeliveryRepository;
                 this.invoices = invoices;
                 this.payments = payments;
                 this.finance = finance;
@@ -96,6 +100,7 @@ public class BillingService {
                 Shipment shipment = shipments.findByIdAndTenantId(shipmentId, tenantId)
                                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                                                 "Shipment not found"));
+                assertDeliveredWithPod(shipment, tenantId);
                 BigDecimal amount = shipment.getAmountBilledToClient();
                 if (amount == null || amount.signum() <= 0)
                         amount = shipment.getClientRevenue();
@@ -124,6 +129,21 @@ public class BillingService {
                 result.put("effectiveDate", tax.get("effectiveDate"));
                 result.put("taxRegistrationNo", tax.get("taxRegistrationNo"));
                 return result;
+        }
+
+        /**
+         * A financial invoice is permitted only after server-verified delivery
+         * evidence.
+         */
+        private void assertDeliveredWithPod(Shipment shipment, UUID tenantId) {
+                if (shipment.getStatus() == null || !shipment.getStatus().isDeliveredOrBeyond()) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                        "Complete delivery and proof of delivery before issuing this shipment invoice.");
+                }
+                if (!proofOfDeliveryRepository.hasSuccessfulDeliveryEvidence(tenantId, shipment.getId())) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                        "No successful proof of delivery is registered. Save POD in Delivery / POD first.");
+                }
         }
 
         private static BigDecimal n(Object value) {
@@ -250,6 +270,7 @@ public class BillingService {
                         return existing;
                 }
 
+                assertDeliveredWithPod(shipment, tenantId);
                 String currency = normalizeCurrency(
                                 shipment.getCurrency() == null ? "USD" : shipment.getCurrency());
                 java.util.Map<String, Object> defaultVatRule = financialHardening.defaultInvoiceVatRule(LocalDate.now(),
@@ -379,6 +400,10 @@ public class BillingService {
                 if (client == null || client.isBlank()) {
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice customer is required");
                 }
+                if (shipmentId == null) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                        "Issue invoices from a delivered shipment with confirmed proof of delivery. Complete Customer → Quote → Shipment → Delivery/POD first.");
+                }
                 if (amount == null || amount.signum() <= 0) {
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                                         "Invoice amount must be greater than zero");
@@ -415,6 +440,7 @@ public class BillingService {
                         Shipment shipment = shipments.findLockedByIdAndTenantId(shipmentId, tenantId)
                                         .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                                                         "Shipment not found"));
+                        assertDeliveredWithPod(shipment, tenantId);
                         if (invoices.findByTenantIdAndShipmentId(tenantId, shipmentId).isPresent()) {
                                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                                                 "This shipment already has a canonical invoice. Open that invoice instead of creating a duplicate.");

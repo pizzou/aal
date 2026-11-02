@@ -14,12 +14,75 @@ type NavItem = {
   primary?: boolean;
 };
 
-// Six familiar daily destinations. Specialist routes remain available through
-// the Operations workspace or the collapsed administrative tools area.
+// Seven sequential client stages. Technical operations are tools within the
+// shipment stage, not extra steps in the commercial lifecycle.
 const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   {
-    section: "DAILY WORK",
-    label: "Home",
+    section: "WORKFLOW",
+    label: "1. Customer",
+    href: "/commercial?tab=customers",
+    icon: "grid",
+    primary: true,
+    roles: ["ADMIN", "MANAGER", "SALES"],
+  },
+  {
+    section: "WORKFLOW",
+    label: "2. Quotes",
+    href: "/commercial",
+    icon: "chart",
+    primary: true,
+    roles: ["ADMIN", "MANAGER", "SALES"],
+  },
+  {
+    section: "WORKFLOW",
+    label: "3. Shipment",
+    href: "/shipments",
+    icon: "ship",
+    primary: true,
+    roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES", "FINANCE"],
+  },
+  {
+    section: "WORKFLOW",
+    label: "4. Delivery / POD",
+    href: "/deliveries",
+    icon: "truck",
+    primary: true,
+    roles: [
+      "ADMIN",
+      "MANAGER",
+      "OPERATIONS",
+      "DISPATCH",
+      "WAREHOUSE",
+      "AIR_CARGO",
+    ],
+  },
+  {
+    section: "WORKFLOW",
+    label: "5. Invoice",
+    href: "/billing",
+    icon: "money",
+    primary: true,
+    roles: ["ADMIN", "MANAGER", "FINANCE"],
+  },
+  {
+    section: "WORKFLOW",
+    label: "6. Payment",
+    href: "/payments",
+    icon: "money",
+    primary: true,
+    roles: ["ADMIN", "MANAGER", "FINANCE"],
+  },
+  {
+    section: "WORKFLOW",
+    label: "7. Report",
+    href: "/reports",
+    icon: "chart",
+    primary: true,
+    roles: ["ADMIN", "MANAGER", "FINANCE", "OPERATIONS", "SALES"],
+  },
+  {
+    section: "WORKSPACES",
+    label: "Home / overview",
     href: "/aal-control-tower",
     icon: "grid",
     primary: true,
@@ -35,16 +98,8 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
     ],
   },
   {
-    section: "DAILY WORK",
-    label: "Shipments",
-    href: "/shipments",
-    icon: "ship",
-    primary: true,
-    roles: ["ADMIN", "MANAGER", "OPERATIONS", "SALES", "FINANCE"],
-  },
-  {
-    section: "DAILY WORK",
-    label: "Operations",
+    section: "WORKSPACES",
+    label: "Transport & customs",
     href: "/operations",
     icon: "truck",
     primary: true,
@@ -56,30 +111,6 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
       "DISPATCH",
       "WAREHOUSE",
     ],
-  },
-  {
-    section: "DAILY WORK",
-    label: "Customers & quotes",
-    href: "/commercial",
-    icon: "chart",
-    primary: true,
-    roles: ["ADMIN", "MANAGER", "SALES"],
-  },
-  {
-    section: "DAILY WORK",
-    label: "Invoices & payments",
-    href: "/billing",
-    icon: "money",
-    primary: true,
-    roles: ["ADMIN", "MANAGER", "FINANCE"],
-  },
-  {
-    section: "DAILY WORK",
-    label: "Reports",
-    href: "/reports",
-    icon: "chart",
-    primary: true,
-    roles: ["ADMIN", "MANAGER", "FINANCE", "OPERATIONS", "SALES"],
   },
   {
     section: "SETUP & CONTROLS",
@@ -267,8 +298,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             const section = item.section !== last;
             last = item.section;
             const active =
-              path === item.href ||
-              path.startsWith(`${item.href}/`) ||
+              (item.href === "/commercial?tab=customers"
+                ? path === "/commercial" &&
+                  typeof window !== "undefined" &&
+                  new URLSearchParams(window.location.search).get("tab") ===
+                    "customers"
+                : item.href === "/commercial"
+                  ? path === "/commercial" &&
+                    (typeof window === "undefined" ||
+                      new URLSearchParams(window.location.search).get("tab") !==
+                        "customers")
+                  : path === item.href || path.startsWith(`${item.href}/`)) ||
               (item.href === "/operations" &&
                 [
                   "/air-cargo",
@@ -476,56 +516,72 @@ function SearchBox({
   );
 }
 
-/** Existing screens remain available by direct link; this guidance keeps
- * normal staff on a predictable daily workflow without bypassing permissions. */
+/** Suggested next screen follows the commercial sequence; actual permissions and
+ * server-side business guards remain authoritative for every transaction. */
 function GuidedNextStep({ path, role }: { path: string; role: string | null }) {
-  const canShip = ["ADMIN", "MANAGER", "OPERATIONS", "SALES"].includes(
-    role ?? "",
-  );
-  const canInvoice = ["ADMIN", "MANAGER", "FINANCE"].includes(role ?? "");
-  const canReport = [
+  const allowed = (roles: string[]) => roles.includes(role || "");
+  const sales = allowed(["ADMIN", "MANAGER", "SALES"]);
+  const ops = allowed([
     "ADMIN",
     "MANAGER",
-    "FINANCE",
     "OPERATIONS",
-    "SALES",
-  ].includes(role ?? "");
+    "DISPATCH",
+    "WAREHOUSE",
+    "AIR_CARGO",
+  ]);
+  const finance = allowed(["ADMIN", "MANAGER", "FINANCE"]);
+  const customerTab =
+    path === "/commercial" &&
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("tab") === "customers";
   const next =
-    path === "/billing/setup" && ["ADMIN", "FINANCE"].includes(role ?? "")
+    customerTab && sales
       ? {
-          href: "/billing",
-          label: "Create customer invoice",
-          context: "After finance has verified tax setup",
+          href: "/commercial",
+          label: "2. Quotes",
+          detail: "Select a customer and prepare the quotation",
         }
-      : path === "/aal-control-tower" && canShip
+      : path === "/commercial" && sales
         ? {
             href: "/shipments",
-            label: "Open shipments",
-            context: "Start with the daily shipment register",
+            label: "3. Shipment",
+            detail: "Convert an accepted quotation to a shipment",
           }
-        : path === "/shipments" && canShip
+        : (path === "/shipments" || path.startsWith("/shipments/")) && ops
           ? {
-              href: "/shipments?create=1",
-              label: "Create shipment",
-              context: "Register a new job in this workspace",
+              href: "/deliveries",
+              label: "4. Delivery / POD",
+              detail: "Complete transport and record genuine delivery evidence",
             }
-          : path.startsWith("/shipments/") && canInvoice
+          : path === "/deliveries" && finance
             ? {
                 href: "/billing",
-                label: "Billing & collections",
-                context: "After verifying shipment charges",
+                label: "5. Invoice",
+                detail: "Only after successful delivery and POD",
               }
-            : path === "/billing" && canReport
+            : path === "/billing" && finance
               ? {
-                  href: "/reports",
-                  label: "Review reports",
-                  context: "Monitor confirmed business records",
+                  href: "/payments",
+                  label: "6. Payment",
+                  detail: "Record funds only after receipt",
                 }
-              : null;
+              : path === "/payments"
+                ? {
+                    href: "/reports",
+                    label: "7. Report",
+                    detail: "Review issued invoices and collected payments",
+                  }
+                : path === "/aal-control-tower" && sales
+                  ? {
+                      href: "/commercial?tab=customers",
+                      label: "1. Customer",
+                      detail: "Start by registering or finding a customer",
+                    }
+                  : null;
   if (!next) return null;
   return (
     <nav className="aal-next-step" aria-label="Suggested next workflow step">
-      <span>{next.context}</span>
+      <span>{next.detail}</span>
       <Link href={next.href}>Next: {next.label} →</Link>
     </nav>
   );

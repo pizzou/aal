@@ -142,13 +142,10 @@ export default function StructuredAwbPage() {
         awbNumber: created.awbNumber,
         awbStatus: created.validationStatus || "DRAFT",
       });
-      const hasBillableValue =
-        (selectedShipment.amountBilledToClient ?? 0) > 0 ||
-        (selectedShipment.clientRevenue ?? 0) > 0;
+      // AWB preparation is operational, not an invoice authorization.
+      // Return to the shipment until final delivery and POD are verified.
       router.replace(
-        hasBillableValue
-          ? `/billing?${query.toString()}`
-          : `/shipments/${encodeURIComponent(selectedShipment.id)}?${query.toString()}&next=pricing`,
+        `/shipments/${encodeURIComponent(selectedShipment.id)}?${query.toString()}`,
       );
     } catch (exception) {
       setError(
@@ -279,7 +276,7 @@ export default function StructuredAwbPage() {
                 Create an AIR shipment first. Once it is saved, this step will
                 prefill the AWB from it.
               </p>
-              <Link className="btn btn-primary" href="/shipments?create=1">
+              <Link className="btn btn-primary" href="/commercial">
                 Create shipment
               </Link>
             </div>
@@ -431,7 +428,7 @@ export default function StructuredAwbPage() {
             {saving
               ? "Generating AWB…"
               : billable
-                ? "Generate AWB → Continue to invoice"
+                ? "Generate AWB → Shipment & delivery"
                 : "Generate AWB → Review shipment pricing"}
           </button>
           <p className="form-hint">

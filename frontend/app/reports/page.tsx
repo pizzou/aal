@@ -96,7 +96,7 @@ export default function ReportsPage() {
       <div className="page-head">
         <div>
           <div className="eyebrow">MANAGEMENT REPORTING</div>
-          <h1 className="page-title">AAL Management Reports</h1>
+          <h1 className="page-title">Step 7 · Management reports</h1>
           <p className="page-subtitle">
             Daily, monthly, customer, carrier, shipment, revenue, margin,
             receivables and expense reporting from the same controlled data

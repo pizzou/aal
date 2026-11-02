@@ -62,19 +62,17 @@ export default function CustomerWorkspace() {
     if (!accessToken) return;
     setError("");
     try {
-      const [c, s] = await Promise.all([
+      const [customersResult, shipmentsResult] = await Promise.allSettled([
         commercialApi.clients(),
-        shipmentsApi.list(),
+        shipmentsApi.list({ page: 0, size: 50 }),
       ]);
-      setClients(c);
-      setShipments(s.content);
-      if (canReport) {
-        const r = await reportsApi.management(
-          "2000-01-01",
-          new Date().toISOString().slice(0, 10),
-        );
-        setReport(r);
-      } else setReport(null);
+      if (customersResult.status === "fulfilled")
+        setClients(customersResult.value);
+      else throw customersResult.reason;
+      if (shipmentsResult.status === "fulfilled")
+        setShipments(shipmentsResult.value.content);
+      else setShipments([]); // Nonessential historical summary must not hide customers.
+      if (!canReport) setReport(null);
     } catch (e) {
       setError(err(e));
     }
@@ -112,13 +110,32 @@ export default function CustomerWorkspace() {
         notes: "",
       });
       setCreateOpen(false);
-      setSuccess("Customer master record created.");
+      setSelected(created.id);
+      setSuccess(
+        "Customer saved. Continue to Step 2 to prepare a quotation for this customer.",
+      );
     } catch (e) {
       setError(err(e));
     } finally {
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!accessToken || !canReport || !selected) return;
+    let active = true;
+    reportsApi
+      .management("2000-01-01", new Date().toISOString().slice(0, 10))
+      .then((r) => {
+        if (active) setReport(r);
+      })
+      .catch(() => {
+        if (active) setReport(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [accessToken, selected, canReport]);
 
   const filtered = useMemo(
     () =>
@@ -163,7 +180,7 @@ export default function CustomerWorkspace() {
       <div className="page-head">
         <div>
           <div className="eyebrow">CUSTOMER MANAGEMENT</div>
-          <h1 className="page-title">Customer Master & 360</h1>
+          <h1 className="page-title">Step 1 · Customers</h1>
           <p className="page-subtitle">
             The single canonical customer record for contacts, shipment history,
             ownership and relationship follow-up.
@@ -185,9 +202,26 @@ export default function CustomerWorkspace() {
       )}
       {success && (
         <div className="alert alert-success" style={{ marginBottom: 12 }}>
-          {success}
+          {success}{" "}
+          {selected && (
+            <Link href={`/commercial?clientId=${encodeURIComponent(selected)}`}>
+              Create quotation →
+            </Link>
+          )}
         </div>
       )}
+      <div className="actions" style={{ marginBottom: 12 }}>
+        <Link
+          className="btn btn-primary"
+          href={
+            selected
+              ? `/commercial?clientId=${encodeURIComponent(selected)}`
+              : "/commercial"
+          }
+        >
+          Step 2 · Quotations →
+        </Link>
+      </div>
       {createOpen && canCreate && (
         <section className="card" style={{ marginTop: 14 }}>
           <h2 className="card-title">Create customer master record</h2>

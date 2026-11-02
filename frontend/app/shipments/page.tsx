@@ -151,7 +151,19 @@ function ShipmentWorkspace() {
   if (isLoading || !accessToken) {
     return null;
   }
-  if (creating) return <ShipmentCreateForm />;
+  if (creating)
+    return (
+      <>
+        <main className="page">
+          <div className="alert alert-warning" role="alert">
+            Normal workflow: Customer → accepted Quote → Shipment. Manual entry
+            is for authorized legacy or exceptional records only.
+            <Link href="/commercial"> Return to quotations</Link>
+          </div>
+        </main>
+        <ShipmentCreateForm />
+      </>
+    );
 
   const grossWeight = rows.reduce(
     (sum, shipment) => sum + (shipment.grossWeightKg ?? 0),
@@ -189,7 +201,7 @@ function ShipmentWorkspace() {
         <div>
           <div className="eyebrow">AAL / OPERATIONS REGISTER</div>
 
-          <h1 className="page-title">Shipments</h1>
+          <h1 className="page-title">Step 3 · Shipments</h1>
 
           <p className="page-subtitle">
             The digital daily shipment ledger for Aviation Africa Logistics Ltd
@@ -199,12 +211,11 @@ function ShipmentWorkspace() {
         </div>
 
         <div className="actions">
-          <Link className="btn" href="/billing">
-            Billing & receivables
+          <Link className="btn" href="/commercial">
+            ← Accepted quotations
           </Link>
-
-          <Link className="btn btn-primary" href="/shipments?create=1">
-            + Create shipment
+          <Link className="btn btn-primary" href="/deliveries">
+            Step 4 · Delivery / POD →
           </Link>
         </div>
       </div>

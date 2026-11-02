@@ -307,10 +307,11 @@ export default function ShipmentTrackingPage() {
         otherExpenses: String(updated.otherExpenses ?? otherExpenses),
         currency: (updated.currency || currency).toUpperCase(),
       });
-      const next = new URLSearchParams({ shipmentId: updated.id });
-      if (workflowAwbNumber) next.set("awbNumber", workflowAwbNumber);
-      if (workflowAwbStatus) next.set("awbStatus", workflowAwbStatus);
-      router.replace(`/billing?${next.toString()}`);
+      setPricingError("");
+      router.replace(`/shipments/${encodeURIComponent(updated.id)}`);
+      setError(
+        "Commercial pricing saved. Complete transport and record successful Delivery/POD before invoicing.",
+      );
     } catch (exception) {
       setPricingError(
         exception instanceof ApiError || exception instanceof Error
@@ -586,7 +587,7 @@ export default function ShipmentTrackingPage() {
               >
                 {savingPricing
                   ? "Saving pricing…"
-                  : "Save pricing → Continue to invoice"}
+                  : "Save pricing → Continue shipment operations"}
               </button>
             </div>
           </form>
@@ -623,9 +624,17 @@ export default function ShipmentTrackingPage() {
               (shipment.clientRevenue ?? 0) > 0 ? (
                 <Link
                   className="btn btn-primary btn-small"
-                  href={`/billing?shipmentId=${encodeURIComponent(shipment.id)}&awbNumber=${encodeURIComponent(workflowAwbNumber)}&awbStatus=${encodeURIComponent(workflowAwbStatus)}`}
+                  href={
+                    shipment.status === "DELIVERED" ||
+                    shipment.status === "COMPLETED"
+                      ? `/billing?shipmentId=${encodeURIComponent(shipment.id)}`
+                      : `/deliveries?shipmentId=${encodeURIComponent(shipment.id)}`
+                  }
                 >
-                  Continue to invoice
+                  {shipment.status === "DELIVERED" ||
+                  shipment.status === "COMPLETED"
+                    ? "Step 5 · Invoice"
+                    : "Step 4 · Delivery / POD"}
                 </Link>
               ) : (
                 <span className="form-hint">
@@ -1020,9 +1029,17 @@ export default function ShipmentTrackingPage() {
                 )}
                 <Link
                   className="btn"
-                  href={`/billing?shipmentId=${encodeURIComponent(shipment.id)}`}
+                  href={
+                    shipment.status === "DELIVERED" ||
+                    shipment.status === "COMPLETED"
+                      ? `/billing?shipmentId=${encodeURIComponent(shipment.id)}`
+                      : `/deliveries?shipmentId=${encodeURIComponent(shipment.id)}`
+                  }
                 >
-                  Invoice & payment
+                  {shipment.status === "DELIVERED" ||
+                  shipment.status === "COMPLETED"
+                    ? "Step 5: Invoice"
+                    : "Step 4: Delivery / POD"}
                 </Link>
                 <Link className="btn" href="/trips">
                   Dispatch / POD

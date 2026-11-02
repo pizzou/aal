@@ -105,23 +105,22 @@ public class ShipmentService {
                 null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null,
                 "Outstanding", null, null, null, null, null, null, null, "USD");
-       
+
         Shipment saved = shipmentRepository.saveAndFlush(shipment);
 
         if (normalizedIdempotencyKey != null) {
             creationIdempotency.complete(normalizedIdempotencyKey, requestHash, saved.getId());
         }
 
-        
         trackingEventRepository.save(new ShipmentTrackingEvent(
                 tenantId, saved.getId(), TrackingEventType.CREATED, request.originAddress(),
                 "Shipment record created; booking confirmation is pending", Instant.now()));
-        milestoneOrchestrationService.initialize(saved.getId(), mode.name(), request.originAddress(), request.destinationAddress());
+        milestoneOrchestrationService.initialize(saved.getId(), mode.name(), request.originAddress(),
+                request.destinationAddress());
 
         return ShipmentResponse.from(saved);
     }
 
-    
     @Transactional(readOnly = true)
     public Page<ShipmentResponse> list(Pageable pageable) {
         return list(pageable, null, null, null);
@@ -141,12 +140,14 @@ public class ShipmentService {
     }
 
     private String normalizeOptionalTransportMode(String raw) {
-        if (raw == null || raw.isBlank()) return "";
+        if (raw == null || raw.isBlank())
+            return "";
         return parseTransportMode(raw).name();
     }
 
     private String normalizeOptionalShipmentStatus(String raw) {
-        if (raw == null || raw.isBlank()) return "";
+        if (raw == null || raw.isBlank())
+            return "";
         try {
             return ShipmentStatus.valueOf(raw.trim().toUpperCase(Locale.ROOT)).name();
         } catch (IllegalArgumentException e) {
@@ -175,7 +176,7 @@ public class ShipmentService {
 
     @Transactional
     public ShipmentResponse updateStatusFromTrip(UUID shipmentId, UpdateStatusRequest request,
-                                                 String physicalLocation, boolean finalDestinationArrival) {
+            String physicalLocation, boolean finalDestinationArrival) {
         if (request == null || request.status() == null || request.status().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Shipment status is required");
         }
@@ -186,7 +187,8 @@ public class ShipmentService {
 
         ShipmentStatus newStatus = parseShipmentStatus(request.status());
         if (newStatus != ShipmentStatus.ARRIVED) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trip arrival can only set shipment status to ARRIVED");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Trip arrival can only set shipment status to ARRIVED");
         }
         return ShipmentResponse.from(applyStatusTransition(
                 shipment, newStatus, physicalLocation.trim(), finalDestinationArrival));
@@ -214,6 +216,9 @@ public class ShipmentService {
 
     @Transactional
     public ShipmentResponse updateCommandCenter(UUID shipmentId, UpdateRequest request) {
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Shipment update details are required");
+        }
         UUID tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
@@ -228,7 +233,8 @@ public class ShipmentService {
                     || moneyChanged(request.amountPaidByClient(), shipment.getAmountPaidByClient())
                     || moneyChanged(request.amountPaidToSupply(), shipment.getAmountPaidToSupply())
                     || moneyChanged(request.otherExpenses(), shipment.getOtherExpenses())
-                    || !normalizeCurrency(request.currency()).equals(normalizeCurrency(shipment.getCurrency()))
+                    || (request.currency() != null && !request.currency().isBlank()
+                            && !normalizeCurrency(request.currency()).equals(normalizeCurrency(shipment.getCurrency())))
                     || (request.invoiceNo() != null && !request.invoiceNo().isBlank()
                             && !request.invoiceNo().trim().equalsIgnoreCase(canonicalInvoice.getInvoiceNo()));
             if (commercialValuesChanged) {
@@ -238,13 +244,34 @@ public class ShipmentService {
         }
 
         ShipmentStatus requestedStatus = request.shipmentStatus() == null || request.shipmentStatus().isBlank()
-                ? null : parseShipmentStatus(request.shipmentStatus());
+                ? null
+                : parseShipmentStatus(request.shipmentStatus());
         BigDecimal previousSupplierPaid = nz(shipment.getAmountPaidToSupply());
         BigDecimal previousClientPaid = nz(shipment.getAmountPaidByClient());
-        BigDecimal requestedSupplierPaid = nz(request.amountPaidToSupply());
+        // Preserve existing historical amounts if an operational update omits them.
+        // Customer cash must be entered as a canonical invoice payment with receipt,
+        // not by editing a shipment's Excel-compatible amount-paid column.
+        BigDecimal requestedClientPaid = request.amountPaidByClient() == null
+                ? previousClientPaid
+                : request.amountPaidByClient();
+        if (requestedClientPaid.compareTo(previousClientPaid) != 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Customer collections cannot be edited in shipment details. Issue the invoice and record a payment in Billing to create a receipt and ledger entry.");
+        }
+        String priorPaymentStatus = shipment.getPaymentStatus();
+        if (request.paymentStatus() != null && !request.paymentStatus().isBlank()
+                && !request.paymentStatus().equalsIgnoreCase(
+                        priorPaymentStatus == null ? "Outstanding" : priorPaymentStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Payment status is controlled by the billing workflow; it cannot be changed manually on a shipment.");
+        }
+        BigDecimal requestedSupplierPaid = request.amountPaidToSupply() == null
+                ? previousSupplierPaid
+                : request.amountPaidToSupply();
         boolean financialPaymentsRecorded = previousSupplierPaid.signum() > 0 || previousClientPaid.signum() > 0;
-        if (financialPaymentsRecorded && (request.currency() == null || shipment.getCurrency() == null
-                || !shipment.getCurrency().equalsIgnoreCase(request.currency().trim()))) {
+        if (financialPaymentsRecorded && request.currency() != null && !request.currency().isBlank()
+                && (shipment.getCurrency() == null
+                        || !shipment.getCurrency().equalsIgnoreCase(request.currency().trim()))) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Currency cannot be changed or cleared after customer or supplier payments have been recorded");
@@ -255,36 +282,48 @@ public class ShipmentService {
                     "Amount paid to supply cannot be reduced after it has been recorded");
         }
 
-        if (nz(request.amountPaidByClient()).compareTo(previousClientPaid) < 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Amount paid by client cannot be reduced after it has been recorded");
-        }
-
+        // PATCH semantics: omitted operational fields must not be cleared. This is
+        // especially important after an invoice exists, when a status/ETA update
+        // must never erase its commercial values or its existing customer data.
         shipment.updateCommandCenterFields(
-                request.clientName(), request.contact(), request.commodity(),
-                request.originCountry(), request.originCityPort(),
-                request.destinationCountry(), request.destinationCityPort(),
-                request.grossWeightKg(), request.volumetricWeightKg(), request.packages(),
-                request.airlineUsed(), request.serviceType(), request.operatorName(),
-                request.supplierCost(), request.otherCost(), request.clientRevenue(),
-                request.amountPaidByClient(), request.amountPaidToSupply(), request.otherExpenses(),
-                request.paymentStatus(), request.ownerName(),
-                canonicalInvoice != null && (request.invoiceNo() == null || request.invoiceNo().isBlank())
-                        ? canonicalInvoice.getInvoiceNo() : request.invoiceNo(),
-                request.etd(), request.eta(), request.nextAction(), request.nextActionDate(),
-                request.notes(), request.currency());
+                present(request.clientName(), shipment.getClientName()),
+                present(request.contact(), shipment.getContact()),
+                present(request.commodity(), shipment.getCommodity()),
+                present(request.originCountry(), shipment.getOriginCountry()),
+                present(request.originCityPort(), shipment.getOriginCityPort()),
+                present(request.destinationCountry(), shipment.getDestinationCountry()),
+                present(request.destinationCityPort(), shipment.getDestinationCityPort()),
+                present(request.grossWeightKg(), shipment.getGrossWeightKg()),
+                present(request.volumetricWeightKg(), shipment.getVolumetricWeightKg()),
+                present(request.packages(), shipment.getPackages()),
+                present(request.airlineUsed(), shipment.getAirlineUsed()),
+                present(request.serviceType(), shipment.getServiceType()),
+                present(request.operatorName(), shipment.getOperatorName()),
+                present(request.supplierCost(), shipment.getSupplierCost()),
+                present(request.otherCost(), shipment.getOtherCost()),
+                present(request.clientRevenue(), shipment.getClientRevenue()),
+                previousClientPaid, requestedSupplierPaid,
+                present(request.otherExpenses(), shipment.getOtherExpenses()),
+                priorPaymentStatus == null ? "Outstanding" : priorPaymentStatus,
+                present(request.ownerName(), shipment.getOwnerName()),
+                canonicalInvoice != null ? canonicalInvoice.getInvoiceNo()
+                        : present(request.invoiceNo(), shipment.getInvoiceNo()),
+                present(request.etd(), shipment.getEtd()),
+                present(request.eta(), shipment.getEta()),
+                present(request.nextAction(), shipment.getNextAction()),
+                present(request.nextActionDate(), shipment.getNextActionDate()),
+                present(request.notes(), shipment.getNotes()),
+                present(request.currency(), shipment.getCurrency()));
 
         if (request.dateOpened() != null) {
             shipment.setDateOpened(request.dateOpened());
         }
-       
+
         if (requestedStatus != null && requestedStatus != shipment.getStatus()) {
             shipment = applyStatusTransition(shipment, requestedStatus);
         }
         Shipment saved = shipmentRepository.save(shipment);
 
-       
         // Recording operational/commercial shipment fields must not silently
         // issue an invoice before finance has confirmed its due date and any
         // applicable tax rule. Invoice creation is an explicit next workflow
@@ -333,10 +372,9 @@ public class ShipmentService {
         return TrackingEventResponse.from(event);
     }
 
-  
     @Transactional
     public TrackingEventResponse recordExternalMilestone(UUID shipmentId, TrackingEventType type,
-                                                          Instant occurredAt, String location, String notes) {
+            Instant occurredAt, String location, String notes) {
         if (type != TrackingEventType.DEPARTED_ORIGIN && type != TrackingEventType.ARRIVED_DESTINATION) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported external milestone type");
         }
@@ -407,13 +445,16 @@ public class ShipmentService {
         }
     }
 
-    /** Applies one canonical status transition and persists its side effects in the same transaction. */
+    /**
+     * Applies one canonical status transition and persists its side effects in the
+     * same transaction.
+     */
     private Shipment applyStatusTransition(Shipment shipment, ShipmentStatus newStatus) {
         return applyStatusTransition(shipment, newStatus, null, true);
     }
 
     private Shipment applyStatusTransition(Shipment shipment, ShipmentStatus newStatus,
-                                           String locationOverride, boolean finalDestinationArrival) {
+            String locationOverride, boolean finalDestinationArrival) {
         UUID tenantId = TenantContext.getTenantId();
         ShipmentStatus previousStatus = shipment.getStatus();
         if (previousStatus == newStatus) {
@@ -433,10 +474,12 @@ public class ShipmentService {
         Shipment saved = shipmentRepository.save(shipment);
         Instant changedAt = Instant.now();
         TrackingEventType eventType = newStatus == ShipmentStatus.ARRIVED && !finalDestinationArrival
-                ? TrackingEventType.ARRIVED_AT_HUB : trackingEventFor(newStatus);
+                ? TrackingEventType.ARRIVED_AT_HUB
+                : trackingEventFor(newStatus);
         String location = locationOverride != null ? locationOverride : switch (newStatus) {
             case PENDING, PLANNING, BOOKED -> shipment.getOriginAddress();
-            case ARRIVED, CUSTOMS, CUSTOMS_CLEARED, OUT_FOR_DELIVERY, DELIVERED, COMPLETED -> shipment.getDestinationAddress();
+            case ARRIVED, CUSTOMS, CUSTOMS_CLEARED, OUT_FOR_DELIVERY, DELIVERED, COMPLETED ->
+                shipment.getDestinationAddress();
             default -> null;
         };
         String transitionNote = "Operational status changed from " + previousStatus + " to " + newStatus;
@@ -505,7 +548,11 @@ public class ShipmentService {
     }
 
     private static boolean moneyChanged(BigDecimal requested, BigDecimal current) {
-        return nz(requested).compareTo(nz(current)) != 0;
+        return requested != null && requested.compareTo(nz(current)) != 0;
+    }
+
+    private static <T> T present(T requested, T previous) {
+        return requested != null ? requested : previous;
     }
 
     private static String normalizeCurrency(String currency) {

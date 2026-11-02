@@ -379,14 +379,14 @@ export default function ShipmentCreateForm() {
 
         clientRevenue: numberOrUndefined(form.clientRevenue),
 
-        amountPaidByClient: numberOrUndefined(form.amountPaidByClient),
+        // Collections are created only through Billing with a receipt and ledger entry.
+        amountPaidByClient: 0,
 
         amountPaidToSupply: numberOrUndefined(form.amountPaidToSupply),
 
         otherExpenses: numberOrUndefined(form.otherExpenses),
 
-        paymentStatus:
-          amountRemaining === 0 && form.clientRevenue ? "Paid" : "Outstanding",
+        paymentStatus: "Outstanding",
 
         ownerName: form.ownerName.trim() || undefined,
 
@@ -960,20 +960,16 @@ export default function ShipmentCreateForm() {
                     />
                   </label>
 
-                  <label className="field">
-                    <span>Amount paid by client</span>
-
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.amountPaidByClient}
-                      onChange={(e) =>
-                        update("amountPaidByClient", e.target.value)
-                      }
-                      placeholder="0.00"
-                    />
-                  </label>
+                  <div className="field">
+                    <span>Customer collections</span>
+                    <p className="form-hint" role="note">
+                      Record funds received in{" "}
+                      <Link href="/billing">Invoices &amp; payments</Link>
+                      after creating the invoice. Only a payment receipt records
+                      cash; the shipment form cannot mark an unverified payment
+                      as received.
+                    </p>
+                  </div>
 
                   <label className="field">
                     <span>Supplier cost</span>
@@ -1106,20 +1102,12 @@ export default function ShipmentCreateForm() {
                     </select>
                   </label>
 
-                  <label className="field">
+                  <div className="field">
                     <span>Payment status</span>
-
-                    <select
-                      value={form.paymentStatus}
-                      onChange={(e) => update("paymentStatus", e.target.value)}
-                    >
-                      {paymentStatuses.map((status) => (
-                        <option key={status} value={status}>
-                          {status}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                    <p className="form-hint">
+                      Outstanding until Billing confirms customer receipts.
+                    </p>
+                  </div>
 
                   <label className="field">
                     <span>Operator</span>

@@ -3,6 +3,13 @@ set -euo pipefail
 
 : "${BASE_URL:?Set BASE_URL, e.g. https://api.africalogisticaviation.com}"
 : "${AAL_E2E_EMAIL:?Set AAL_E2E_EMAIL}"
+#: This script writes shipments, invoices, tax snapshots, receipts and audit data.
+#  Never run it against a real client tenant or production database.
+if [[ "${ALLOW_STAGING_MUTATIONS:-false}" != "true" ]]; then
+  echo "STOP: this acceptance suite creates and modifies financial records." >&2
+  echo "Run only against an isolated staging tenant/database with ALLOW_STAGING_MUTATIONS=true." >&2
+  exit 2
+fi
 : "${AAL_E2E_PASSWORD:?Set AAL_E2E_PASSWORD}"
 
 base="${BASE_URL%/}"
@@ -132,9 +139,14 @@ customs_payload="$(jq -cn --arg shipment "$shipment_id" \
 customs_json="$(json_post "$base/api/air-cargo/documents/customs" "$customs_payload")"
 jq -e 'type == "object"' <<<"$customs_json" >/dev/null
 
-echo "[8/12] deliver shipment"
-delivery_json="$(json_patch "$base/api/shipments/$shipment_id/status" '{"status":"DELIVERED"}')"
-jq -e '.status == "DELIVERED"' <<<"$delivery_json" >/dev/null
+echo "[8/12] arrival -> signed-off proof of delivery -> delivered"
+arrival="$(json_patch "$base/api/shipments/$shipment_id/status" '{"status":"ARRIVED"}')"
+jq -e '.status == "ARRIVED"' <<<"$arrival" >/dev/null
+pod_payload="$(jq -cn --arg shipment "$shipment_id" \
+  '{shipmentId:$shipment,recipientName:"AAL STAGING TEST",notes:"Automated staging-only acceptance delivery"}')"
+pod_json="$(json_post "$base/api/operations/pod" "$pod_payload")"
+jq -e '.shipmentId' <<<"$pod_json" >/dev/null
+json_get "$base/api/shipments/$shipment_id" | jq -e '.status == "DELIVERED"' >/dev/null
 json_get "$base/api/shipments/$shipment_id/events" | jq -e 'length >= 1' >/dev/null
 json_get "$base/api/public/tracking/$tracking_token" | jq -e '.status == "DELIVERED"' >/dev/null
 

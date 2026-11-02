@@ -12,6 +12,7 @@ import com.logiplatform.repository.TripShipmentRepository;
 import com.logiplatform.repository.VehicleRepository;
 import com.logiplatform.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -23,8 +24,10 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 
-/** Tenant-scoped exception lifecycle. Notification delivery must never prevent
- * the operational incident itself from being recorded. */
+/**
+ * Tenant-scoped exception lifecycle. Notification delivery must never prevent
+ * the operational incident itself from being recorded.
+ */
 @Service
 public class OperationalExceptionService {
     private static final Set<String> SEVERITIES = Set.of("LOW", "MEDIUM", "HIGH", "CRITICAL");
@@ -51,7 +54,8 @@ public class OperationalExceptionService {
     @Transactional
     public ExceptionResponse open(ExceptionRequest request) {
         UUID tenant = requireTenant();
-        if (request == null) throw bad("Exception details are required");
+        if (request == null)
+            throw bad("Exception details are required");
         String type = required(request.type(), "Exception type", 80).toUpperCase(Locale.ROOT);
         String severity = required(request.severity(), "Severity", 20).toUpperCase(Locale.ROOT);
         String description = required(request.description(), "Description", MAX_DESCRIPTION);
@@ -59,7 +63,8 @@ public class OperationalExceptionService {
             throw bad("Severity must be LOW, MEDIUM, HIGH, or CRITICAL");
         }
         String owner = normalize(request.owner());
-        if (owner != null && owner.length() > 160) throw bad("Owner must not exceed 160 characters");
+        if (owner != null && owner.length() > 160)
+            throw bad("Owner must not exceed 160 characters");
 
         Shipment shipment = null;
         if (request.shipmentId() != null) {
@@ -111,13 +116,13 @@ public class OperationalExceptionService {
         String normalized = normalize(status);
         List<OperationalException> rows;
         if (normalized == null) {
-            rows = repo.findAllByTenantIdOrderByCreatedAtDesc(tenant);
+            rows = repo.findAllByTenantIdOrderByCreatedAtDesc(tenant, PageRequest.of(0, 200));
         } else {
             normalized = normalized.toUpperCase(Locale.ROOT);
             if (!Set.of("OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED").contains(normalized)) {
                 throw bad("Invalid exception status");
             }
-            rows = repo.findAllByTenantIdAndStatusOrderByCreatedAtDesc(tenant, normalized);
+            rows = repo.findAllByTenantIdAndStatusOrderByCreatedAtDesc(tenant, normalized, PageRequest.of(0, 200));
         }
         return rows.stream().map(ExceptionResponse::from).toList();
     }
@@ -125,10 +130,11 @@ public class OperationalExceptionService {
     @Transactional
     public ExceptionResponse resolve(UUID id, ResolveExceptionRequest request) {
         UUID tenant = requireTenant();
-        if (request == null) throw bad("Resolution details are required");
+        if (request == null)
+            throw bad("Resolution details are required");
         String resolution = required(request.resolution(), "Resolution", 4000);
-        String action = normalize(request.actionTaken());
-        if (action != null && action.length() > 4000) throw bad("Action taken must not exceed 4000 characters");
+        // Resolution without documented corrective action is not auditable.
+        String action = required(request.actionTaken(), "Corrective action taken", 4000);
 
         OperationalException exception = repo.findByIdAndTenantId(id, tenant)
                 .orElseThrow(() -> notFound("Exception not found"));
@@ -142,14 +148,17 @@ public class OperationalExceptionService {
 
     private static UUID requireTenant() {
         UUID tenant = TenantContext.getTenantId();
-        if (tenant == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
+        if (tenant == null)
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
         return tenant;
     }
 
     private static String required(String value, String label, int max) {
-        if (value == null || value.isBlank()) throw bad(label + " is required");
+        if (value == null || value.isBlank())
+            throw bad(label + " is required");
         String result = value.trim();
-        if (result.length() > max) throw bad(label + " must not exceed " + max + " characters");
+        if (result.length() > max)
+            throw bad(label + " must not exceed " + max + " characters");
         return result;
     }
 

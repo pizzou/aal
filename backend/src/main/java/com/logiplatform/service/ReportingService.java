@@ -1011,9 +1011,16 @@ public class ReportingService {
                                 COALESCE(NULLIF(TRIM(client_name), ''), 'Unknown') AS customer,
                                 COALESCE(date_opened, created_at::date) AS shipment_date,
                                 COALESCE(amount_billed_to_client, 0) AS revenue,
-                                COALESCE(amount_paid_by_client, 0) AS collected,
-                                GREATEST(COALESCE(amount_billed_to_client, 0)
-                                         - COALESCE(amount_paid_by_client, 0), 0) AS outstanding,
+                                COALESCE((SELECT ci.amount_paid FROM commercial_invoices ci
+                                          WHERE ci.tenant_id=shipments.tenant_id AND ci.shipment_id=shipments.id
+                                            AND ci.lifecycle_status NOT IN ('DRAFT','VOID','CANCELLED')),
+                                         amount_paid_by_client, 0) AS collected,
+                                COALESCE((SELECT GREATEST(ci.invoice_amount + COALESCE(ci.debit_note_amount,0) - COALESCE(ci.credit_note_amount,0) - ci.amount_paid,0)
+                                          FROM commercial_invoices ci
+                                          WHERE ci.tenant_id=shipments.tenant_id AND ci.shipment_id=shipments.id
+                                            AND ci.lifecycle_status NOT IN ('DRAFT','VOID','CANCELLED')),
+                                         GREATEST(COALESCE(amount_billed_to_client, 0)
+                                                  - COALESCE(amount_paid_by_client, 0), 0)) AS outstanding,
                                 COALESCE(amount_billed_to_client, 0)
                                   - COALESCE(supplier_cost, amount_paid_to_supply, 0)
                                   - COALESCE(other_cost, 0)

@@ -39,7 +39,6 @@ public class AdvancedDashboardService {
                 java.util.Arrays.setAll(CACHE_LOCKS, ignored -> new Object());
         }
 
-
         /** Lightweight, trustworthy KPI response used before full analytics load. */
         public Overview overview(LocalDate asOf) {
                 LocalDate date = asOf == null ? LocalDate.now() : asOf;
@@ -84,81 +83,81 @@ public class AdvancedDashboardService {
 
                 Object lock = CACHE_LOCKS[Math.floorMod(key.hashCode(), CACHE_LOCKS.length)];
                 synchronized (lock) {
-                                final long currentTime = System.currentTimeMillis();
-                                cached = cache.get(key);
-                                if (cached != null && currentTime - cached.createdAtMs() < CACHE_TTL_MS) {
-                                        return cached.response();
-                                }
+                        final long currentTime = System.currentTimeMillis();
+                        cached = cache.get(key);
+                        if (cached != null && currentTime - cached.createdAtMs() < CACHE_TTL_MS) {
+                                return cached.response();
+                        }
 
-                                // An unknown reporting currency must not become a fake USD total.
-                                final String currency = reportingCurrency(tenantId);
+                        // An unknown reporting currency must not become a fake USD total.
+                        final String currency = reportingCurrency(tenantId);
 
-                                CompletableFuture<OperationsKpi> operationsFuture = supplyRequired(tenantId,
-                                                () -> operations(tenantId, date));
+                        CompletableFuture<OperationsKpi> operationsFuture = supplyRequired(tenantId,
+                                        () -> operations(tenantId, date));
 
-                                CompletableFuture<FinancialKpi> financialFuture = supplyRequired(tenantId,
-                                                () -> financial(tenantId, date, currency));
+                        CompletableFuture<FinancialKpi> financialFuture = supplyRequired(tenantId,
+                                        () -> financial(tenantId, date, currency));
 
-                                CompletableFuture<FleetKpi> fleetFuture = supply(tenantId, () -> fleet(tenantId),
-                                                emptyFleet());
+                        CompletableFuture<FleetKpi> fleetFuture = supply(tenantId, () -> fleet(tenantId),
+                                        emptyFleet());
 
-                                CompletableFuture<List<ModeMetric>> modeFuture = supply(tenantId,
-                                                () -> modeMix(tenantId, date), List.of());
+                        CompletableFuture<List<ModeMetric>> modeFuture = supply(tenantId,
+                                        () -> modeMix(tenantId, date), List.of());
 
-                                CompletableFuture<List<StatusMetric>> statusFuture = supply(tenantId,
-                                                () -> statusMix(tenantId, date), List.of());
+                        CompletableFuture<List<StatusMetric>> statusFuture = supply(tenantId,
+                                        () -> statusMix(tenantId, date), List.of());
 
-                                CompletableFuture<List<TrendPoint>> trendFuture = supply(tenantId,
-                                                () -> trend(tenantId, date, currency), List.of());
+                        CompletableFuture<List<TrendPoint>> trendFuture = supply(tenantId,
+                                        () -> trend(tenantId, date, currency), List.of());
 
-                                CompletableFuture<List<LaneMetric>> lanesFuture = supply(tenantId,
-                                                () -> topLanes(tenantId, date), List.of());
+                        CompletableFuture<List<LaneMetric>> lanesFuture = supply(tenantId,
+                                        () -> topLanes(tenantId, date), List.of());
 
-                                CompletableFuture<List<DashboardException>> exceptionsFuture = supply(tenantId,
-                                                () -> exceptions(tenantId, date), List.of());
+                        CompletableFuture<List<DashboardException>> exceptionsFuture = supply(tenantId,
+                                        () -> exceptions(tenantId, date), List.of());
 
-                                CompletableFuture<OperatingKpis> operatingFuture = supply(tenantId,
-                                                () -> operatingKpis(tenantId, date, currency), emptyOperatingKpis());
+                        CompletableFuture<OperatingKpis> operatingFuture = supply(tenantId,
+                                        () -> operatingKpis(tenantId, date, currency), emptyOperatingKpis());
 
-                                CompletableFuture<List<MonthlyFinancialPoint>> monthlyFuture = supply(tenantId,
-                                                () -> monthlyFinancial(tenantId, date, currency), List.of());
+                        CompletableFuture<List<MonthlyFinancialPoint>> monthlyFuture = supply(tenantId,
+                                        () -> monthlyFinancial(tenantId, date, currency), List.of());
 
-                                CompletableFuture<List<AgingMetric>> agingFuture = supply(tenantId,
-                                                () -> receivablesAging(tenantId, date, currency), List.of());
+                        CompletableFuture<List<AgingMetric>> agingFuture = supply(tenantId,
+                                        () -> receivablesAging(tenantId, date, currency), List.of());
 
-                                CompletableFuture<List<QuotationStatusMetric>> quotationFuture = supply(tenantId,
-                                                () -> quotationStatus(tenantId), List.of());
+                        CompletableFuture<List<QuotationStatusMetric>> quotationFuture = supply(tenantId,
+                                        () -> quotationStatus(tenantId), List.of());
 
-                                OperationsKpi operations = operationsFuture.join();
+                        OperationsKpi operations = operationsFuture.join();
 
-                                Response response = new Response(
-                                                date,
-                                                operations,
-                                                financialFuture.join(),
-                                                fleetFuture.join(),
-                                                modeFuture.join(),
-                                                statusFuture.join(),
-                                                trendFuture.join(),
-                                                lanesFuture.join(),
-                                                exceptionsFuture.join(),
-                                                safeActions(tenantId, date, operations),
-                                                operatingFuture.join(),
-                                                monthlyFuture.join(),
-                                                agingFuture.join(),
-                                                quotationFuture.join());
-                                cache.put(key, new CachedResponse(currentTime, response));
-                                if (cache.size() > 100) {
-                                        cache.entrySet().removeIf(entry -> currentTime
-                                                        - entry.getValue().createdAtMs() >= CACHE_TTL_MS);
-                                }
-                                long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS
-                                                .toMillis(System.nanoTime() - startedAt);
-                                if (elapsedMs >= 2_000L) {
-                                        log.warn("Control-tower dashboard snapshot took {} ms", elapsedMs);
-                                } else {
-                                        log.debug("Control-tower dashboard snapshot took {} ms", elapsedMs);
-                                }
-                                return response;
+                        Response response = new Response(
+                                        date,
+                                        operations,
+                                        financialFuture.join(),
+                                        fleetFuture.join(),
+                                        modeFuture.join(),
+                                        statusFuture.join(),
+                                        trendFuture.join(),
+                                        lanesFuture.join(),
+                                        exceptionsFuture.join(),
+                                        safeActions(tenantId, date, operations),
+                                        operatingFuture.join(),
+                                        monthlyFuture.join(),
+                                        agingFuture.join(),
+                                        quotationFuture.join());
+                        cache.put(key, new CachedResponse(currentTime, response));
+                        if (cache.size() > 100) {
+                                cache.entrySet().removeIf(entry -> currentTime
+                                                - entry.getValue().createdAtMs() >= CACHE_TTL_MS);
+                        }
+                        long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS
+                                        .toMillis(System.nanoTime() - startedAt);
+                        if (elapsedMs >= 2_000L) {
+                                log.warn("Control-tower dashboard snapshot took {} ms", elapsedMs);
+                        } else {
+                                log.debug("Control-tower dashboard snapshot took {} ms", elapsedMs);
+                        }
+                        return response;
                 }
         }
 
@@ -305,8 +304,15 @@ public class AdvancedDashboardService {
                                 """
                                                 SELECT
                                                     COALESCE(SUM(COALESCE(amount_billed_to_client, 0)),0) AS billed,
-                                                    COALESCE(SUM(COALESCE(amount_paid_by_client,0)),0) AS collected,
-                                                    COALESCE(SUM(GREATEST(COALESCE(amount_billed_to_client, 0) - COALESCE(amount_paid_by_client,0),0)),0) AS receivables,
+                                                    COALESCE(SUM(COALESCE((SELECT ci.amount_paid FROM commercial_invoices ci
+                                                            WHERE ci.tenant_id=shipments.tenant_id AND ci.shipment_id=shipments.id
+                                                              AND ci.lifecycle_status NOT IN ('DRAFT','VOID','CANCELLED')),
+                                                        amount_paid_by_client, 0)),0) AS collected,
+                                                    COALESCE(SUM(COALESCE((SELECT GREATEST(ci.invoice_amount + COALESCE(ci.debit_note_amount,0) - COALESCE(ci.credit_note_amount,0) - ci.amount_paid,0)
+                                                            FROM commercial_invoices ci
+                                                            WHERE ci.tenant_id=shipments.tenant_id AND ci.shipment_id=shipments.id
+                                                              AND ci.lifecycle_status NOT IN ('DRAFT','VOID','CANCELLED')),
+                                                        GREATEST(COALESCE(amount_billed_to_client,0)-COALESCE(amount_paid_by_client,0),0))),0) AS receivables,
                                                     COALESCE(SUM(COALESCE(supplier_cost,amount_paid_to_supply,0) + COALESCE(other_cost,0)),0) AS gross_cost,
                                                     COALESCE(SUM(COALESCE(supplier_cost,amount_paid_to_supply,0) + COALESCE(other_cost,0) + COALESCE(other_expenses,0)),0) AS operating_cost
                                                 FROM shipments

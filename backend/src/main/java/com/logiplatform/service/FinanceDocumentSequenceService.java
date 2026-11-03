@@ -24,20 +24,20 @@ public class FinanceDocumentSequenceService {
         ensureSequenceRow(tenant, "SHIPMENT", year);
         lockSequenceRow(tenant, "SHIPMENT", year);
         synchronizeSequenceWithExistingData(
-            tenant,
-            "SHIPMENT",
-            year,
-            "shipments",
-            "reference_code",
-            "AAL-SHP-"
-        );
+                tenant,
+                "SHIPMENT",
+                year,
+                "shipments",
+                "reference_code",
+                "AAL-SHP-");
         Long sequence = db.queryForObject("""
-            UPDATE finance_document_sequences
-               SET last_value=last_value+1,updated_at=now()
-             WHERE tenant_id=? AND document_type='SHIPMENT' AND fiscal_year=?
-            RETURNING last_value
-            """, Long.class, tenant, year);
-        if (sequence == null) throw new IllegalStateException("Unable to allocate shipment sequence");
+                UPDATE finance_document_sequences
+                   SET last_value=last_value+1,updated_at=now()
+                 WHERE tenant_id=? AND document_type='SHIPMENT' AND fiscal_year=?
+                RETURNING last_value
+                """, Long.class, tenant, year);
+        if (sequence == null)
+            throw new IllegalStateException("Unable to allocate shipment sequence");
         return "AAL-SHP-" + year + "-" + String.format("%06d", sequence);
     }
 
@@ -48,31 +48,30 @@ public class FinanceDocumentSequenceService {
         ensureSequenceRow(tenant, "AWB", year);
         lockSequenceRow(tenant, "AWB", year);
         synchronizeSequenceWithExistingData(
-            tenant,
-            "AWB",
-            year,
-            "shipments",
-            "reference_code",
-            "AAL-AWB-"
-        );
+                tenant,
+                "AWB",
+                year,
+                "shipments",
+                "reference_code",
+                "AAL-AWB-");
         // Structured AWBs are the canonical document register. Keep this
         // sequence ahead of documents imported or restored independently of
         // shipment reference codes as well.
         synchronizeSequenceWithExistingData(
-            tenant,
-            "AWB",
-            year,
-            "awb_records",
-            "awb_number",
-            "AAL-AWB-"
-        );
+                tenant,
+                "AWB",
+                year,
+                "awb_records",
+                "awb_number",
+                "AAL-AWB-");
         Long sequence = db.queryForObject("""
-            UPDATE finance_document_sequences
-               SET last_value=last_value+1,updated_at=now()
-             WHERE tenant_id=? AND document_type='AWB' AND fiscal_year=?
-            RETURNING last_value
-            """, Long.class, tenant, year);
-        if (sequence == null) throw new IllegalStateException("Unable to allocate AWB sequence");
+                UPDATE finance_document_sequences
+                   SET last_value=last_value+1,updated_at=now()
+                 WHERE tenant_id=? AND document_type='AWB' AND fiscal_year=?
+                RETURNING last_value
+                """, Long.class, tenant, year);
+        if (sequence == null)
+            throw new IllegalStateException("Unable to allocate AWB sequence");
         return "AAL-AWB-" + year + "-" + String.format("%06d", sequence);
     }
 
@@ -86,26 +85,28 @@ public class FinanceDocumentSequenceService {
                    AND invoice_prefix IS NOT NULL AND invoice_prefix <> ''
                  ORDER BY updated_at DESC LIMIT 1
                 """, rs -> rs.next() ? rs.getString(1) : "AAL-INV-", tenant);
-        if (prefix == null || prefix.isBlank()) prefix = "AAL-INV-";
+        if (prefix == null || prefix.isBlank())
+            prefix = "AAL-INV-";
         prefix = prefix.trim().toUpperCase(java.util.Locale.ROOT);
-        if (!prefix.endsWith("-")) prefix += "-";
+        if (!prefix.endsWith("-"))
+            prefix += "-";
 
         ensureSequenceRow(tenant, "INVOICE", year);
         lockSequenceRow(tenant, "INVOICE", year);
         synchronizeSequenceWithExistingData(
-            tenant, "INVOICE", year, "commercial_invoices", "invoice_no", prefix);
+                tenant, "INVOICE", year, "commercial_invoices", "invoice_no", prefix);
         synchronizeSequenceWithExistingData(
-            tenant, "INVOICE", year, "shipments", "invoice_no", prefix);
+                tenant, "INVOICE", year, "shipments", "invoice_no", prefix);
         Long sequence = db.queryForObject("""
-            UPDATE finance_document_sequences
-               SET last_value=last_value+1,updated_at=now()
-             WHERE tenant_id=? AND document_type='INVOICE' AND fiscal_year=?
-            RETURNING last_value
-            """, Long.class, tenant, year);
-        if (sequence == null) throw new IllegalStateException("Unable to allocate invoice sequence");
+                UPDATE finance_document_sequences
+                   SET last_value=last_value+1,updated_at=now()
+                 WHERE tenant_id=? AND document_type='INVOICE' AND fiscal_year=?
+                RETURNING last_value
+                """, Long.class, tenant, year);
+        if (sequence == null)
+            throw new IllegalStateException("Unable to allocate invoice sequence");
         return prefix + year + "-" + String.format("%06d", sequence);
     }
-
 
     @Transactional
     public String nextFinanceNoteNumber(String noteType) {
@@ -123,12 +124,13 @@ public class FinanceDocumentSequenceService {
         synchronizeSequenceWithExistingData(tenant, documentType, year,
                 "finance_notes", "note_no", prefix);
         Long sequence = db.queryForObject("""
-            UPDATE finance_document_sequences
-               SET last_value=last_value+1,updated_at=now()
-             WHERE tenant_id=? AND document_type=? AND fiscal_year=?
-             RETURNING last_value
-            """, Long.class, tenant, documentType, year);
-        if (sequence == null) throw new IllegalStateException("Unable to allocate finance note number");
+                UPDATE finance_document_sequences
+                   SET last_value=last_value+1,updated_at=now()
+                 WHERE tenant_id=? AND document_type=? AND fiscal_year=?
+                 RETURNING last_value
+                """, Long.class, tenant, documentType, year);
+        if (sequence == null)
+            throw new IllegalStateException("Unable to allocate finance note number");
         return prefix + year + "-" + String.format("%06d", sequence);
     }
 
@@ -143,11 +145,11 @@ public class FinanceDocumentSequenceService {
                 "commercial_payments", "receipt_no", "AAL-RCT-");
 
         Long sequence = db.queryForObject("""
-            UPDATE finance_document_sequences
-               SET last_value=last_value+1,updated_at=now()
-             WHERE tenant_id=? AND document_type='RECEIPT' AND fiscal_year=?
-             RETURNING last_value
-            """, Long.class, tenant, year);
+                UPDATE finance_document_sequences
+                   SET last_value=last_value+1,updated_at=now()
+                 WHERE tenant_id=? AND document_type='RECEIPT' AND fiscal_year=?
+                 RETURNING last_value
+                """, Long.class, tenant, year);
 
         if (sequence == null) {
             throw new IllegalStateException("Unable to allocate receipt sequence");
@@ -155,13 +157,62 @@ public class FinanceDocumentSequenceService {
         return "AAL-RCT-" + year + "-" + String.format("%06d", sequence);
     }
 
+    /**
+     * Tenant-scoped, concurrency-safe human-readable references for commercial
+     * records.
+     * The database UUID primary key is generated independently by Hibernate.
+     * Never accept an ID supplied by a browser, mobile device or public API caller.
+     */
+    @Transactional
+    public String nextCustomerNumber() {
+        return nextCommercialNumber("CUSTOMER", "AAL-CUS-", "client_records", "client_id");
+    }
+
+    @Transactional
+    public String nextQuoteNumber() {
+        return nextCommercialNumber("QUOTE", "AAL-QT-", "commercial_quotes", "quote_id");
+    }
+
+    @Transactional
+    public String nextTaskNumber() {
+        return nextCommercialNumber("TASK", "AAL-TSK-", "task_records", "task_id");
+    }
+
+    @Transactional
+    public String nextExpenseNumber() {
+        return nextCommercialNumber("EXPENSE", "AAL-EXP-", "expense_records", "expense_id");
+    }
+
+    @Transactional
+    public String nextPartnerNumber() {
+        return nextCommercialNumber("PARTNER", "AAL-PTN-", "partner_records", "partner_id");
+    }
+
+    private String nextCommercialNumber(String documentType, String prefix,
+            String table, String column) {
+        UUID tenant = requireTenant();
+        int year = LocalDate.now().getYear();
+        ensureSequenceRow(tenant, documentType, year);
+        lockSequenceRow(tenant, documentType, year);
+        // Historical/imported references must never be reused, even after a restore.
+        synchronizeSequenceWithExistingData(tenant, documentType, year, table, column, prefix);
+        Long sequence = db.queryForObject("""
+                UPDATE finance_document_sequences
+                   SET last_value=last_value+1,updated_at=now()
+                 WHERE tenant_id=? AND document_type=? AND fiscal_year=?
+                RETURNING last_value
+                """, Long.class, tenant, documentType, year);
+        if (sequence == null)
+            throw new IllegalStateException("Unable to allocate " + documentType + " number");
+        return prefix + year + "-" + String.format("%06d", sequence);
+    }
 
     private void ensureSequenceRow(UUID tenant, String documentType, int year) {
         db.update("""
-            INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
-            VALUES(?,?,?,0)
-            ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
-            """, tenant, documentType, year);
+                INSERT INTO finance_document_sequences(tenant_id,document_type,fiscal_year,last_value)
+                VALUES(?,?,?,0)
+                ON CONFLICT(tenant_id,document_type,fiscal_year) DO NOTHING
+                """, tenant, documentType, year);
     }
 
     /**
@@ -173,11 +224,11 @@ public class FinanceDocumentSequenceService {
      */
     private void lockSequenceRow(UUID tenant, String documentType, int year) {
         db.queryForObject("""
-            SELECT id
-              FROM finance_document_sequences
-             WHERE tenant_id=? AND document_type=? AND fiscal_year=?
-             FOR UPDATE
-            """, UUID.class, tenant, documentType, year);
+                SELECT id
+                  FROM finance_document_sequences
+                 WHERE tenant_id=? AND document_type=? AND fiscal_year=?
+                 FOR UPDATE
+                """, UUID.class, tenant, documentType, year);
     }
 
     /**
@@ -195,20 +246,19 @@ public class FinanceDocumentSequenceService {
             int year,
             String table,
             String column,
-            String prefix
-    ) {
+            String prefix) {
         String sql = """
-            SELECT COALESCE(MAX(
-                CASE
-                    WHEN %s ~ ? THEN
-                        substring(%s FROM '([0-9]+)$')::BIGINT
-                    ELSE 0
-                END
-            ), 0)
-            FROM %s
-            WHERE tenant_id = ?
-              AND %s ~ ?
-            """.formatted(column, column, table, column);
+                SELECT COALESCE(MAX(
+                    CASE
+                        WHEN %s ~ ? THEN
+                            substring(%s FROM '([0-9]+)$')::BIGINT
+                        ELSE 0
+                    END
+                ), 0)
+                FROM %s
+                WHERE tenant_id = ?
+                  AND %s ~ ?
+                """.formatted(column, column, table, column);
 
         String exactPattern = "^" + prefix + year + "-[0-9]+$";
         Long maxExisting = db.queryForObject(
@@ -216,18 +266,17 @@ public class FinanceDocumentSequenceService {
                 Long.class,
                 exactPattern,
                 tenant,
-                exactPattern
-        );
+                exactPattern);
 
         if (maxExisting == null || maxExisting <= 0) {
             return;
         }
 
         db.update("""
-            UPDATE finance_document_sequences
-               SET last_value=GREATEST(last_value, ?),updated_at=now()
-             WHERE tenant_id=? AND document_type=? AND fiscal_year=?
-            """, maxExisting, tenant, documentType, year);
+                UPDATE finance_document_sequences
+                   SET last_value=GREATEST(last_value, ?),updated_at=now()
+                 WHERE tenant_id=? AND document_type=? AND fiscal_year=?
+                """, maxExisting, tenant, documentType, year);
     }
 
     private UUID requireTenant() {

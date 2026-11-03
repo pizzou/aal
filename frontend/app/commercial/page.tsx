@@ -16,9 +16,6 @@ import {
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
-function id(prefix: string) {
-  return `${prefix}-${new Date().getFullYear()}-${Date.now().toString().slice(-7)}`;
-}
 function msg(e: unknown) {
   return e instanceof ApiError || e instanceof Error
     ? e.message
@@ -66,7 +63,7 @@ function CommercialQuotesWorkspace() {
   const [shareEmail, setShareEmail] = useState("");
   const [sendImmediately, setSendImmediately] = useState(true);
   const [quote, setQuote] = useState({
-    quoteId: id("AAL-QT"),
+    quoteId: "",
     quoteDate: today(),
     client: "",
     route: "",
@@ -205,7 +202,7 @@ function CommercialQuotesWorkspace() {
       setSelectedClientId("");
       setQuote({
         ...quote,
-        quoteId: id("AAL-QT"),
+        quoteId: "",
         client: "",
         route: "",
         commodity: "",
@@ -302,7 +299,7 @@ function CommercialQuotesWorkspace() {
     setSuccess("");
     try {
       await commercialApi.createTask({
-        taskId: id("AAL-TSK"),
+        taskId: undefined,
         createdDate: today(),
         department: String(f.get("department") || "Operations"),
         task: String(f.get("task") || ""),
@@ -330,7 +327,7 @@ function CommercialQuotesWorkspace() {
     setSuccess("");
     try {
       await commercialApi.createExpense({
-        expenseId: id("AAL-EXP"),
+        expenseId: undefined,
         expenseDate: String(f.get("expenseDate") || today()),
         type: String(f.get("type") || "Operating"),
         category: String(f.get("category") || "General"),
@@ -439,7 +436,7 @@ function CommercialQuotesWorkspace() {
             <form className="form-grid" onSubmit={createQuote}>
               {(
                 [
-                  ["quoteId", "Quote ID"],
+                  ["quoteId", "Quote number (system assigned)"],
                   ["quoteDate", "Quote date"],
                   ["client", "Client"],
                   ["customerEmail", "Customer email"],
@@ -507,14 +504,17 @@ function CommercialQuotesWorkspace() {
                       }
                       step="any"
                       value={quote[k]}
-                      onChange={(e) =>
-                        setQuote({ ...quote, [k]: e.target.value })
+                      readOnly={k === "quoteId"}
+                      placeholder={
+                        k === "quoteId"
+                          ? "Assigned automatically when saved"
+                          : undefined
                       }
-                      required={[
-                        "quoteId",
-                        "quoteDate",
-                        "quotedAmount",
-                      ].includes(k)}
+                      onChange={(e) => {
+                        if (k !== "quoteId")
+                          setQuote({ ...quote, [k]: e.target.value });
+                      }}
+                      required={["quoteDate", "quotedAmount"].includes(k)}
                     />
                   )}
                 </div>
@@ -602,9 +602,9 @@ function CommercialQuotesWorkspace() {
                               : "Create shipment →"}
                           </button>
                         ) : q.status?.toUpperCase() === "CONVERTED" ? (
-                          <span className="status status-success">
-                            Shipment created · Open shipment register
-                          </span>
+                          <a className="btn" href="/shipments">
+                            Shipment created · Open shipment register →
+                          </a>
                         ) : ["LOST", "EXPIRED"].includes(
                             q.status?.toUpperCase() || "",
                           ) ? (

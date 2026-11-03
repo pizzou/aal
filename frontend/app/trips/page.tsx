@@ -18,6 +18,8 @@ import {
   tripsApi,
   Vehicle,
   vehiclesApi,
+  shipmentsApi,
+  type Shipment,
 } from "@/lib/api-client";
 
 export default function DispatchFleetPage() {
@@ -26,6 +28,7 @@ export default function DispatchFleetPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
+  const [shipments, setShipments] = useState<Shipment[]>([]);
   const [positions, setPositions] = useState<Record<string, GpsPosition>>({});
   const [loadPlan, setLoadPlan] = useState<LoadPlan | null>(null);
   const [error, setError] = useState("");
@@ -59,14 +62,17 @@ export default function DispatchFleetPage() {
   const [skipReason, setSkipReason] = useState("");
   async function refresh() {
     try {
-      const [v, d, t] = await Promise.all([
+      const [v, d, t, shipmentPage] = await Promise.all([
         vehiclesApi.list(),
         driversApi.list(),
         tripsApi.list(),
+        // Optional related-shipment picker must never block fleet execution.
+        shipmentsApi.list({ page: 0, size: 100 }).catch(() => null),
       ]);
       setVehicles(v);
       setDrivers(d);
       setTrips(t.content);
+      if (shipmentPage) setShipments(shipmentPage.content);
       setError("");
     } catch (e) {
       setError(
@@ -574,17 +580,24 @@ export default function DispatchFleetPage() {
                       />
                     </div>
                     <div className="field">
-                      <label>Assigned shipment ID (optional)</label>
-                      <input
+                      <label>Related shipment (optional)</label>
+                      <select
                         value={stopForm.shipmentId}
-                        placeholder="Shipment UUID"
                         onChange={(e) =>
                           setStopForm({
                             ...stopForm,
                             shipmentId: e.target.value,
                           })
                         }
-                      />
+                      >
+                        <option value="">No shipment assigned</option>
+                        {shipments.map((item) => (
+                          <option value={item.id} key={item.id}>
+                            {item.referenceCode} ·{" "}
+                            {item.clientName || "Customer"}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <div className="field">
                       <label>Planned stop time (optional)</label>

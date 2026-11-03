@@ -9,7 +9,7 @@ public final class CommercialDtos {
         private CommercialDtos() {
         }
 
-        public record QuoteRequest(@NotBlank @Size(max = 80) String quoteId, @NotNull LocalDate quoteDate,
+        public record QuoteRequest(@Size(max = 80) String quoteId, @NotNull LocalDate quoteDate,
                         @NotBlank @Size(max = 200) String client, @NotBlank @Size(max = 300) String route,
                         @NotBlank @Size(max = 80) String serviceType, @Size(max = 300) String commodity,
                         @PositiveOrZero BigDecimal chargeableWeightKg, @PositiveOrZero BigDecimal supplierCost,
@@ -110,7 +110,8 @@ public final class CommercialDtos {
                 }
         }
 
-        public record PartnerRequest(@NotBlank String partnerId, String country, String company, String contactPerson,
+        public record PartnerRequest(@Size(max = 80) String partnerId, String country, String company,
+                        String contactPerson,
                         String phone, String email, String services, String cityPortAirport, String paymentTerms,
                         @Min(1) @Max(5) Integer rating, String status, LocalDate lastVerified, String notes) {
         }
@@ -128,7 +129,7 @@ public final class CommercialDtos {
                 }
         }
 
-        public record TaskRequest(@NotBlank String taskId, @NotNull LocalDate createdDate, String department,
+        public record TaskRequest(@Size(max = 80) String taskId, @NotNull LocalDate createdDate, String department,
                         String relatedReference, @NotBlank String task, String priority, String owner,
                         LocalDate dueDate,
                         String status, LocalDate completionDate, String notes) {
@@ -146,7 +147,7 @@ public final class CommercialDtos {
                 }
         }
 
-        public record ExpenseRequest(@NotBlank String expenseId, @NotNull LocalDate expenseDate, String type,
+        public record ExpenseRequest(@Size(max = 80) String expenseId, @NotNull LocalDate expenseDate, String type,
                         String category, UUID shipmentId, String client, String vendorPayee, String description,
                         @NotBlank String currency, @Positive BigDecimal originalAmount,
                         @Positive BigDecimal exchangeRateToUsd,

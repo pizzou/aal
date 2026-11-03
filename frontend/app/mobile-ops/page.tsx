@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { advancedLogisticsApi } from "@/lib/api-client";
+import {
+  advancedLogisticsApi,
+  shipmentsApi,
+  type Shipment,
+} from "@/lib/api-client";
 import {
   pendingMobileOperations,
   queueMobileOperation,
@@ -34,6 +38,8 @@ async function compressImage(file: File) {
 export default function MobileOperationsPage() {
   const { accessToken, isLoading } = useAuth();
   const [shipmentId, setShipmentId] = useState("");
+  const [shipments, setShipments] = useState<Shipment[]>([]);
+  const [shipmentLoadError, setShipmentLoadError] = useState("");
   const [deviceId, setDeviceId] = useState("");
   const [recipient, setRecipient] = useState("");
   const [photoData, setPhotoData] = useState("");
@@ -92,6 +98,28 @@ export default function MobileOperationsPage() {
   useEffect(() => {
     if (accessToken) void flush();
   }, [accessToken, flush]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      setShipments([]);
+      return;
+    }
+    let active = true;
+    shipmentsApi
+      .list({ page: 0, size: 100 })
+      .then((data) => {
+        if (active) setShipments(data.content);
+      })
+      .catch((error) => {
+        if (active)
+          setShipmentLoadError(
+            error instanceof Error ? error.message : "Shipments unavailable",
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [accessToken]);
 
   if (isLoading || !accessToken) return null;
 
@@ -247,7 +275,7 @@ export default function MobileOperationsPage() {
     setStatus("");
     try {
       if (!shipmentId.trim() || !recipient.trim())
-        throw new Error("Shipment ID and recipient are required.");
+        throw new Error("Choose a shipment and enter the recipient name.");
       const signatureUri = canvasRef.current?.toDataURL("image/png") || "";
       const operation: MobileOperation = {
         deviceId,
@@ -378,11 +406,25 @@ export default function MobileOperationsPage() {
         <div className="eyebrow">PROOF OF DELIVERY</div>
         <h2 className="card-title">Capture delivery evidence</h2>
         <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
-          <input
-            value={shipmentId}
-            onChange={(e) => setShipmentId(e.target.value)}
-            placeholder="Shipment UUID"
-          />
+          <label className="field">
+            <span>Choose shipment by reference</span>
+            <select
+              value={shipmentId}
+              onChange={(e) => setShipmentId(e.target.value)}
+            >
+              <option value="">Select shipment…</option>
+              {shipments.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.referenceCode} · {row.clientName || "Customer"}
+                </option>
+              ))}
+            </select>
+          </label>
+          {shipmentLoadError && (
+            <p role="alert" className="alert alert-error">
+              {shipmentLoadError}
+            </p>
+          )}
           <input
             value={recipient}
             onChange={(e) => setRecipient(e.target.value)}

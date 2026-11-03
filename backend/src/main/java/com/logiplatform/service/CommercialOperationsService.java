@@ -75,7 +75,7 @@ public class CommercialOperationsService {
                 UUID tenantId = TenantContext.getTenantId();
                 if (r == null)
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quotation details are required");
-                String quoteId = requiredText(r.quoteId(), "Quote ID", 80);
+                String quoteId = documentSequences.nextQuoteNumber();
                 String clientName = requiredText(r.client(), "Customer", 200);
                 String route = requiredText(r.route(), "Route", 300);
                 String serviceType = requiredText(r.serviceType(), "Service type", 80);
@@ -396,20 +396,9 @@ public class CommercialOperationsService {
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer details are required");
                 String company = requiredText(r.clientCompany(), "Company legal/business name", 200);
                 String email = normalizeEmail(r.email());
-                String clientId = normalizeText(r.clientId());
-                if (clientId == null || clientId.isBlank()) {
-                        // Allocate the customer number on the server; never trust a browser-generated
-                        // ID.
-                        do {
-                                clientId = "AAL-CUS-" + java.time.Year.now().getValue() + "-"
-                                                + UUID.randomUUID().toString().replace("-", "").substring(0, 8)
-                                                                .toUpperCase(Locale.ROOT);
-                        } while (clients.findByTenantIdAndClientId(tenantId, clientId).isPresent());
-                } else {
-                        clientId = requiredText(clientId, "Client ID", 80);
-                        if (clients.findByTenantIdAndClientId(tenantId, clientId).isPresent())
-                                throw conflict("Client ID already exists");
-                }
+                // The browser may display the number only after persistence. All
+                // customer references come from the same tenant/year sequence.
+                String clientId = documentSequences.nextCustomerNumber();
                 if (clients.findFirstByTenantIdAndClientCompanyIgnoreCase(tenantId, company).isPresent())
                         throw conflict("Client company already exists");
                 if (email != null && clients.findFirstByTenantIdAndEmailIgnoreCase(tenantId, email).isPresent())
@@ -463,7 +452,7 @@ public class CommercialOperationsService {
                                 partners.save(
                                                 new PartnerRecord(
                                                                 tenantId,
-                                                                r.partnerId(),
+                                                                documentSequences.nextPartnerNumber(),
                                                                 r.country(),
                                                                 r.company(),
                                                                 r.contactPerson(),
@@ -499,7 +488,7 @@ public class CommercialOperationsService {
                                 tasks.save(
                                                 new TaskRecord(
                                                                 tenantId,
-                                                                r.taskId(),
+                                                                documentSequences.nextTaskNumber(),
                                                                 r.createdDate(),
                                                                 r.department(),
                                                                 r.relatedReference(),
@@ -546,12 +535,11 @@ public class CommercialOperationsService {
         public ExpenseResponse createExpense(ExpenseRequest r) {
                 UUID tenantId = TenantContext.getTenantId();
 
-                if (expenses.findByTenantIdAndExpenseId(tenantId, r.expenseId()).isPresent()) {
-                        throw conflict("Expense exists");
-                }
-
+                // Client-supplied expense references must never be used to create
+                // accounting records (collisions and guessed IDs are unsafe).
+                String expenseId = documentSequences.nextExpenseNumber();
                 ExpenseRecord expense = expenses.saveAndFlush(new ExpenseRecord(
-                                tenantId, r.expenseId(), r.expenseDate(), r.type(), r.category(),
+                                tenantId, expenseId, r.expenseDate(), r.type(), r.category(),
                                 r.shipmentId(), r.client(), r.vendorPayee(), r.description(),
                                 normalizeCurrency(r.currency()), r.originalAmount(), r.exchangeRateToUsd(),
                                 r.paymentMethod(), r.status(), r.approvedBy()));

@@ -7,6 +7,8 @@ import {
   ApiError,
   OperationalException,
   operationsApi,
+  shipmentsApi,
+  type Shipment,
 } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 
@@ -32,6 +34,7 @@ export default function ExceptionsPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [creating, setCreating] = useState(false);
+  const [shipments, setShipments] = useState<Shipment[]>([]);
   const [newException, setNewException] = useState({
     type: "DELAY",
     severity: "MEDIUM",
@@ -61,6 +64,22 @@ export default function ExceptionsPage() {
   useEffect(() => {
     if (!isLoading && !accessToken) router.replace("/login");
   }, [isLoading, accessToken, router]);
+
+  useEffect(() => {
+    if (!accessToken || !allowed) return;
+    let active = true;
+    shipmentsApi
+      .list({ page: 0, size: 100 })
+      .then((result) => {
+        if (active) setShipments(result.content);
+      })
+      .catch(() => {
+        if (active) setShipments([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [accessToken, allowed]);
 
   useEffect(() => {
     if (!accessToken || !allowed) return;
@@ -242,14 +261,20 @@ export default function ExceptionsPage() {
               />
             </label>
             <label className="field">
-              <span>Shipment UUID (optional)</span>
-              <input
+              <span>Related shipment (optional)</span>
+              <select
                 value={newException.shipmentId}
                 onChange={(e) =>
                   setNewException((v) => ({ ...v, shipmentId: e.target.value }))
                 }
-                placeholder="Select from shipment register"
-              />
+              >
+                <option value="">Company-wide incident (no shipment)</option>
+                {shipments.map((item) => (
+                  <option value={item.id} key={item.id}>
+                    {item.referenceCode} · {item.clientName || "Customer"}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="field">
               <span>What happened?</span>

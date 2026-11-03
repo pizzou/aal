@@ -424,9 +424,13 @@ public class BillingService {
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
                 }
 
-                String invoiceNo = requestedInvoiceNo == null || requestedInvoiceNo.isBlank()
-                                ? documentSequences.nextInvoiceNumber()
-                                : requestedInvoiceNo.trim();
+                // Official invoice numbers always come from the tenant/year sequence;
+                // external invoice references cannot override or collide with them.
+                if (requestedInvoiceNo != null && !requestedInvoiceNo.isBlank()) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Invoice number is assigned automatically. Do not submit an invoice number.");
+                }
+                String invoiceNo = documentSequences.nextInvoiceNumber();
                 if (invoiceNo.length() > 80) {
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                                         "Invoice number cannot exceed 80 characters");

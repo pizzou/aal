@@ -89,6 +89,7 @@ export default function CustomerWorkspace() {
     try {
       const created = await commercialApi.createClient({
         ...form,
+        clientId: undefined, // AAL allocates the official number after saving.
         nextFollowUp: form.nextFollowUp || null,
         clientStatus: "ACTIVE",
       });

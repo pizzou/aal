@@ -89,9 +89,9 @@ public class ShipmentService {
             creationIdempotency.reserve(normalizedIdempotencyKey, requestHash);
         }
 
-        String reference = request.referenceCode() == null || request.referenceCode().isBlank()
-                ? nextShipmentReference()
-                : request.referenceCode().trim();
+        // Shipment business references are always generated on the server. A caller
+        // can attach its own external/carrier reference separately, never as our ID.
+        String reference = nextShipmentReference();
 
         if (shipmentRepository.existsByTenantIdAndReferenceCode(tenantId, reference)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -225,6 +225,14 @@ public class ShipmentService {
         }
 
         Shipment shipment = getOwnedForUpdate(shipmentId);
+        // Preserve legacy numbers but never allow users to allocate/change an
+        // official invoice identifier through shipment operational updates.
+        if (request.invoiceNo() != null && !request.invoiceNo().isBlank()
+                && !request.invoiceNo().trim().equalsIgnoreCase(
+                        shipment.getInvoiceNo() == null ? "" : shipment.getInvoiceNo())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Invoice numbers are assigned automatically by Billing after confirmed delivery/POD.");
+        }
         var canonicalInvoice = commercialInvoices.findByTenantIdAndShipmentId(tenantId, shipmentId).orElse(null);
         if (canonicalInvoice != null) {
             boolean commercialValuesChanged = moneyChanged(request.supplierCost(), shipment.getSupplierCost())
@@ -306,8 +314,7 @@ public class ShipmentService {
                 present(request.otherExpenses(), shipment.getOtherExpenses()),
                 priorPaymentStatus == null ? "Outstanding" : priorPaymentStatus,
                 present(request.ownerName(), shipment.getOwnerName()),
-                canonicalInvoice != null ? canonicalInvoice.getInvoiceNo()
-                        : present(request.invoiceNo(), shipment.getInvoiceNo()),
+                canonicalInvoice != null ? canonicalInvoice.getInvoiceNo() : shipment.getInvoiceNo(),
                 present(request.etd(), shipment.getEtd()),
                 present(request.eta(), shipment.getEta()),
                 present(request.nextAction(), shipment.getNextAction()),

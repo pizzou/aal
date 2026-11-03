@@ -28,7 +28,7 @@ test.describe("AAL authenticated smoke", () => {
     await page.goto("/login");
     await page.getByLabel(/email/i).fill(email!);
     await page.getByLabel(/password/i).fill(password!);
-    await page.getByRole("button", { name: /sign in|login/i }).click();
+    await page.getByRole("button", { name: /continue|sign in|login/i }).click();
 
     // If OTP is enabled, the application must present the OTP challenge rather than silently bypassing it.
     if (await page.getByLabel(/otp|verification code/i).count()) {

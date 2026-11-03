@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authApi, ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
@@ -8,11 +8,7 @@ import Icon from "@/components/Icon";
 
 const RESEND_COOLDOWN_SECONDS = 30;
 
-export default function LoginClient({
-  nextPath,
-}: {
-  nextPath?: string;
-}) {
+export default function LoginClient({ nextPath }: { nextPath?: string }) {
   const router = useRouter();
   const { login } = useAuth();
 
@@ -23,7 +19,9 @@ export default function LoginClient({
   const [step, setStep] = useState<"credentials" | "otp">("credentials");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
   const [resendIn, setResendIn] = useState(0);
+  const deliveryAttempt = useRef(0);
 
   useEffect(() => {
     if (resendIn <= 0) return;
@@ -32,6 +30,52 @@ export default function LoginClient({
     }, 1000);
     return () => window.clearInterval(timer);
   }, [resendIn]);
+
+  /**
+   * OTP delivery is a second HTTP request, started only AFTER login returns
+   * its signed challenge and the form has switched to the OTP screen.
+   * A timeout here must never send the user back to the password screen:
+   * Brevo may already have accepted the email even if its response was lost.
+   */
+  async function deliverCode(token: string) {
+    const attempt = ++deliveryAttempt.current;
+    setSendingCode(true);
+    setError("");
+    // Apply the cooldown even if the transport times out; blindly retrying
+    // might invalidate the code that was already delivered.
+    setResendIn(RESEND_COOLDOWN_SECONDS);
+
+    try {
+      await authApi.sendLoginOtp(token);
+    } catch (err) {
+      if (attempt !== deliveryAttempt.current) return;
+      if (
+        err instanceof ApiError &&
+        (err.status === 408 || err.status === 504)
+      ) {
+        setError(
+          "Email delivery took longer than expected. If you received a code, enter it below. Otherwise, wait for the resend option. You do not need to sign in again.",
+        );
+      } else if (err instanceof ApiError && err.status === 429) {
+        setError(
+          "A verification code was recently requested. Check your email for the latest code or use Resend when it becomes available.",
+        );
+      } else {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "The verification email could not be sent. Try Resend.",
+        );
+        // A definite provider rejection is not an uncertain timeout; permit
+        // a fresh delivery attempt (server-side rate limiting remains active).
+        setResendIn(0);
+      }
+    } finally {
+      if (attempt === deliveryAttempt.current) setSendingCode(false);
+    }
+  }
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -42,19 +86,20 @@ export default function LoginClient({
 
     try {
       if (step === "credentials") {
-        /*
-         * The backend issues and sends the first OTP atomically during login.
-         * Do not call /send-login-otp here: doing so would generate a second
-         * code immediately after the first one and could leave the user with
-         * two different verification emails.
-         */
+        // Password validation returns an OTP challenge immediately; email
+        // delivery follows only once the frontend has entered the OTP step.
         const r = await authApi.login(email, password);
 
-        if (r.otpRequired && r.otpChallengeToken) {
+        if (r.otpRequired) {
+          if (!r.otpChallengeToken) {
+            throw new Error(
+              "Verification could not start. Try signing in again.",
+            );
+          }
           setChallenge(r.otpChallengeToken);
           setOtp("");
           setStep("otp");
-          setResendIn(RESEND_COOLDOWN_SECONDS);
+          void deliverCode(r.otpChallengeToken);
           return;
         }
 
@@ -85,27 +130,9 @@ export default function LoginClient({
     }
   }
 
-  async function resendOtp() {
-    if (!challenge || busy || resendIn > 0) return;
-
-    setBusy(true);
-    setError("");
-
-    try {
-      await authApi.sendLoginOtp(challenge);
-      setOtp("");
-      setResendIn(RESEND_COOLDOWN_SECONDS);
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : "Could not resend the verification code",
-      );
-    } finally {
-      setBusy(false);
-    }
+  function resendOtp() {
+    if (!challenge || busy || sendingCode || resendIn > 0) return;
+    void deliverCode(challenge);
   }
 
   async function finish(r: {
@@ -137,6 +164,9 @@ export default function LoginClient({
   }
 
   function backToCredentials() {
+    // Ignore the completion of any still-running email request from this step.
+    deliveryAttempt.current += 1;
+    setSendingCode(false);
     setStep("credentials");
     setChallenge(null);
     setOtp("");
@@ -204,7 +234,9 @@ export default function LoginClient({
           <h2>{step === "otp" ? "Verify your sign-in" : "Welcome back"}</h2>
           <p className="page-subtitle">
             {step === "otp"
-              ? `A 6-digit verification code was sent to ${email}. It expires in 5 minutes.`
+              ? sendingCode
+                ? `Sending a 6-digit verification code to ${email}…`
+                : `Enter the 6-digit verification code emailed to ${email}. Codes expire after 5 minutes.`
               : "Sign in to the Aviation Africa Logistics operations control tower."}
           </p>
 
@@ -257,7 +289,16 @@ export default function LoginClient({
               </div>
             )}
 
-            {error && <div className="alert alert-error">{error}</div>}
+            {step === "otp" && sendingCode && (
+              <p className="page-subtitle" role="status" aria-live="polite">
+                Requesting your verification email… You can stay on this screen.
+              </p>
+            )}
+            {error && (
+              <div className="alert alert-error" role="alert">
+                {error}
+              </div>
+            )}
 
             <button
               className="btn btn-primary btn-large btn-block"
@@ -278,12 +319,14 @@ export default function LoginClient({
                 <button
                   type="button"
                   className="btn btn-block"
-                  disabled={busy || resendIn > 0 || !challenge}
-                  onClick={() => void resendOtp()}
+                  disabled={busy || sendingCode || resendIn > 0 || !challenge}
+                  onClick={resendOtp}
                 >
-                  {resendIn > 0
-                    ? `Resend code in ${resendIn}s`
-                    : "Resend verification code"}
+                  {sendingCode
+                    ? "Sending verification code…"
+                    : resendIn > 0
+                      ? `Resend code in ${resendIn}s`
+                      : "Resend verification code"}
                 </button>
                 <button
                   type="button"

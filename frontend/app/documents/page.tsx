@@ -9,6 +9,7 @@ import {
   Shipment,
   shipmentsApi,
   operationsApi,
+  downloadApiFile,
 } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 
@@ -48,6 +49,20 @@ export default function DocumentsPage() {
       setError(
         e instanceof ApiError ? e.message : "Unable to load document room",
       );
+    }
+  }
+  async function downloadEvidence(uri: unknown) {
+    const path = typeof uri === "string" ? uri : "";
+    if (!/^\/api\/operations\/pod-evidence\/[0-9a-f-]{36}$/i.test(path)) {
+      setError(
+        "Legacy evidence is not stored in the secure AAL archive; ask Operations to review it.",
+      );
+      return;
+    }
+    try {
+      await downloadApiFile(path, "AAL-POD-evidence");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "POD download failed");
     }
   }
   if (isLoading || !accessToken) return null;
@@ -173,6 +188,30 @@ export default function DocumentsPage() {
                         : "Not attached"}
                     </strong>
                   </div>
+                  {typeof pod.signatureUri === "string" &&
+                    pod.signatureUri.startsWith(
+                      "/api/operations/pod-evidence/",
+                    ) && (
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={() => downloadEvidence(pod.signatureUri)}
+                      >
+                        Download recipient signature
+                      </button>
+                    )}
+                  {typeof pod.photoUri === "string" &&
+                    pod.photoUri.startsWith(
+                      "/api/operations/pod-evidence/",
+                    ) && (
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={() => downloadEvidence(pod.photoUri)}
+                      >
+                        Download delivery photo
+                      </button>
+                    )}
                 </div>
               ) : (
                 <div className="empty">

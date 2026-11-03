@@ -451,6 +451,13 @@ public class SecurityConfig {
                                                 /*
                                                  * OPERATIONS
                                                  */
+                                                // Finance may view verified POD evidence when preparing invoices,
+                                                // but only operations personnel may upload it.
+                                                .requestMatchers(new AntPathRequestMatcher(
+                                                                "/api/operations/pod-evidence/**",
+                                                                HttpMethod.GET.name()))
+                                                .hasAnyRole("ADMIN", "MANAGER", "OPERATIONS", "DISPATCH", "WAREHOUSE",
+                                                                "FINANCE")
                                                 .requestMatchers(
                                                                 new AntPathRequestMatcher("/api/operations/**"))
                                                 .hasAnyRole(

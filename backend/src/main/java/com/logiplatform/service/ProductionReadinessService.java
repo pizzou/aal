@@ -11,6 +11,9 @@ import org.springframework.stereotype.Service;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -39,6 +42,13 @@ public class ProductionReadinessService {
         private final String brevoApiKey;
         private final String brevoUrl;
         private final String clamavHost;
+        private final int clamavPort;
+        private final boolean clamavEnabled;
+        private final String financialDocumentProvider;
+        private final String supabaseUrl;
+        private final String supabaseKey;
+        private final String supabaseBucket;
+        private final String backendUrl;
         private final boolean clamavRequired;
         private final String corsOrigins;
         private final String notificationProvider;
@@ -59,6 +69,13 @@ public class ProductionReadinessService {
                         @Value("${app.mail.brevo-api-key:}") String brevoApiKey,
                         @Value("${app.mail.brevo-url:https://api.brevo.com/v3/smtp/email}") String brevoUrl,
                         @Value("${document-security.clamav.host:}") String clamavHost,
+                        @Value("${document-security.clamav.port:3310}") int clamavPort,
+                        @Value("${document-security.clamav.enabled:false}") boolean clamavEnabled,
+                        @Value("${financial-document.storage-provider:DATABASE}") String financialDocumentProvider,
+                        @Value("${financial-document.supabase-url:}") String supabaseUrl,
+                        @Value("${financial-document.supabase-service-key:}") String supabaseKey,
+                        @Value("${financial-document.supabase-bucket:}") String supabaseBucket,
+                        @Value("${app.backend.url:}") String backendUrl,
                         @Value("${document-security.clamav.required:false}") boolean clamavRequired,
                         @Value("${security.cors.allowed-origins:}") String corsOrigins,
                         @Value("${notifications.brevo.enabled:false}") boolean brevoNotificationsEnabled,
@@ -79,6 +96,13 @@ public class ProductionReadinessService {
                 this.brevoApiKey = brevoApiKey;
                 this.brevoUrl = brevoUrl;
                 this.clamavHost = clamavHost;
+                this.clamavPort = clamavPort;
+                this.clamavEnabled = clamavEnabled;
+                this.financialDocumentProvider = financialDocumentProvider;
+                this.supabaseUrl = supabaseUrl;
+                this.supabaseKey = supabaseKey;
+                this.supabaseBucket = supabaseBucket;
+                this.backendUrl = backendUrl;
                 this.clamavRequired = clamavRequired;
                 this.corsOrigins = corsOrigins;
                 this.notificationProvider = brevoNotificationsEnabled ? "BREVO"
@@ -107,6 +131,13 @@ public class ProductionReadinessService {
 
                 check(
                                 checks,
+                                "restrictedDatabaseUser",
+                                restrictedDatabaseUser(),
+                                strictProduction,
+                                "Runtime PostgreSQL role must not have SUPERUSER, BYPASSRLS or public schema CREATE privileges");
+
+                check(
+                                checks,
                                 "flyway",
                                 flywayReady(),
                                 true,
@@ -118,6 +149,11 @@ public class ProductionReadinessService {
                                 notificationSender.getIfAvailable() != null,
                                 true,
                                 "Notification delivery adapter");
+
+                check(checks, "operationalEmailTransport",
+                                !"LOGGING".equals(notificationProvider),
+                                strictProduction,
+                                "Operational notifications must use an enabled transactional provider, not a logging-only adapter");
 
                 check(
                                 checks,
@@ -146,8 +182,10 @@ public class ProductionReadinessService {
                                 strictProduction && otpRequired,
                                 "OTP requires enabled transactional email, a valid Brevo API key, HTTPS provider URL, and an active Brevo sender");
 
+                // ClamAV must actually respond to the clamd PING protocol.
+                // Hostname presence alone is not a security readiness check.
                 boolean clamavReady = !clamavRequired
-                                || !isBlank(clamavHost);
+                                || (clamavEnabled && clamavResponds());
 
                 check(
                                 checks,
@@ -155,6 +193,19 @@ public class ProductionReadinessService {
                                 clamavReady,
                                 strictProduction && clamavRequired,
                                 "Required malware-scanning service");
+
+                String archiveMode = financialDocumentProvider == null
+                                ? "DATABASE"
+                                : financialDocumentProvider.trim().toUpperCase(java.util.Locale.ROOT);
+                boolean archiveReady = "DATABASE".equals(archiveMode)
+                                || ("SUPABASE".equals(archiveMode)
+                                                && httpsUrl(supabaseUrl)
+                                                && !isBlank(supabaseKey)
+                                                && !isBlank(supabaseBucket));
+                check(checks, "financialDocumentArchive", archiveReady, strictProduction,
+                                "Archive provider is DATABASE or configured private SUPABASE storage");
+                check(checks, "financialDocumentPublicLinks", httpsUrl(backendUrl), strictProduction,
+                                "Invoice and receipt links require the public HTTPS backend base URL");
 
                 check(
                                 checks,
@@ -185,6 +236,34 @@ public class ProductionReadinessService {
                                 "notificationProvider", notificationProvider,
                                 "reconciliationEnabled", reconciliationEnabled,
                                 "checks", checks);
+        }
+
+        private boolean clamavResponds() {
+                if (isBlank(clamavHost) || clamavPort < 1 || clamavPort > 65535)
+                        return false;
+                try (Socket socket = new Socket()) {
+                        socket.connect(new InetSocketAddress(clamavHost, clamavPort), 1000);
+                        socket.setSoTimeout(1000);
+                        socket.getOutputStream().write("zPING\0".getBytes(StandardCharsets.US_ASCII));
+                        byte[] response = socket.getInputStream().readNBytes(5);
+                        return new String(response, StandardCharsets.US_ASCII).startsWith("PONG");
+                } catch (Exception ignored) {
+                        return false;
+                }
+        }
+
+        private boolean restrictedDatabaseUser() {
+                try (Connection c = dataSource.getConnection();
+                                var stmt = c.createStatement();
+                                var result = stmt.executeQuery("""
+                                                SELECT NOT rolsuper AND NOT rolbypassrls
+                                                       AND NOT has_schema_privilege(current_user, 'public', 'CREATE')
+                                                  FROM pg_roles WHERE rolname=current_user
+                                                """)) {
+                        return result.next() && result.getBoolean(1);
+                } catch (Exception ignored) {
+                        return false;
+                }
         }
 
         private boolean databaseReady() {

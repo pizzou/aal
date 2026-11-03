@@ -1,5 +1,9 @@
 # Production profile. Activate with SPRING_PROFILES_ACTIVE=prod
 spring:
+  servlet:
+    multipart:
+      max-file-size: 8MB
+      max-request-size: 9MB
   datasource:
     url: ${SPRING_DATASOURCE_URL:${DB_URL:}}
     username: ${SPRING_DATASOURCE_USERNAME:${DB_USERNAME:}}
@@ -24,6 +28,11 @@ spring:
           time_zone: UTC
   flyway:
     enabled: true
+    # Run schema changes as a dedicated non-superuser migration role. The
+    # runtime application user must NOT hold CREATE privileges on the schema.
+    url: ${SPRING_FLYWAY_URL:${SPRING_DATASOURCE_URL}}
+    user: ${SPRING_FLYWAY_USER}
+    password: ${SPRING_FLYWAY_PASSWORD}
     locations: classpath:db/migration
     validate-on-migrate: true
     clean-disabled: true
@@ -159,7 +168,7 @@ dashboard:
   query-timeout-seconds: ${DASHBOARD_QUERY_TIMEOUT_SECONDS:4}
 
 financial-document:
-  storage-provider: ${FINANCIAL_DOCUMENT_STORAGE_PROVIDER:SUPABASE}
+  storage-provider: ${FINANCIAL_DOCUMENT_STORAGE_PROVIDER:DATABASE}
   supabase-url: ${SUPABASE_URL:}
   supabase-service-key: ${SUPABASE_SERVICE_ROLE_KEY:}
   supabase-bucket: ${SUPABASE_FINANCIAL_DOCUMENT_BUCKET:financial-documents}

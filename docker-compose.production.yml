@@ -7,9 +7,11 @@ services:
       POSTGRES_USER: ${POSTGRES_SUPERUSER}
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-aal_app}
-      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:?Set SPRING_DATASOURCE_PASSWORD}
+      SPRING_FLYWAY_USERNAME: ${SPRING_FLYWAY_USERNAME:-aal_migrator}
+      SPRING_FLYWAY_PASSWORD: ${SPRING_FLYWAY_PASSWORD:?Set SPRING_FLYWAY_PASSWORD}
       BACKUP_DB_USERNAME: ${BACKUP_DB_USERNAME:-aal_backup}
-      BACKUP_DB_PASSWORD: ${BACKUP_DB_PASSWORD}
+      BACKUP_DB_PASSWORD: ${BACKUP_DB_PASSWORD:?Set BACKUP_DB_PASSWORD}
     command:
       - postgres
       - -c
@@ -34,20 +36,42 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
     command:
       [
         "redis-server",
         "--appendonly",
         "yes",
         "--requirepass",
-        "${REDIS_PASSWORD}",
+        "${REDIS_PASSWORD:?Set REDIS_PASSWORD}",
       ]
     volumes: [redisdata:/data]
     healthcheck:
-      test: ["CMD-SHELL", 'redis-cli -a "$${REDIS_PASSWORD}" ping | grep PONG']
+      test:
+        [
+          "CMD-SHELL",
+          'REDISCLI_AUTH="$${REDIS_PASSWORD}" redis-cli --no-auth-warning ping | grep -qx PONG',
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
+
+  # Only enable the scanner profile on hosts with adequate RAM. Alternatively
+  # configure CLAMAV_HOST to an independently managed, verified scanner.
+  # If CLAMAV_REQUIRED=true and scanner is unreachable, readiness must fail.
+  clamav:
+    image: clamav/clamav:1.4
+    restart: unless-stopped
+    profiles: ["scanner"]
+    volumes: [clamavdata:/var/lib/clamav]
+    expose: ["3310"]
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping=1 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 15
+      start_period: 180s
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.0
@@ -79,33 +103,46 @@ services:
       SPRING_PROFILES_ACTIVE: prod
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-aal_app}
-      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:?Set SPRING_DATASOURCE_PASSWORD}
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_FLYWAY_USER: ${SPRING_FLYWAY_USERNAME:-aal_migrator}
+      SPRING_FLYWAY_PASSWORD: ${SPRING_FLYWAY_PASSWORD:?Set SPRING_FLYWAY_PASSWORD}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET}
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
       SECURITY_CORS_ALLOWED_ORIGINS: ${SECURITY_CORS_ALLOWED_ORIGINS}
       APP_ENVIRONMENT: production
       APP_FRONTEND_URL: ${APP_FRONTEND_URL}
       BACKUP_DB_USERNAME: ${BACKUP_DB_USERNAME:-aal_backup}
       BACKUP_DB_PASSWORD: ${BACKUP_DB_PASSWORD}
-      APP_AUTH_COOKIE_SAME_SITE: ${APP_AUTH_COOKIE_SAME_SITE:None}
-      AAL_AUTH_OTP_REQUIRED: ${AAL_AUTH_OTP_REQUIRED:true}
-      AAL_MAIL_ENABLED: ${AAL_MAIL_ENABLED:true}
-      AAL_BREVO_SENDER_EMAIL: ${AAL_BREVO_SENDER_EMAIL:no-reply@africalogisticaviation.com}
+      APP_AUTH_COOKIE_SAME_SITE: ${APP_AUTH_COOKIE_SAME_SITE:-None}
+      AAL_AUTH_OTP_REQUIRED: ${AAL_AUTH_OTP_REQUIRED:-true}
+      AAL_MAIL_ENABLED: ${AAL_MAIL_ENABLED:-true}
+      AAL_BREVO_SENDER_EMAIL: ${AAL_BREVO_SENDER_EMAIL:-no-reply@africalogisticaviation.com}
       AAL_MAIL_SENDER_NAME: ${AAL_MAIL_SENDER_NAME:-Aviation Africa Logistics Ltd}
       BREVO_API_URL: ${BREVO_API_URL:-https://api.brevo.com/v3/smtp/email}
-      BREVO_API_KEY: ${BREVO_API_KEY}
-      NOTIFICATIONS_SMTP_ENABLED: ${NOTIFICATIONS_SMTP_ENABLED:false}
-      NOTIFICATIONS_BREVO_ENABLED: ${NOTIFICATIONS_BREVO_ENABLED:true}
-      NOTIFICATIONS_FROM_ADDRESS: ${NOTIFICATIONS_FROM_ADDRESS:no-reply@africalogisticaviation.com}
-      AAL_EMAIL_DOMAIN: ${AAL_EMAIL_DOMAIN:africalogisticaviation.com}
+      BREVO_API_KEY: ${BREVO_API_KEY:?Set BREVO_API_KEY}
+      NOTIFICATIONS_SMTP_ENABLED: ${NOTIFICATIONS_SMTP_ENABLED:-false}
+      NOTIFICATIONS_BREVO_ENABLED: ${NOTIFICATIONS_BREVO_ENABLED:-true}
+      NOTIFICATIONS_FROM_ADDRESS: ${NOTIFICATIONS_FROM_ADDRESS:-no-reply@africalogisticaviation.com}
+      AAL_EMAIL_DOMAIN: ${AAL_EMAIL_DOMAIN:-africalogisticaviation.com}
       AAL_TENANT_ID: ${AAL_TENANT_ID:-7c7d3b7c-3f20-4d3d-9c11-6f7d8f2a6b01}
       AAL_TENANT_NAME: ${AAL_TENANT_NAME:-Aviation Africa Logistics Ltd}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       AAL_GPS_KAFKA_TOPIC: ${AAL_GPS_KAFKA_TOPIC:-aal.gps.position}
-      AIRCARGO_RECONCILIATION_ENABLED: ${AIRCARGO_RECONCILIATION_ENABLED:true}
-      AIRCARGO_ETA_POLL_ENABLED: ${AIRCARGO_ETA_POLL_ENABLED:true}
+      AIRCARGO_RECONCILIATION_ENABLED: ${AIRCARGO_RECONCILIATION_ENABLED:-true}
+      AIRCARGO_ETA_POLL_ENABLED: ${AIRCARGO_ETA_POLL_ENABLED:-true}
+      # Keep document storage within PostgreSQL unless a private Supabase bucket is provisioned.
+      FINANCIAL_DOCUMENT_STORAGE_PROVIDER: ${FINANCIAL_DOCUMENT_STORAGE_PROVIDER:-DATABASE}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_FINANCIAL_DOCUMENT_BUCKET: ${SUPABASE_FINANCIAL_DOCUMENT_BUCKET:-financial-documents}
+      APP_BACKEND_URL: ${APP_BACKEND_URL:?Set the public HTTPS backend URL}
+      CLAMAV_ENABLED: ${CLAMAV_ENABLED:-true}
+      CLAMAV_REQUIRED: ${CLAMAV_REQUIRED:-true}
+      CLAMAV_HOST: ${CLAMAV_HOST:-clamav}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
     expose: ["8080"]
 
   frontend:
@@ -148,6 +185,27 @@ services:
     volumes: [grafanadata:/var/lib/grafana]
     expose: ["3000"]
 
+  # Explicit opt-in: start BOTH services with --profile backup. A local
+  # backup alone is not disaster recovery; wal-uploader sends it off-host.
+  db-backup:
+    image: postgres:16
+    restart: unless-stopped
+    profiles: ["backup"]
+    depends_on: [postgres]
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${BACKUP_DB_USERNAME:-aal_backup}
+      PGPASSWORD: ${BACKUP_DB_PASSWORD:?Set BACKUP_DB_PASSWORD}
+      BACKUP_DIR: /backups
+      RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - pgbackups:/backups
+      - ./docker/postgres/backup-container.sh:/opt/aal/backup-container.sh:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command: "while true; do bash /opt/aal/backup-container.sh || exit 1; sleep 86400; done"
+
   wal-uploader:
     image: amazon/aws-cli:2.17.52
     restart: unless-stopped
@@ -160,10 +218,12 @@ services:
       BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET}
     volumes:
       - walarchive:/wal-archive:ro
+      - pgbackups:/backups:ro
     entrypoint: ["/bin/sh", "-c"]
     command: >-
       while true; do
-        aws s3 sync /wal-archive "s3://${BACKUP_S3_BUCKET}/wal/" --only-show-errors || true;
+        aws s3 sync /wal-archive "s3://${BACKUP_S3_BUCKET}/wal/" --only-show-errors || exit 1;
+        aws s3 sync /backups "s3://${BACKUP_S3_BUCKET}/full/" --only-show-errors || exit 1;
         sleep 60;
       done
 
@@ -173,3 +233,5 @@ volumes:
   redisdata:
   prometheusdata:
   grafanadata:
+  clamavdata:
+  pgbackups:

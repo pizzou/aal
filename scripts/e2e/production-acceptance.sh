@@ -95,12 +95,22 @@ login_payload="$(jq -cn --arg email "$AAL_E2E_EMAIL" --arg password "$AAL_E2E_PA
   '{email:$email,password:$password}')"
 login="$(auth_login "$login_payload")"
 if [[ "$(jq -r '.otpRequired // false' <<<"$login")" == "true" ]]; then
-  : "${AAL_E2E_OTP:?OTP is enabled. Set AAL_E2E_OTP for this run.}"
   challenge="$(jq -er '.otpChallengeToken' <<<"$login")"
   otp_payload="$(jq -cn --arg challenge "$challenge" '{otpChallengeToken:$challenge}')"
   curl --fail-with-body --silent --show-error --max-time 30 \
     -H 'Content-Type: application/json' -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -X POST "$base/api/auth/send-login-otp" -d "$otp_payload" >/dev/null
+  # The OTP is generated NOW; a code entered before this script starts is stale.
+  # For interactive staging UAT, read it from the test email inbox.
+  if [[ -z "${AAL_E2E_OTP:-}" ]]; then
+    if [[ -t 0 ]]; then
+      read -r -p 'Enter the six-digit OTP just delivered to the staging test inbox: ' AAL_E2E_OTP
+    else
+      echo 'OTP required: use an interactive staging terminal after delivery, or a secure test-mailbox retrieval step.' >&2
+      exit 1
+    fi
+  fi
+  [[ "$AAL_E2E_OTP" =~ ^[0-9]{6}$ ]] || { echo 'A six-digit OTP is required' >&2; exit 1; }
   login_payload="$(jq -cn \
     --arg email "$AAL_E2E_EMAIL" \
     --arg password "$AAL_E2E_PASSWORD" \
@@ -142,8 +152,16 @@ jq -e 'type == "object"' <<<"$customs_json" >/dev/null
 echo "[8/12] arrival -> signed-off proof of delivery -> delivered"
 arrival="$(json_patch "$base/api/shipments/$shipment_id/status" '{"status":"ARRIVED"}')"
 jq -e '.status == "ARRIVED"' <<<"$arrival" >/dev/null
-pod_payload="$(jq -cn --arg shipment "$shipment_id" \
-  '{shipmentId:$shipment,recipientName:"AAL STAGING TEST",notes:"Automated staging-only acceptance delivery"}')"
+# Never mark a shipment delivered without a persisted, malware-scanned file.
+: "${POD_EVIDENCE_FILE:?Supply an actual staging-test PNG/JPEG/PDF as POD_EVIDENCE_FILE}"
+[[ -s "$POD_EVIDENCE_FILE" ]] || { echo 'POD_EVIDENCE_FILE is missing or empty' >&2; exit 1; }
+evidence_json="$(curl --fail-with-body --silent --show-error --max-time 40 \
+  -b "$COOKIE_JAR" -c "$COOKIE_JAR" -H "X-CSRF-Token: $CSRF_TOKEN" \
+  -F "shipmentId=$shipment_id" -F "file=@$POD_EVIDENCE_FILE" \
+  "$base/api/operations/pod-evidence")"
+evidence_uri="$(jq -er '.evidenceUri' <<<"$evidence_json")"
+pod_payload="$(jq -cn --arg shipment "$shipment_id" --arg uri "$evidence_uri" \
+  '{shipmentId:$shipment,recipientName:"AAL STAGING TEST",photoUri:$uri,notes:"Staging-only acceptance delivery with persisted evidence"}')"
 pod_json="$(json_post "$base/api/operations/pod" "$pod_payload")"
 jq -e '.shipmentId' <<<"$pod_json" >/dev/null
 json_get "$base/api/shipments/$shipment_id" | jq -e '.status == "DELIVERED"' >/dev/null
@@ -151,14 +169,12 @@ json_get "$base/api/shipments/$shipment_id/events" | jq -e 'length >= 1' >/dev/n
 json_get "$base/api/public/tracking/$tracking_token" | jq -e '.status == "DELIVERED"' >/dev/null
 
 echo "[9/12] invoice"
-invoice_no="AAL-E2E-$(date -u +%Y%m%d%H%M%S)"
 due_date="$(date -u -d '+7 days' +%F 2>/dev/null || date -u -v+7d +%F)"
 invoice_payload="$(jq -cn \
-  --arg invoice "$invoice_no" \
   --arg issue "$(date -u +%F)" \
   --arg shipment "$shipment_id" \
   --arg due "$due_date" \
-  '{invoiceNo:$invoice,issueDate:$issue,client:"AAL E2E",shipmentId:$shipment,currency:"USD",invoiceAmount:100,dueDate:$due,owner:"AAL E2E",notes:"Automated acceptance"}')"
+  '{issueDate:$issue,client:"AAL E2E",shipmentId:$shipment,currency:"USD",invoiceAmount:100,dueDate:$due,owner:"AAL E2E",notes:"Automated acceptance"}')"
 invoice="$(json_post "$base/api/commercial/invoices" "$invoice_payload")"
 invoice_id="$(jq -er '.id' <<<"$invoice")"
 
@@ -179,4 +195,4 @@ jq -e '.content' <<<"$audit" >/dev/null
 echo "[12/12] final authenticated session"
 json_get "$base/api/auth/session" | jq -e '.userId and .tenantId and .role' >/dev/null
 
-echo "AAL full acceptance passed: quote -> email trigger -> result -> booking -> shipment -> tracking -> deliver -> invoice -> payment -> reconcile -> audit."
+echo "AAL staging acceptance checks passed (not full production certification): quote -> email trigger -> result -> booking -> shipment -> tracking -> deliver -> invoice -> payment -> reconcile -> audit."

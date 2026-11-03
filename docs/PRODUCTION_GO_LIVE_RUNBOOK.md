@@ -24,20 +24,23 @@ npm audit --omit=dev --audit-level=high
 npm run build
 ```
 
-## 3. CI/CD
+## 3. CI/CD — actual source-controlled workflow
 
-The repository includes the restored workflows:
+`.github/workflows/aal-ci.yml` is now included. It runs Java 21 against an
+isolated PostgreSQL 16/Redis environment, TypeScript, frontend unit tests,
+`npm audit` and a fresh Next.js production build. It also validates the
+production Compose file. **A new workflow file is not evidence of a successful
+GitHub Actions run:** require a green run on the exact release commit and
+store its logs. No automatic production deployment is configured. Historic
+references to `aal-cd.yml`, `aal-staging-acceptance.yml`, and `production.yml`
+were from an earlier plan, not files guaranteed in this release.
 
-- `.github/workflows/aal-ci.yml` — build, tests, full frontend E2E, RLS/restore drills and security scan.
-- `.github/workflows/aal-cd.yml` — container publishing with provenance/SBOM.
-- `.github/workflows/aal-staging-acceptance.yml` — deployed HTTP/CORS/load/UAT acceptance.
-- `.github/workflows/production.yml` — release gate, dependency/security scan, E2E and container scan.
-
-A production merge should not bypass these gates.
+For production go-live, run the separate staging acceptance, security, load,
+backup/restore and provider UAT scripts against authorized environments.
 
 ## 4. Tests
 
-The backend suite is executed by Maven. The frontend suite is executed by Playwright after building and starting the production Next.js server. Authenticated Playwright tests remain skipped unless UAT credentials are deliberately supplied.
+The backend suite is executed by Maven. Frontend unit tests run in CI. Playwright requires a deployed or locally running Next.js server and configured UAT credentials. Authenticated Playwright tests remain skipped unless those credentials are deliberately supplied; a skipped test is not acceptance evidence.
 
 Critical internal routes tested by Playwright include `/air-cargo`, `/air-cargo/bookings` and `/air-cargo/integrations`; a protected route may redirect to login but must not become a framework-level 404.
 
@@ -69,20 +72,20 @@ PGHOST=... PGUSER=<admin-role> PGPASSWORD=... \
 ./scripts/restore-drill.sh
 ```
 
-The drill verifies archive readability, restored core records, Flyway history and tenant RLS protection. A fresh `docker-compose.production.yml` database volume automatically creates the restricted application role and the backup role from the supplied environment variables. Existing managed databases still require an explicit role-creation/preflight step.
+The drill verifies archive readability, restored core records, Flyway history and tenant RLS protection. A fresh `docker-compose.production.yml` database volume now creates dedicated application, migration and backup roles from the supplied environment variables. Existing managed databases still require an explicit role-creation/preflight step.
 
 ## 7. Vulnerability scanning
 
-The CI production gate runs OWASP Dependency-Check, `npm audit`, Trivy filesystem/container scans and Gitleaks. High/critical findings should be resolved or explicitly handled by the organization before release.
+`aal-ci.yml` runs the frontend production dependency check with `npm audit`; it does NOT run the remaining scanners automatically. Execute `scripts/security/dependency-scan.sh` and appropriate container/secrets scans as separate release steps, and resolve or formally assess any high/critical findings before deployment.
 
 ## 8. Basic load test
 
-The staging workflow runs both existing k6 scenarios. Default thresholds are intentionally conservative:
+The repository provides k6 scenarios, but no automatic staging load run is part of `aal-ci.yml`. Run these scenarios manually or in a separate controlled staging job. Default thresholds are intentionally conservative:
 
 - public quote: HTTP failure rate `< 2%`, p95 `< 1.5s`, p99 `< 3s`
 - authenticated shipment search: HTTP failure rate `< 1%`, p95 `< 1s`, p99 `< 2s`
 
-Run with a real staging API URL and a non-production load-test user/token. Never point these default scripts at a production customer dataset.
+Run with a real staging API URL and a non-production load-test user/token. This release does not include measured production load results. Never point these default scripts at a production customer dataset.
 
 ## 9. Browser security policy
 
@@ -200,3 +203,52 @@ The queue must progress to `SENT`. Production configuration prevents the silent 
 ## Final release rule
 
 AAL may be deployed as production software only when the automated code/security gates pass **and** the external UAT gates required for the features being used are green. The source intentionally refuses to represent an unconfigured airline provider, unverified sender, or untested external booking contract as live.
+
+## Release V95: private delivery evidence and least-privilege migrations
+
+- **Do not deploy only the backend.** The Delivery form now uploads a real JPG,
+  PNG or PDF to `POST /api/operations/pod-evidence` before confirming POD.
+  The backend refuses unsigned/unauthenticated evidence URLs and missing POD
+  files. Previously recorded historic evidence is not migrated or erased.
+- **Flyway V95** creates a private, immutable and FORCE-RLS-protected
+  `pod_evidence_files` archive. A successful scan is mandatory for new POD
+  uploads. Start a local ClamAV using `--profile scanner` on a server with
+  enough RAM, or connect to an independently managed private clamd service.
+  Never enable a public unauthenticated ClamAV TCP endpoint.
+- **Dedicated migration role:** Fresh PostgreSQL volumes provision the roles
+  `aal_app` (ordinary runtime), `aal_migrator` (Flyway schema changes) and
+  `aal_backup` (protected backup/restore). For an **existing database**, use a
+  DBA-reviewed ownership and privilege migration first, on a restored staging
+  copy. Do not blindly run REASSIGN OWNED on a production database. Flyway
+  migration checksum files V1-V94 must not be edited.
+- **Invoice and receipt archive** defaults to `DATABASE`. This is private and
+  supported, but it increases backup size. Alternatively configure a private
+  Supabase bucket with correctly forwarded service credentials, after UAT.
+- **Backup containers** are available via `--profile backup`: a daily verified
+  compressed dump plus S3 synchronization of both dumps and archived WAL.
+  They do nothing until the profile and real AWS credentials are configured.
+  Restore a recent offsite backup into a **new isolated database** before go-live.
+- **Login/OTP fix from F9 is retained.** The server sends the OTP challenge
+  before email delivery, keeping the verification UI available during Brevo
+  delays. A real OTP email round trip must still be tested after deployment.
+- **Staging acceptance:** set `ALLOW_STAGING_MUTATIONS=true` and a real
+  `POD_EVIDENCE_FILE` (staging-only JPG/PNG/PDF). The acceptance script sends
+  the OTP before asking for the code in an interactive session. Never run
+  against customer data or production accounting.
+
+### Hosting mode matters
+
+If AAL is deployed as **Render backend + Vercel frontend**, Docker Compose
+changes do not modify those managed services. Configure the equivalent
+runtime environment and private scanner/backup services directly with the
+host providers. Deploy the OTP/POD backend and frontend together and apply
+V95 to staging first. If AAL is self-hosted with the included Docker Compose,
+verify your TLS reverse proxy, then use the scanner/backup profiles and do not
+co-locate excessive optional observability/Kafka services on a low-RAM host.
+
+**No-go until verified:** successful full Maven test suite, clean Next.js
+production build, fresh/upgrade migrations, proper runtime grants and tenant
+isolation, authenticated browser acceptance for all seven stages, legal VAT
+and invoice signoff, duplicate payment/receipt tests, ClamAV, real SMTP/OTP,
+restored offsite backup, load/timeout test, and authorization of every enabled
+external airline/customs provider.

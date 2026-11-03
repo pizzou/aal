@@ -78,7 +78,7 @@ test('commercial references are server-generated, with read-only quote and custo
 test('shipment selectors replace manual UUID input in operations workspaces', () => {
   for (const file of ['frontend/app/mobile-ops/page.tsx', 'frontend/app/exceptions/page.tsx', 'frontend/app/trips/page.tsx']) {
     const source = read(file);
-    assert.match(source, /shipmentsApi\.list\(/);
+    assert.match(source, /shipmentsApi\s*\.\s*list\s*\(/);
     assert.match(source, /<select[\s\S]*?shipmentId/);
     assert.doesNotMatch(source, /placeholder="Shipment UUID"/);
   }

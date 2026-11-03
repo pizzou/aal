@@ -226,50 +226,21 @@ public class AuthService {
 
                         if (request.otp() == null || request.otp().isBlank()) {
 
+                                /*
+                                 * Complete the password step before contacting the email provider.
+                                 * The browser must receive this short-lived, signed challenge and
+                                 * switch to the OTP screen BEFORE it requests email delivery.
+                                 * Otherwise a slow Brevo call can outlive the login HTTP timeout:
+                                 * the user receives an email but never sees the code-entry form.
+                                 * This token grants no authenticated session by itself.
+                                 */
                                 stage = "generate-otp-challenge";
-
-                                log.debug(
-                                                "Authentication stage={} userId={}",
-                                                stage,
-                                                u.id());
-
                                 String challenge = jwt.generateLoginOtpChallengeToken(
-                                                u.id(),
-                                                tenantId,
-                                                u.tokenVersion());
-
-                                stage = "issue-otp";
-
-                                log.debug(
-                                                "Authentication stage={} userId={}",
-                                                stage,
-                                                u.id());
-
-                                String otpCode = issueOtpIfNeeded(u, now, false);
-
-                                if (otpCode != null) {
-                                        try {
-                                                mail.sendLoginOtp(
-                                                                new User(tenantId, u.email(), "", u.role()) {
-                                                                        {
-                                                                                setDisplayName(u.displayName());
-                                                                        }
-                                                                },
-                                                                otpCode,
-                                                                OTP_MINUTES);
-                                        } catch (MailService.MailDeliveryException ex) {
-                                                clearOtp(u.id());
-                                                throw new ResponseStatusException(
-                                                                HttpStatus.SERVICE_UNAVAILABLE,
-                                                                "Unable to send the verification code. Please try again shortly.",
-                                                                ex);
-                                        }
-                                }
+                                                u.id(), tenantId, u.tokenVersion());
 
                                 log.info(
                                                 "Authentication requires OTP userId={} email={}",
-                                                u.id(),
-                                                maskEmail(email));
+                                                u.id(), maskEmail(email));
 
                                 return new AuthResponse(
                                                 null,
@@ -382,6 +353,16 @@ public class AuthService {
                                         mailUser.setDisplayName(u.displayName());
                                         mail.sendLoginOtp(mailUser, otpCode, OTP_MINUTES);
                                 } catch (MailService.MailDeliveryException ex) {
+                                        if (ex.isDeliveryUncertain()) {
+                                                // The provider may have accepted the email before
+                                                // the network failed. Keep the one-time code valid;
+                                                // do not force the recipient to discard an emailed OTP.
+                                                log.warn("OTP email delivery unconfirmed userId={}", u.id());
+                                                throw new ResponseStatusException(
+                                                                HttpStatus.GATEWAY_TIMEOUT,
+                                                                "Verification email delivery was not confirmed. If a code arrives, use it; otherwise request another after the cooldown.",
+                                                                ex);
+                                        }
                                         clearOtp(u.id());
                                         throw new ResponseStatusException(
                                                         HttpStatus.SERVICE_UNAVAILABLE,
@@ -463,10 +444,10 @@ public class AuthService {
                                 tenantId);
 
                 /*
-                 * Return the generated code to the caller. The database write is already
-                 * committed by JdbcTemplate; email delivery deliberately happens outside
-                 * the authentication transaction so a slow Brevo request cannot hold a
-                 * PostgreSQL connection while the login endpoint waits.
+                 * Code issuance only happens through /send-login-otp after the
+                 * frontend has already entered the OTP step. Delivery is synchronous
+                 * in that second request so its response can report provider failure,
+                 * without losing the user's verification screen on a network timeout.
                  */
                 return code;
         }

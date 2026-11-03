@@ -224,6 +224,11 @@ const DASHBOARD_TIMEOUT_MS = 30_000;
 const DASHBOARD_OVERVIEW_TIMEOUT_MS = 25_000;
 const AUTH_SESSION_TIMEOUT_MS = 8_000;
 const AUTH_LOGIN_TIMEOUT_MS = 20_000;
+// Brevo sender lookup and email submission may require two provider requests.
+// This longer deadline is safe now that the OTP form is already visible.
+const AUTH_OTP_DELIVERY_TIMEOUT_MS = 35_000;
+// A verified POD upload must complete server-side malware scanning and persistence.
+const POD_EVIDENCE_UPLOAD_TIMEOUT_MS = 45_000;
 const CSRF_TIMEOUT_MS = 10_000;
 const AIR_CARGO_SEARCH_TIMEOUT_MS = 40_000;
 const getCache = new Map<
@@ -235,7 +240,9 @@ const getInflight = new Map<string, Promise<unknown>>();
 function requestTimeoutFor(path: string): number {
   if (path === "/api/auth/session") return AUTH_SESSION_TIMEOUT_MS;
   if (path === "/api/auth/login") return AUTH_LOGIN_TIMEOUT_MS;
-  if (path === "/api/auth/send-login-otp") return AUTH_LOGIN_TIMEOUT_MS;
+  if (path === "/api/auth/send-login-otp") return AUTH_OTP_DELIVERY_TIMEOUT_MS;
+  if (path.startsWith("/api/operations/pod-evidence"))
+    return POD_EVIDENCE_UPLOAD_TIMEOUT_MS;
   if (path.startsWith("/api/command-center/advanced/overview"))
     return DASHBOARD_OVERVIEW_TIMEOUT_MS;
   if (path.startsWith("/api/command-center/advanced"))
@@ -460,8 +467,11 @@ async function apiFetchInternal<T>(
     }
 
     if (!response.ok) {
-      if (response.status === 401) {
+      if (response.status === 401 && shouldAttachAuthentication(path)) {
         /*
+         * A rejected login or incorrect OTP must NOT expire an existing
+         * authenticated session globally. Only protected endpoints can
+         * establish that the current session is invalid.
          * A 401 from a protected endpoint is already authoritative: the backend
          * rejected the credential. Do not make a second /session request here.
          * That extra round trip was especially harmful when Render was waking
@@ -2140,6 +2150,14 @@ export const operationsApi = {
       totalDurationMinutes: number;
       stops: DispatchStop[];
     }>(`/api/operations/trips/${tripId}/route`),
+  uploadPodEvidence: (shipmentId: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return apiFetch<{ id: string; evidenceUri: string; mimeType: string }>(
+      `/api/operations/pod-evidence?shipmentId=${encodeURIComponent(shipmentId)}`,
+      { method: "POST", body },
+    );
+  },
   createPod: (data: Record<string, unknown>) =>
     apiFetch<Record<string, unknown>>("/api/operations/pod", {
       method: "POST",

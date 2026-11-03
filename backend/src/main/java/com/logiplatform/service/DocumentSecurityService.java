@@ -45,13 +45,16 @@ public class DocumentSecurityService {
         this.scannerVersion = scannerVersion;
     }
 
-    public Map<String,Object> scan(UUID shipmentId, UUID documentId, MultipartFile file) {
+    public Map<String, Object> scan(UUID shipmentId, UUID documentId, MultipartFile file) {
         UUID tenant = TenantContext.getTenantId();
-        Map<String,Object> document = db.queryForMap(
+        Map<String, Object> document = db.queryForMap(
                 "SELECT id,shipment_id,mime_type,checksum_sha256,file_size_bytes FROM cargo_documents WHERE tenant_id=? AND shipment_id=? AND id=?",
                 tenant, shipmentId, documentId);
-        if (file == null || file.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Document file is empty");
-        if (file.getSize() > 50L * 1024L * 1024L) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Document exceeds 50 MB security-scan limit");
+        if (file == null || file.isEmpty())
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Document file is empty");
+        if (file.getSize() > 50L * 1024L * 1024L)
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
+                    "Document exceeds 50 MB security-scan limit");
         validateMimeAndSignature(file);
 
         String checksum = sha256(file);
@@ -107,8 +110,9 @@ public class DocumentSecurityService {
                     throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, result.detail());
                 }
             }
-            return Map.of("documentId",documentId,"shipmentId",shipmentId,"checksumSha256",checksum,
-                    "status",result.status(),"detail",result.detail(),"scanner",scannerVersion,"scannedAt",Instant.now());
+            return Map.of("documentId", documentId, "shipmentId", shipmentId, "checksumSha256", checksum,
+                    "status", result.status(), "detail", result.detail(), "scanner", scannerVersion, "scannedAt",
+                    Instant.now());
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -122,27 +126,78 @@ public class DocumentSecurityService {
         }
     }
 
+    /**
+     * Scan uploaded POD photo/signature bytes BEFORE they enter the canonical
+     * evidence archive. A scanner timeout cannot be interpreted as CLEAN.
+     */
+    public void requireCleanEvidence(byte[] content) {
+        if (content == null || content.length == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Delivery evidence is empty");
+        }
+        if (!enabled) {
+            // This endpoint must never label unscanned bytes as CLEAN, even in
+            // development. A configured scanner is a hard prerequisite.
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Verified delivery evidence requires an enabled malware scanner");
+        }
+        try {
+            ScanResult result = scanClamAv(new ByteArrayInputStream(content));
+            if ("INFECTED".equals(result.status())) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "The delivery evidence was rejected by the malware scanner");
+            }
+            if (!"CLEAN".equals(result.status())) {
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "Delivery evidence scanner did not confirm a clean result");
+            }
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "The delivery evidence scanner is unavailable", ex);
+        }
+    }
+
     private static String normalizeMime(String mime) {
-        if (mime == null) return "";
+        if (mime == null)
+            return "";
         int separator = mime.indexOf(';');
         String normalized = (separator >= 0 ? mime.substring(0, separator) : mime).trim().toLowerCase(Locale.ROOT);
         return normalized;
     }
 
     private static void validateMimeAndSignature(MultipartFile file) {
-        String mime=normalizeMime(file.getContentType());
-        Set<String> allowed=Set.of("application/pdf","image/jpeg","image/png","image/tiff","text/plain","text/csv","application/xml","text/xml","application/zip","application/vnd.openxmlformats-officedocument.wordprocessingml.document","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.openxmlformats-officedocument.presentationml.presentation");
-        if(!mime.isBlank()&&!allowed.contains(mime)) throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE,"Unsupported document MIME type");
-        try(InputStream in=file.getInputStream()){byte[] h=in.readNBytes(16);boolean ok=sig(h,mime);if(!ok)throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE,"Document content does not match its declared type");}
-        catch(IOException ex){throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Unable to validate document signature");}
+        String mime = normalizeMime(file.getContentType());
+        Set<String> allowed = Set.of("application/pdf", "image/jpeg", "image/png", "image/tiff", "text/plain",
+                "text/csv", "application/xml", "text/xml", "application/zip",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+        if (!mime.isBlank() && !allowed.contains(mime))
+            throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Unsupported document MIME type");
+        try (InputStream in = file.getInputStream()) {
+            byte[] h = in.readNBytes(16);
+            boolean ok = sig(h, mime);
+            if (!ok)
+                throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+                        "Document content does not match its declared type");
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to validate document signature");
+        }
     }
-    private static boolean sig(byte[] h,String mime){
-        if(mime.contains("pdf"))return h.length>=5&&h[0]=='%'&&h[1]=='P'&&h[2]=='D'&&h[3]=='F'&&h[4]=='-';
-        if(mime.contains("jpeg"))return h.length>=3&&(h[0]&255)==0xFF&&(h[1]&255)==0xD8&&(h[2]&255)==0xFF;
-        if(mime.contains("png"))return h.length>=8&&(h[0]&255)==0x89&&h[1]=='P'&&h[2]=='N'&&h[3]=='G';
-        if(mime.contains("tiff"))return h.length>=4&&((h[0]=='I'&&h[1]=='I'&&h[2]==42&&h[3]==0)||(h[0]=='M'&&h[1]=='M'&&h[2]==0&&h[3]==42));
-        if(mime.contains("zip")||mime.contains("officedocument"))return h.length>=4&&h[0]=='P'&&h[1]=='K'&&h[2]==3&&h[3]==4;
-        if(mime.contains("xml")||mime.contains("text"))return true;
+
+    private static boolean sig(byte[] h, String mime) {
+        if (mime.contains("pdf"))
+            return h.length >= 5 && h[0] == '%' && h[1] == 'P' && h[2] == 'D' && h[3] == 'F' && h[4] == '-';
+        if (mime.contains("jpeg"))
+            return h.length >= 3 && (h[0] & 255) == 0xFF && (h[1] & 255) == 0xD8 && (h[2] & 255) == 0xFF;
+        if (mime.contains("png"))
+            return h.length >= 8 && (h[0] & 255) == 0x89 && h[1] == 'P' && h[2] == 'N' && h[3] == 'G';
+        if (mime.contains("tiff"))
+            return h.length >= 4 && ((h[0] == 'I' && h[1] == 'I' && h[2] == 42 && h[3] == 0)
+                    || (h[0] == 'M' && h[1] == 'M' && h[2] == 0 && h[3] == 42));
+        if (mime.contains("zip") || mime.contains("officedocument"))
+            return h.length >= 4 && h[0] == 'P' && h[1] == 'K' && h[2] == 3 && h[3] == 4;
+        if (mime.contains("xml") || mime.contains("text"))
+            return true;
         return false;
     }
 
@@ -152,20 +207,23 @@ public class DocumentSecurityService {
             socket.setSoTimeout(timeoutMs);
             OutputStream out = socket.getOutputStream();
             InputStream in = socket.getInputStream();
-            out.write(new byte[]{'z','I','N','S','T','R','E','A','M',0});
+            out.write(new byte[] { 'z', 'I', 'N', 'S', 'T', 'R', 'E', 'A', 'M', 0 });
             byte[] buffer = new byte[8192];
             int read;
             while ((read = input.read(buffer)) >= 0) {
-                if (read == 0) continue;
+                if (read == 0)
+                    continue;
                 out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(read).array());
                 out.write(buffer, 0, read);
             }
-            out.write(new byte[]{0,0,0,0});
+            out.write(new byte[] { 0, 0, 0, 0 });
             out.flush();
             String line = readLine(in);
             String normalized = line == null ? "" : line.trim();
-            if (normalized.endsWith(": OK")) return new ScanResult("CLEAN", normalized);
-            if (normalized.contains("FOUND")) return new ScanResult("INFECTED", normalized);
+            if (normalized.endsWith(": OK"))
+                return new ScanResult("CLEAN", normalized);
+            if (normalized.contains("FOUND"))
+                return new ScanResult("INFECTED", normalized);
             return new ScanResult("ERROR", normalized.isBlank() ? "ClamAV returned no result" : normalized);
         }
     }
@@ -174,9 +232,11 @@ public class DocumentSecurityService {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         int b;
         while ((b = input.read()) != -1) {
-            if (b == 0) break;
+            if (b == 0)
+                break;
             out.write(b);
-            if (out.size() > 4096) break;
+            if (out.size() > 4096)
+                break;
         }
         return out.toString(java.nio.charset.StandardCharsets.UTF_8);
     }
@@ -187,13 +247,19 @@ public class DocumentSecurityService {
             try (InputStream input = file.getInputStream()) {
                 byte[] buffer = new byte[8192];
                 int read;
-                while ((read=input.read(buffer)) >= 0) if (read>0) digest.update(buffer,0,read);
+                while ((read = input.read(buffer)) >= 0)
+                    if (read > 0)
+                        digest.update(buffer, 0, read);
             }
-            StringBuilder hex=new StringBuilder();
-            for(byte b:digest.digest()) hex.append(String.format("%02x",b));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : digest.digest())
+                hex.append(String.format("%02x", b));
             return hex.toString();
-        } catch(Exception ex) { throw new IllegalStateException("Unable to hash document",ex); }
+        } catch (Exception ex) {
+            throw new IllegalStateException("Unable to hash document", ex);
+        }
     }
 
-    private record ScanResult(String status, String detail) {}
+    private record ScanResult(String status, String detail) {
+    }
 }

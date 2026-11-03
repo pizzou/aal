@@ -634,7 +634,10 @@ public class MailService {
                     "Email provider rejected the message (HTTP " + ex.getStatusCode().value() + ")", ex);
         } catch (RestClientException ex) {
             log.error("Email provider request failed type={}", ex.getClass().getSimpleName());
-            throw new MailDeliveryException("Email provider is temporarily unavailable", ex);
+            // A transport/read timeout does not prove Brevo rejected the email.
+            // It may already be in the recipient's inbox. The OTP must remain
+            // valid until expiry rather than being cleared on an uncertain outcome.
+            throw new MailDeliveryException("Email provider did not confirm delivery", ex, true);
         }
     }
 
@@ -659,12 +662,23 @@ public class MailService {
     }
 
     public static final class MailDeliveryException extends RuntimeException {
+        private final boolean deliveryUncertain;
+
         public MailDeliveryException(String message) {
-            super(message);
+            this(message, null, false);
         }
 
         public MailDeliveryException(String message, Throwable cause) {
+            this(message, cause, false);
+        }
+
+        public MailDeliveryException(String message, Throwable cause, boolean deliveryUncertain) {
             super(message, cause);
+            this.deliveryUncertain = deliveryUncertain;
+        }
+
+        public boolean isDeliveryUncertain() {
+            return deliveryUncertain;
         }
     }
 

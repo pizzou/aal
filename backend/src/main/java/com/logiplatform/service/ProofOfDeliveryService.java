@@ -35,14 +35,16 @@ public class ProofOfDeliveryService {
     private final DispatchStopRepository dispatchStops;
     private final ShipmentTrackingEventRepository trackingEvents;
     private final ShipmentService shipmentService;
+    private final PodEvidenceService evidenceService;
 
     public ProofOfDeliveryService(ProofOfDeliveryRepository pods,
-                                  ShipmentRepository shipments,
-                                  TripRepository trips,
-                                  TripShipmentRepository tripShipments,
-                                  DispatchStopRepository dispatchStops,
-                                  ShipmentTrackingEventRepository trackingEvents,
-                                  ShipmentService shipmentService) {
+            ShipmentRepository shipments,
+            TripRepository trips,
+            TripShipmentRepository tripShipments,
+            DispatchStopRepository dispatchStops,
+            ShipmentTrackingEventRepository trackingEvents,
+            ShipmentService shipmentService,
+            PodEvidenceService evidenceService) {
         this.pods = pods;
         this.shipments = shipments;
         this.trips = trips;
@@ -50,18 +52,21 @@ public class ProofOfDeliveryService {
         this.dispatchStops = dispatchStops;
         this.trackingEvents = trackingEvents;
         this.shipmentService = shipmentService;
+        this.evidenceService = evidenceService;
     }
 
     @Transactional
     public PodResponse create(PodRequest request) {
         UUID tenantId = TenantContext.getTenantId();
-        if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
+        if (tenantId == null)
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
         if (request == null || request.shipmentId() == null
                 || request.recipientName() == null || request.recipientName().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Shipment and recipient name are required");
         }
 
-        // Lock in a consistent order (trip, then shipment) with TripService.start/complete.
+        // Lock in a consistent order (trip, then shipment) with
+        // TripService.start/complete.
         Trip trip = null;
         if (request.tripId() != null) {
             trip = trips.findLockedByIdAndTenantId(request.tripId(), tenantId)
@@ -84,6 +89,19 @@ public class ProofOfDeliveryService {
         }
 
         boolean success = request.failureReason() == null || request.failureReason().isBlank();
+        if (success) {
+            // Backend-enforced: staff may not bypass the Delivery screen with a
+            // fake https:// URL or mark goods delivered without actual files.
+            boolean hasSignature = request.signatureUri() != null && !request.signatureUri().isBlank();
+            boolean hasPhoto = request.photoUri() != null && !request.photoUri().isBlank();
+            if (!hasSignature && !hasPhoto)
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Successful delivery requires stored signature or photo evidence");
+            if (hasSignature)
+                evidenceService.assertOwnedByShipment(shipment.getId(), request.signatureUri());
+            if (hasPhoto)
+                evidenceService.assertOwnedByShipment(shipment.getId(), request.photoUri());
+        }
         if (success && pods.hasSuccessfulDeliveryEvidence(tenantId, shipment.getId())) {
             throw conflict("Successful proof of delivery already exists for this shipment");
         }
@@ -108,7 +126,8 @@ public class ProofOfDeliveryService {
                     && sameLocation(trip.getDestinationAddress(), shipment.getDestinationAddress());
             if (currentStatus == ShipmentStatus.IN_TRANSIT) {
                 if (trip == null || (!atFinalDestinationStop && !completedTripAtDestination)) {
-                    throw conflict("An IN_TRANSIT shipment can only be delivered after its assigned trip reaches the final destination");
+                    throw conflict(
+                            "An IN_TRANSIT shipment can only be delivered after its assigned trip reaches the final destination");
                 }
             }
             // Even legacy shipments already marked DELIVERED must not accept POD
@@ -161,7 +180,8 @@ public class ProofOfDeliveryService {
                     blankToNull(request.photoUri()), deliveredAt, request.latitude(), request.longitude(),
                     failureReason, blankToNull(request.notes())));
         } catch (DataIntegrityViolationException ex) {
-            // Database partial uniqueness is the concurrency-safe guard for one successful POD.
+            // Database partial uniqueness is the concurrency-safe guard for one successful
+            // POD.
             throw conflict("A successful proof of delivery already exists for this shipment");
         }
 
@@ -185,8 +205,10 @@ public class ProofOfDeliveryService {
     @Transactional(readOnly = true)
     public PodResponse get(UUID shipmentId) {
         UUID tenantId = TenantContext.getTenantId();
-        if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
-        // Prefer successful evidence when present; otherwise show the latest failed attempt.
+        if (tenantId == null)
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tenant context is missing");
+        // Prefer successful evidence when present; otherwise show the latest failed
+        // attempt.
         return pods.findSuccessfulByTenantAndShipment(tenantId, shipmentId).stream()
                 .findFirst()
                 .or(() -> pods.findFirstByTenantIdAndShipmentIdOrderByDeliveredAtDesc(tenantId, shipmentId))
@@ -195,7 +217,8 @@ public class ProofOfDeliveryService {
     }
 
     private static boolean sameLocation(String first, String second) {
-        if (first == null || second == null) return false;
+        if (first == null || second == null)
+            return false;
         return first.trim().replaceAll("\\s+", " ")
                 .equalsIgnoreCase(second.trim().replaceAll("\\s+", " "));
     }
@@ -205,7 +228,8 @@ public class ProofOfDeliveryService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Latitude and longitude must be supplied together");
         }
-        if (latitude == null) return;
+        if (latitude == null)
+            return;
         if (!Double.isFinite(latitude) || !Double.isFinite(longitude)
                 || latitude < -90d || latitude > 90d || longitude < -180d || longitude > 180d) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid proof-of-delivery coordinates");

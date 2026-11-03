@@ -7,6 +7,7 @@ import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+import org.springframework.boot.autoconfigure.flyway.FlywayDataSource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -25,7 +26,14 @@ import java.util.UUID;
 @Configuration
 public class JpaTenantConfig {
 
+    /**
+     * Schema migrations must bypass the application tenant wrapper: Flyway
+     * runs before a JWT establishes TenantContext. Do not use the primary
+     * TenantAwareDataSource for migrations. Dedicated SPRING_FLYWAY_* credentials
+     * remain supported through Spring Boot's native Flyway properties.
+     */
     @Bean(name = "rawDataSource")
+    @FlywayDataSource
     public HikariDataSource rawDataSource(
             DataSourceProperties properties,
             Environment environment) {
@@ -165,8 +173,10 @@ public class JpaTenantConfig {
     }
 
     /**
-     * Primary transaction manager for JPA repositories and tenant-scoped domain services.
-     * Authentication JDBC operations deliberately use authTransactionManager from AuthDataConfig.
+     * Primary transaction manager for JPA repositories and tenant-scoped domain
+     * services.
+     * Authentication JDBC operations deliberately use authTransactionManager from
+     * AuthDataConfig.
      */
     @Bean(name = "transactionManager")
     @Primary

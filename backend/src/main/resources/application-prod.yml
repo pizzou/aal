@@ -5,7 +5,7 @@ spring:
       max-file-size: 8MB
       max-request-size: 9MB
   datasource:
-    url: ${SPRING_DATASOURCE_URL:${DB_URL:}}
+    url: ${SPRING_DATASOURCE_URL:${DB_URL:${DATABASE_URL:}}}
     username: ${SPRING_DATASOURCE_USERNAME:${DB_USERNAME:}}
     password: ${SPRING_DATASOURCE_PASSWORD:${DB_PASSWORD:}}
     driver-class-name: org.postgresql.Driver
@@ -28,11 +28,13 @@ spring:
           time_zone: UTC
   flyway:
     enabled: true
-    # Run schema changes as a dedicated non-superuser migration role. The
-    # runtime application user must NOT hold CREATE privileges on the schema.
-    url: ${SPRING_FLYWAY_URL:${SPRING_DATASOURCE_URL}}
-    user: ${SPRING_FLYWAY_USER}
-    password: ${SPRING_FLYWAY_PASSWORD}
+    # Flyway uses the raw (non-tenant-wrapped) Hikari datasource selected by
+    # @FlywayDataSource in JpaTenantConfig when no dedicated migration account
+    # is configured. When SPRING_FLYWAY_URL / SPRING_FLYWAY_USER /
+    # SPRING_FLYWAY_PASSWORD are set, Spring Boot binds those properties
+    # directly and runs Flyway using the dedicated migration credentials.
+    # Do not add mandatory ${SPRING_FLYWAY_*} placeholders here: services on
+    # Render that are not started by Docker Compose may not supply them.
     locations: classpath:db/migration
     validate-on-migrate: true
     clean-disabled: true

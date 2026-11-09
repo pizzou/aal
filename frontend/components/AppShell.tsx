@@ -14,12 +14,29 @@ type NavItem = {
   primary?: boolean;
 };
 
-// Seven sequential client stages. Technical operations are tools within the
-// shipment stage, not extra steps in the commercial lifecycle.
+// Operational workspaces and business workflows, without numbered navigation.
+// Technical operations remain tools within the shipment lifecycle.
 const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   {
+    section: "COMMAND CENTER",
+    label: "Command Center",
+    href: "/aal-control-tower",
+    icon: "grid",
+    primary: true,
+    roles: [
+      "ADMIN",
+      "MANAGER",
+      "OPERATIONS",
+      "SALES",
+      "FINANCE",
+      "DISPATCH",
+      "WAREHOUSE",
+      "AIR_CARGO",
+    ],
+  },
+  {
     section: "WORKFLOW",
-    label: "1. Customer",
+    label: "Customers",
     href: "/commercial?tab=customers",
     icon: "grid",
     primary: true,
@@ -27,7 +44,7 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "WORKFLOW",
-    label: "2. Quotes",
+    label: "Quotations",
     href: "/commercial",
     icon: "chart",
     primary: true,
@@ -35,7 +52,7 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "WORKFLOW",
-    label: "3. Shipment",
+    label: "Shipments",
     href: "/shipments",
     icon: "ship",
     primary: true,
@@ -43,7 +60,7 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "WORKFLOW",
-    label: "4. Delivery / POD",
+    label: "Delivery & POD",
     href: "/deliveries",
     icon: "truck",
     primary: true,
@@ -58,7 +75,7 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "WORKFLOW",
-    label: "5. Invoice",
+    label: "Invoices",
     href: "/billing",
     icon: "money",
     primary: true,
@@ -66,7 +83,7 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "WORKFLOW",
-    label: "6. Payment",
+    label: "Payments",
     href: "/payments",
     icon: "money",
     primary: true,
@@ -74,28 +91,11 @@ const internalNav: Array<NavItem & { section: string; roles?: string[] }> = [
   },
   {
     section: "WORKFLOW",
-    label: "7. Report",
+    label: "Reports",
     href: "/reports",
     icon: "chart",
     primary: true,
     roles: ["ADMIN", "MANAGER", "FINANCE", "OPERATIONS", "SALES"],
-  },
-  {
-    section: "WORKSPACES",
-    label: "Home / overview",
-    href: "/aal-control-tower",
-    icon: "grid",
-    primary: true,
-    roles: [
-      "ADMIN",
-      "MANAGER",
-      "OPERATIONS",
-      "SALES",
-      "FINANCE",
-      "DISPATCH",
-      "WAREHOUSE",
-      "AIR_CARGO",
-    ],
   },
   {
     section: "WORKSPACES",
@@ -538,43 +538,43 @@ function GuidedNextStep({ path, role }: { path: string; role: string | null }) {
     customerTab && sales
       ? {
           href: "/commercial",
-          label: "2. Quotes",
+          label: "Quotations",
           detail: "Select a customer and prepare the quotation",
         }
       : path === "/commercial" && sales
         ? {
             href: "/shipments",
-            label: "3. Shipment",
+            label: "Shipments",
             detail: "Convert an accepted quotation to a shipment",
           }
         : (path === "/shipments" || path.startsWith("/shipments/")) && ops
           ? {
               href: "/deliveries",
-              label: "4. Delivery / POD",
+              label: "Delivery & POD",
               detail: "Complete transport and record genuine delivery evidence",
             }
           : path === "/deliveries" && finance
             ? {
                 href: "/billing",
-                label: "5. Invoice",
+                label: "Invoices",
                 detail: "Only after successful delivery and POD",
               }
             : path === "/billing" && finance
               ? {
                   href: "/payments",
-                  label: "6. Payment",
+                  label: "Payments",
                   detail: "Record funds only after receipt",
                 }
               : path === "/payments"
                 ? {
                     href: "/reports",
-                    label: "7. Report",
+                    label: "Reports",
                     detail: "Review issued invoices and collected payments",
                   }
                 : path === "/aal-control-tower" && sales
                   ? {
                       href: "/commercial?tab=customers",
-                      label: "1. Customer",
+                      label: "Customers",
                       detail: "Start by registering or finding a customer",
                     }
                   : null;

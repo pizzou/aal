@@ -8,7 +8,7 @@ import Icon from "@/components/Icon";
 
 const RESEND_COOLDOWN_SECONDS = 30;
 
-export default function LoginClient({ nextPath }: { nextPath?: string }) {
+export default function LoginClient() {
   const router = useRouter();
   const { login } = useAuth();
 
@@ -161,12 +161,11 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
 
     login(r.accessToken, r.tenantId, r.role);
 
-    const destination =
-      nextPath && nextPath.startsWith("/") && !nextPath.startsWith("/login")
-        ? nextPath
-        : "/aal-control-tower";
-
-    router.replace(r.mustChangePassword ? "/account/security" : destination);
+    // Every successful internal sign-in starts at the Command Center.
+    // Mandatory password changes still take precedence for account security.
+    router.replace(
+      r.mustChangePassword ? "/account/security" : "/aal-control-tower",
+    );
   }
 
   function backToCredentials() {

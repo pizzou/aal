@@ -33,9 +33,10 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
   }, [resendIn]);
 
   /**
-   * OTP delivery is a second HTTP request, started only AFTER login returns
-   * its signed challenge and the form has switched to the OTP screen.
-   * A timeout here must never send the user back to the password screen:
+   * A repeat OTP is sent only when the user explicitly presses Resend.
+   * The initial code is delivered synchronously by /api/auth/login before
+   * the server returns its signed challenge.
+   * A timeout during resend must not send the user back to the password screen:
    * Brevo may already have accepted the email even if its response was lost.
    */
   async function deliverCode(token: string) {
@@ -89,8 +90,9 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
 
     try {
       if (step === "credentials") {
-        // Password validation returns an OTP challenge immediately; email
-        // delivery follows only once the frontend has entered the OTP step.
+        // The backend sends the initial OTP and waits for Brevo acceptance
+        // before returning the challenge. Do not fire a second send request:
+        // doing so would immediately hit the 30-second OTP resend cooldown.
         const r = await authApi.login(email, password);
 
         if (r.otpRequired) {
@@ -101,8 +103,9 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
           }
           setChallenge(r.otpChallengeToken);
           setOtp("");
+          setCodeRequestAccepted(true);
+          setResendIn(RESEND_COOLDOWN_SECONDS);
           setStep("otp");
-          void deliverCode(r.otpChallengeToken);
           return;
         }
 
@@ -240,7 +243,9 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
             {step === "otp"
               ? sendingCode
                 ? `Sending a 6-digit verification code to ${email}…`
-                : `Enter the 6-digit verification code emailed to ${email}. Codes expire after 5 minutes.`
+                : codeRequestAccepted
+                  ? `The email provider accepted your verification code request for ${email}. Enter the 6-digit code when it arrives (valid for 5 minutes).`
+                  : `Email delivery was not confirmed. Check the error below or use Resend.`
               : "Sign in to the Aviation Africa Logistics operations control tower."}
           </p>
 
@@ -320,7 +325,7 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
               {busy
                 ? step === "otp"
                   ? "Verifying…"
-                  : "Authenticating…"
+                  : "Authenticating and sending email…"
                 : step === "otp"
                   ? "Verify & Enter"
                   : "Continue"}

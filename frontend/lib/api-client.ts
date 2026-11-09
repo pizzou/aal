@@ -223,9 +223,11 @@ const GET_TIMEOUT_MS = 20_000;
 const DASHBOARD_TIMEOUT_MS = 30_000;
 const DASHBOARD_OVERVIEW_TIMEOUT_MS = 25_000;
 const AUTH_SESSION_TIMEOUT_MS = 8_000;
-const AUTH_LOGIN_TIMEOUT_MS = 20_000;
+// Login now waits for the transactional email provider to accept the OTP.
+// Allow for the Render/DB response plus the bounded Brevo network call.
+const AUTH_LOGIN_TIMEOUT_MS = 65_000;
 // Brevo sender lookup and email submission may require two provider requests.
-// This longer deadline is safe now that the OTP form is already visible.
+// Resend stays on the OTP form, so the user can safely wait for the result.
 const AUTH_OTP_DELIVERY_TIMEOUT_MS = 35_000;
 // A verified POD upload must complete server-side malware scanning and persistence.
 const POD_EVIDENCE_UPLOAD_TIMEOUT_MS = 45_000;

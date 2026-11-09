@@ -239,8 +239,16 @@ public class AuthService {
                                                 u.id(), tenantId, u.tokenVersion());
 
                                 log.info(
-                                                "Authentication requires OTP userId={} email={}",
+                                                "Authentication requires OTP userId={} email={}; issuing and sending code before responding",
                                                 u.id(), maskEmail(email));
+
+                                // Never tell the browser that verification can continue until
+                                // the transactional email provider has accepted the OTP request.
+                                // This avoids the former two-request race where the login page
+                                // displayed the code-entry form without sending any email.
+                                stage = "send-initial-login-otp";
+                                sendLoginOtp(challenge);
+                                log.info("Initial login OTP accepted by email provider userId={}", u.id());
 
                                 return new AuthResponse(
                                                 null,
@@ -345,6 +353,7 @@ public class AuthService {
                         }
 
                         stage = "issue-otp";
+                        log.info("Login OTP delivery requested userId={}", u.id());
 
                         String otpCode = issueOtpIfNeeded(u, Instant.now(), true);
                         if (otpCode != null) {
@@ -352,6 +361,7 @@ public class AuthService {
                                         User mailUser = new User(tenantId, u.email(), "", u.role());
                                         mailUser.setDisplayName(u.displayName());
                                         mail.sendLoginOtp(mailUser, otpCode, OTP_MINUTES);
+                                        log.info("Login OTP provider accepted request userId={}", u.id());
                                 } catch (MailService.MailDeliveryException ex) {
                                         if (ex.isDeliveryUncertain()) {
                                                 // The provider may have accepted the email before
@@ -446,10 +456,9 @@ public class AuthService {
                                 tenantId);
 
                 /*
-                 * Code issuance only happens through /send-login-otp after the
-                 * frontend has already entered the OTP step. Delivery is synchronous
-                 * in that second request so its response can report provider failure,
-                 * without losing the user's verification screen on a network timeout.
+                 * The initial login and the resend endpoint both issue a code here.
+                 * Delivery is synchronous so the caller reports provider failures
+                 * rather than claiming an OTP email has been sent prematurely.
                  */
                 return code;
         }

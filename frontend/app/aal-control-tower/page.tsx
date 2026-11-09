@@ -453,6 +453,10 @@ export default function AalControlTower() {
     driverUtilizationPercent: 0,
   };
   const modeMix = Array.isArray(data?.modeMix) ? data.modeMix : [];
+  const topLanes = Array.isArray(data?.topLanes) ? data.topLanes : [];
+  const quotationStatus = Array.isArray(data?.quotationStatus)
+    ? data.quotationStatus
+    : [];
   const exceptionsList = Array.isArray(data?.exceptions) ? data.exceptions : [];
   const actions = Array.isArray(data?.actions) ? data.actions : [];
   const currency = financial.currency || "USD";
@@ -460,6 +464,39 @@ export default function AalControlTower() {
   const inTransit = operations.activeShipments;
   const delivered = operations.deliveredShipments;
   const exceptions = operations.exceptionShipments;
+  const operatingKpis =
+    data?.operatingKpis ??
+    ({
+      activeShipments: 0,
+      revenueInvoiced: 0,
+      outstanding: 0,
+      grossProfit: 0,
+      overdueReceivables: 0,
+      openQuotations: 0,
+      dueNext30Days: 0,
+      overallProfitMargin: 0,
+      openTasks: 0,
+      overdueTasks: 0,
+      wonQuotations: 0,
+      salesWinRate: 0,
+    } satisfies AdvancedDashboard["operatingKpis"]);
+  const collectionRate = Math.min(
+    100,
+    (financial.collected / Math.max(1, financial.billed)) * 100,
+  );
+  const receivablesShare = Math.min(
+    100,
+    (financial.receivables / Math.max(1, financial.billed)) * 100,
+  );
+  const vehicleReadiness =
+    fleet.totalVehicles > 0
+      ? (fleet.availableVehicles / fleet.totalVehicles) * 100
+      : 0;
+  const driverReadiness =
+    fleet.totalDrivers > 0
+      ? (fleet.availableDrivers / fleet.totalDrivers) * 100
+      : 0;
+  const capacityReadiness = (vehicleReadiness + driverReadiness) / 2;
 
   return (
     <main className="dashboard-page">
@@ -529,6 +566,115 @@ export default function AalControlTower() {
         <div className="alert dashboard-alert" role="status">
           {detailsWarning}
         </div>
+      )}
+
+      {(overview || data) && (
+        <section className="dashboard-hero">
+          <div className="dashboard-hero-primary">
+            <div className="dashboard-hero-copy">
+              <div className="eyebrow dashboard-hero-eyebrow">
+                EXECUTIVE OPERATIONS OVERVIEW
+              </div>
+              <h2>
+                Professional logistics visibility for daily decision-making.
+              </h2>
+              <p>
+                Monitor shipment execution, operational readiness, commercial
+                performance and cash exposure from one advanced control-tower
+                workspace.
+              </p>
+            </div>
+            <div className="dashboard-hero-metrics">
+              <HeroMetric
+                label="Service level"
+                value={pct(operations.onTimeRatePercent)}
+                note={`${operations.delayedShipments.toLocaleString()} delayed shipments`}
+                tone="success"
+              />
+              <HeroMetric
+                label="Capacity ready"
+                value={pct(capacityReadiness)}
+                note={`${fleet.availableVehicles} vehicles · ${fleet.availableDrivers} drivers available`}
+                tone="info"
+              />
+              <HeroMetric
+                label="Cash collected"
+                value={money(financial.collected, currency)}
+                note={`${pct(collectionRate)} of billed revenue collected`}
+                tone="neutral"
+              />
+              <HeroMetric
+                label="Gross margin"
+                value={pct(financial.grossMarginPercent)}
+                note={`${money(financial.grossMargin, currency)} gross margin generated`}
+                tone="warning"
+              />
+            </div>
+          </div>
+
+          <div className="dashboard-hero-side">
+            <div className="dashboard-hero-card">
+              <div className="dashboard-mini-title">Operational pulse</div>
+              <div className="dashboard-chip-grid">
+                <div className="dashboard-chip">
+                  <span>Due today</span>
+                  <strong>{operations.dueToday.toLocaleString()}</strong>
+                  <small>Shipments needing execution follow-up</small>
+                </div>
+                <div className="dashboard-chip">
+                  <span>Unassigned</span>
+                  <strong>
+                    {operations.unassignedShipments.toLocaleString()}
+                  </strong>
+                  <small>Jobs still waiting allocation</small>
+                </div>
+                <div className="dashboard-chip">
+                  <span>Receivables</span>
+                  <strong>{money(financial.receivables, currency)}</strong>
+                  <small>
+                    {pct(receivablesShare)} of billed value still outstanding
+                  </small>
+                </div>
+                <div className="dashboard-chip">
+                  <span>Open tasks</span>
+                  <strong>{operatingKpis.openTasks.toLocaleString()}</strong>
+                  <small>
+                    {operatingKpis.overdueTasks.toLocaleString()} overdue tasks
+                    need escalation
+                  </small>
+                </div>
+              </div>
+            </div>
+
+            <div className="dashboard-hero-card dashboard-hero-card-compact">
+              <div className="dashboard-mini-title">Commercial momentum</div>
+              <div className="dashboard-mini-columns">
+                <div>
+                  <span>Open quotations</span>
+                  <strong>
+                    {operatingKpis.openQuotations.toLocaleString()}
+                  </strong>
+                </div>
+                <div>
+                  <span>Sales win rate</span>
+                  <strong>{pct(operatingKpis.salesWinRate)}</strong>
+                </div>
+                <div>
+                  <span>Won quotations</span>
+                  <strong>
+                    {operatingKpis.wonQuotations.toLocaleString()}
+                  </strong>
+                </div>
+                <div>
+                  <span>Due next 30 days</span>
+                  <strong>
+                    {operatingKpis.dueNext30Days.toLocaleString()}
+                  </strong>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       )}
 
       {!data && !overview ? (
@@ -668,6 +814,20 @@ export default function AalControlTower() {
                     {trend.map((x) => (
                       <span key={x.date}>{x.date.slice(5)}</span>
                     ))}
+                  </div>
+                  <div className="dashboard-inline-metrics">
+                    <InlineMetric
+                      label="Billed"
+                      value={money(financial.billed, currency)}
+                    />
+                    <InlineMetric
+                      label="Operating cost"
+                      value={money(financial.operatingCost, currency)}
+                    />
+                    <InlineMetric
+                      label="Gross profit"
+                      value={money(operatingKpis.grossProfit, currency)}
+                    />
                   </div>
                 </div>
 
@@ -881,14 +1041,56 @@ export default function AalControlTower() {
                 </div>
 
                 <div className="dashboard-brand-card">
-                  <img
-                    src="/branding/aal-brand.png"
-                    alt="Aviation Africa Logistics Ltd — Global Reach African Roots"
-                  />
-                  <div className="dashboard-brand-overlay">
-                    <span>SMARTER LOGISTICS</span>
-                    <strong>Across Africa &amp; Beyond</strong>
-                    <small>Air · Ocean · Road · Rail · Warehousing</small>
+                  <div className="dashboard-brand-overlay dashboard-brand-overlay-static">
+                    <span>NETWORK PERFORMANCE</span>
+                    <strong>Top lanes and service mix</strong>
+                    <small>
+                      A cleaner executive view of where operational volume and
+                      demand are currently concentrated.
+                    </small>
+                    <div className="dashboard-lane-list">
+                      {topLanes.slice(0, 3).map((lane) => (
+                        <div
+                          className="dashboard-lane-item"
+                          key={`${lane.lane}-${lane.shipments}`}
+                        >
+                          <div>
+                            <strong>{lane.lane}</strong>
+                            <small>
+                              {lane.shipments.toLocaleString()} shipments ·{" "}
+                              {lane.delayedShipments.toLocaleString()} delayed
+                            </small>
+                          </div>
+                          <span>{lane.shipments.toLocaleString()}</span>
+                        </div>
+                      ))}
+                      {!topLanes.length && (
+                        <div className="dashboard-empty dashboard-empty-plain">
+                          No lane concentration data available.
+                        </div>
+                      )}
+                    </div>
+                    <div className="dashboard-pill-row">
+                      {modeMix.slice(0, 4).map((item, index) => (
+                        <span className="dashboard-pill" key={item.mode}>
+                          <i className={`legend-dot dot-${index}`} />
+                          {modeLabel(item.mode)} {pct(item.sharePercent)}
+                        </span>
+                      ))}
+                    </div>
+                    {!!quotationStatus.length && (
+                      <div className="dashboard-pill-row dashboard-pill-row-subtle">
+                        {quotationStatus.slice(0, 3).map((item) => (
+                          <span
+                            className="dashboard-pill dashboard-pill-subtle"
+                            key={item.status}
+                          >
+                            {item.status.replaceAll("_", " ")}:{" "}
+                            {item.count.toLocaleString()}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </section>
@@ -1074,6 +1276,35 @@ function QuickAction({
       <strong>{label}</strong>
       <span>→</span>
     </Link>
+  );
+}
+
+function HeroMetric({
+  label,
+  value,
+  note,
+  tone,
+}: {
+  label: string;
+  value: string;
+  note: string;
+  tone: "success" | "info" | "warning" | "neutral";
+}) {
+  return (
+    <div className={`dashboard-hero-metric dashboard-hero-metric-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{note}</small>
+    </div>
+  );
+}
+
+function InlineMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="dashboard-inline-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 

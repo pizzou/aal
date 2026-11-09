@@ -67,7 +67,7 @@ app:
     url: ${APP_FRONTEND_URL:https://aal-a.vercel.app}
   mail:
     enabled: ${AAL_MAIL_ENABLED:true}
-    from: ${AAL_BREVO_SENDER_EMAIL:${NOTIFICATIONS_FROM_ADDRESS:pmpumuropizzou@gmail.com}}
+    from: ${AAL_BREVO_SENDER_EMAIL:${NOTIFICATIONS_FROM_ADDRESS:}}
     sender-name: ${AAL_MAIL_SENDER_NAME:Aviation Africa Logistics Ltd}
     brevo-url: ${BREVO_API_URL:https://api.brevo.com/v3/smtp/email}
     brevo-senders-url: ${BREVO_SENDERS_API_URL:https://api.brevo.com/v3/senders}
@@ -84,7 +84,7 @@ notifications:
     enabled: ${NOTIFICATIONS_SMTP_ENABLED:false}
   brevo:
     enabled: ${NOTIFICATIONS_BREVO_ENABLED:true}
-  from-address: ${NOTIFICATIONS_FROM_ADDRESS:${AAL_BREVO_SENDER_EMAIL:pmpumuropizzou@gmail.com}}
+  from-address: ${NOTIFICATIONS_FROM_ADDRESS:${AAL_BREVO_SENDER_EMAIL:}}
 
 flightstatus:
   aviationstack:

@@ -20,6 +20,7 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
+  const [codeRequestAccepted, setCodeRequestAccepted] = useState(false);
   const [resendIn, setResendIn] = useState(0);
   const deliveryAttempt = useRef(0);
 
@@ -40,6 +41,7 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
   async function deliverCode(token: string) {
     const attempt = ++deliveryAttempt.current;
     setSendingCode(true);
+    setCodeRequestAccepted(false);
     setError("");
     // Apply the cooldown even if the transport times out; blindly retrying
     // might invalidate the code that was already delivered.
@@ -47,6 +49,7 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
 
     try {
       await authApi.sendLoginOtp(token);
+      if (attempt === deliveryAttempt.current) setCodeRequestAccepted(true);
     } catch (err) {
       if (attempt !== deliveryAttempt.current) return;
       if (
@@ -167,6 +170,7 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
     // Ignore the completion of any still-running email request from this step.
     deliveryAttempt.current += 1;
     setSendingCode(false);
+    setCodeRequestAccepted(false);
     setStep("credentials");
     setChallenge(null);
     setOtp("");
@@ -294,6 +298,15 @@ export default function LoginClient({ nextPath }: { nextPath?: string }) {
                 Requesting your verification email… You can stay on this screen.
               </p>
             )}
+            {step === "otp" &&
+              codeRequestAccepted &&
+              !sendingCode &&
+              !error && (
+                <p className="page-subtitle" role="status" aria-live="polite">
+                  Verification email accepted for sending. Check your inbox and
+                  spam folder.
+                </p>
+              )}
             {error && (
               <div className="alert alert-error" role="alert">
                 {error}

@@ -53,8 +53,8 @@ public class BrevoSenderResolver {
     private volatile Instant cachedAt;
 
     public BrevoSenderResolver(
-            @Value("${app.mail.from:pa.mpumuro@gmail.com}") String explicitSender,
-            @Value("${notifications.from-address:pa.mpumuro@gmail.com}") String notificationSender,
+            @Value("${app.mail.from:}") String explicitSender,
+            @Value("${notifications.from-address:}") String notificationSender,
             @Value("${app.mail.brevo-api-key:}") String apiKey,
             @Value("${app.mail.brevo-senders-url:https://api.brevo.com/v3/senders}") String sendersUrl,
             @Value("${app.mail.sender-name:Aviation Africa Logistics Ltd}") String senderName,

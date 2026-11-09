@@ -357,16 +357,18 @@ public class AuthService {
                                                 // The provider may have accepted the email before
                                                 // the network failed. Keep the one-time code valid;
                                                 // do not force the recipient to discard an emailed OTP.
-                                                log.warn("OTP email delivery unconfirmed userId={}", u.id());
+                                                log.warn("OTP email delivery unconfirmed userId={} reason={}", u.id(),
+                                                                ex.getMessage());
                                                 throw new ResponseStatusException(
                                                                 HttpStatus.GATEWAY_TIMEOUT,
                                                                 "Verification email delivery was not confirmed. If a code arrives, use it; otherwise request another after the cooldown.",
                                                                 ex);
                                         }
+                                        log.error("OTP email rejected userId={} reason={}", u.id(), ex.getMessage());
                                         clearOtp(u.id());
                                         throw new ResponseStatusException(
                                                         HttpStatus.SERVICE_UNAVAILABLE,
-                                                        "Unable to send the verification code. Please try again shortly.",
+                                                        "Verification email was rejected by the email provider. Contact your administrator to check the Brevo sender and API configuration, then resend.",
                                                         ex);
                                 }
                         }

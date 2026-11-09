@@ -46,15 +46,34 @@ public class ProductionConfigurationValidator {
                         "Production cannot enable both SMTP and Brevo operational notification adapters");
             }
 
-            if (otpRequired && (!mailEnabled || brevoApiKey == null || brevoApiKey.isBlank())) {
+            if (otpRequired && !mailEnabled) {
                 throw new IllegalStateException(
-                        "Production OTP requires transactional email to be enabled and BREVO_API_KEY to be configured");
+                        "AAL production configuration invalid: AAL_MAIL_ENABLED=true is required for login OTP");
             }
-
+            if (otpRequired && (brevoApiKey == null || brevoApiKey.isBlank())) {
+                throw new IllegalStateException(
+                        "AAL production configuration invalid: BREVO_API_KEY is missing. "
+                                + "Set the transactional email API key in the Render backend Environment; never commit it to source code");
+            }
+            if (otpRequired || (mailEnabled && brevoNotificationsEnabled)) {
+                validateHttpsProviderUrl(brevoUrl, "BREVO_API_URL");
+                validateHttpsProviderUrl(brevoSendersUrl, "BREVO_SENDERS_API_URL");
+            }
             if (mailEnabled && brevoNotificationsEnabled) {
-                validateHttpsProviderUrl(brevoUrl, "Brevo API URL");
-                validateHttpsProviderUrl(brevoSendersUrl, "Brevo sender registry URL");
-                validateSender(mailFrom, notificationFrom, senderDomain);
+                // BrevoSenderResolver already supports securely discovering an active
+                // verified sender from the Brevo registry when no explicit sender
+                // is configured. Do not prevent application startup solely because
+                // AAL_BREVO_SENDER_EMAIL is absent: fail closed at send time if
+                // discovery cannot verify an unambiguous sender.
+                String sender = mailFrom != null && !mailFrom.isBlank()
+                        ? mailFrom.trim()
+                        : notificationFrom == null ? "" : notificationFrom.trim();
+                if (!sender.isBlank()) {
+                    validateSender(mailFrom, notificationFrom, senderDomain);
+                } else {
+                    log.warn("No explicit AAL_BREVO_SENDER_EMAIL configured; login OTP will "
+                            + "attempt active sender discovery from Brevo. Configure a verified sender explicitly if discovery fails");
+                }
             }
         } else if (mailEnabled && brevoNotificationsEnabled && smtpEnabled) {
             throw new IllegalStateException("Do not enable SMTP and Brevo notification adapters at the same time");
@@ -154,7 +173,8 @@ public class ProductionConfigurationValidator {
         // external sender such as a Gmail address. The optional AAL_EMAIL_DOMAIN
         // setting is used only when resolving discovered senders automatically.
         if (domain != null && !domain.isBlank()) {
-            log.info("Configured Brevo sender uses explicit provider-verified identity; sender-domain discovery filter remains enabled for fallback selection");
+            log.info(
+                    "Configured Brevo sender uses explicit provider-verified identity; sender-domain discovery filter remains enabled for fallback selection");
         }
     }
 

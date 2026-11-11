@@ -247,6 +247,9 @@ public class SecurityConfig {
                                                                                 HttpMethod.POST.name()),
                                                                 new AntPathRequestMatcher(
                                                                                 "/api/finance/hardening/tax-rules",
+                                                                                HttpMethod.POST.name()),
+                                                                new AntPathRequestMatcher(
+                                                                                "/api/finance/hardening/rwanda-vat-registration",
                                                                                 HttpMethod.POST.name()))
                                                 .hasAnyRole("ADMIN", "FINANCE")
 

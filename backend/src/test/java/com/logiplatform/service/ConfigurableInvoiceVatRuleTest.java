@@ -17,9 +17,13 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-/** No database or Spring context is needed: tests the configured-rule selection contract. */
+/**
+ * Statutory Rwanda defaults must not be overridden by custom tenant
+ * percentages.
+ */
 class ConfigurableInvoiceVatRuleTest {
     private final UUID tenantId = UUID.randomUUID();
+    private final LocalDate issueDate = LocalDate.of(2026, 11, 11);
 
     @AfterEach
     void clearTenant() {
@@ -27,33 +31,61 @@ class ConfigurableInvoiceVatRuleTest {
     }
 
     @Test
-    void invoiceRuleUsesFinanceApprovedRateInsteadOfHardcodedEighteenPercent() {
+    void vatRegisteredRwandaCompanyUsesStatutoryEighteenPercentNotHistoricalCustomRate() {
         TenantContext.setTenantId(tenantId);
         JdbcTemplate database = mock(JdbcTemplate.class);
         when(database.queryForList(anyString(), eq(tenantId)))
-                .thenReturn(List.of(Map.of("jurisdiction_code", "RW")));
+                .thenReturn(List.of(Map.of("jurisdiction_code", "RW", "country_code", "RW",
+                        "vat_registration_status", "REGISTERED")));
         when(database.queryForList(anyString(), eq(tenantId), eq("RW"),
-                any(LocalDate.class), any(LocalDate.class), eq("RWF")))
-                .thenReturn(List.of(Map.of(
-                        "jurisdiction_code", "RW",
-                        "code", "VAT-APPROVED",
-                        "rate", new BigDecimal("17.5000"),
-                        "currency", "RWF")));
-
+                eq(RwandaInvoiceTaxPolicy.STANDARD), eq(issueDate), eq(issueDate)))
+                .thenReturn(List.of(Map.of("jurisdiction_code", "RW",
+                        "code", RwandaInvoiceTaxPolicy.STANDARD, "rate", new BigDecimal("18.0000"),
+                        "inclusive", false)));
         FinancialHardeningService service = new FinancialHardeningService(database, null, null, null, null);
-        Map<String, Object> selected = service.defaultInvoiceVatRule(LocalDate.of(2026, 10, 28), "RWF");
-        assertEquals(new BigDecimal("17.5000"), selected.get("rate"));
-        assertEquals("VAT-APPROVED", selected.get("code"));
+        Map<String, Object> selected = service.defaultInvoiceVatRule(issueDate, "RWF");
+        assertEquals(0, new BigDecimal("18").compareTo((BigDecimal) selected.get("rate")));
+        assertEquals(RwandaInvoiceTaxPolicy.STANDARD, selected.get("code"));
     }
 
     @Test
-    void absenceOfVerifiedCompanySetupStillBlocksInvoicing() {
+    void nonVatRegisteredRwandaCompanyCannotDefaultToEighteenPercent() {
+        TenantContext.setTenantId(tenantId);
+        JdbcTemplate database = mock(JdbcTemplate.class);
+        when(database.queryForList(anyString(), eq(tenantId)))
+                .thenReturn(List.of(Map.of("jurisdiction_code", "RW", "country_code", "RW",
+                        "vat_registration_status", "NOT_REGISTERED")));
+        when(database.queryForList(anyString(), eq(tenantId), eq("RW"),
+                eq(RwandaInvoiceTaxPolicy.NONVAT), eq(issueDate), eq(issueDate)))
+                .thenReturn(List.of(Map.of("jurisdiction_code", "RW",
+                        "code", RwandaInvoiceTaxPolicy.NONVAT, "rate", BigDecimal.ZERO,
+                        "inclusive", false)));
+        FinancialHardeningService service = new FinancialHardeningService(database, null, null, null, null);
+        assertEquals(RwandaInvoiceTaxPolicy.NONVAT,
+                service.defaultInvoiceVatRule(issueDate, "RWF").get("code"));
+    }
+
+    @Test
+    void unverifiedVatRegistrationBlocksInvoicing() {
+        TenantContext.setTenantId(tenantId);
+        JdbcTemplate database = mock(JdbcTemplate.class);
+        when(database.queryForList(anyString(), eq(tenantId)))
+                .thenReturn(List.of(Map.of("jurisdiction_code", "RW", "country_code", "RW",
+                        "vat_registration_status", "UNVERIFIED")));
+        FinancialHardeningService service = new FinancialHardeningService(database, null, null, null, null);
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.defaultInvoiceVatRule(issueDate, "RWF"));
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, error.getStatusCode());
+    }
+
+    @Test
+    void missingCompanySetupStillBlocksInvoicing() {
         TenantContext.setTenantId(tenantId);
         JdbcTemplate database = mock(JdbcTemplate.class);
         when(database.queryForList(anyString(), eq(tenantId))).thenReturn(List.of());
         FinancialHardeningService service = new FinancialHardeningService(database, null, null, null, null);
         ResponseStatusException error = assertThrows(ResponseStatusException.class,
-                () -> service.defaultInvoiceVatRule(LocalDate.of(2026, 10, 28), "RWF"));
+                () -> service.defaultInvoiceVatRule(issueDate, "RWF"));
         assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, error.getStatusCode());
     }
 }

@@ -78,6 +78,9 @@ public class CommercialInvoice {
     @Column(name = "tax_jurisdiction_code", length = 80)
     private String taxJurisdictionCode;
 
+    @Column(name = "tax_basis_reference", length = 255)
+    private String taxBasisReference;
+
     @Column(name = "withholding_amount", nullable = false, precision = 19, scale = 4)
     private BigDecimal withholdingAmount = BigDecimal.ZERO;
 
@@ -202,6 +205,10 @@ public class CommercialInvoice {
 
     public String getTaxJurisdictionCode() {
         return taxJurisdictionCode;
+    }
+
+    public String getTaxBasisReference() {
+        return taxBasisReference;
     }
 
     public BigDecimal getWithholdingAmount() {

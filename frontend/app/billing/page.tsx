@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useAuth } from "@/lib/auth-context";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
@@ -15,7 +16,18 @@ import {
   financeIncomeConfigurationApi,
 } from "@/lib/api-client";
 
+type TaxTreatment = {
+  code: string;
+  label: string;
+  description: string;
+  legalBasis: string;
+  rate: number;
+  requiresEvidence: boolean;
+};
+
 type TaxPreview = {
+  treatmentCode?: string;
+  evidenceReference?: string;
   shipmentId: string;
   currency: string;
   taxName: string;
@@ -110,6 +122,8 @@ function makeIdempotencyKey() {
 }
 
 export default function BillingPage() {
+  const { role } = useAuth();
+  const canApproveSpecialVat = role === "ADMIN" || role === "FINANCE";
   const [requestedShipmentId, setRequestedShipmentId] = useState("");
   const [requestedInvoiceId, setRequestedInvoiceId] = useState("");
   const [workflowAwbNumber, setWorkflowAwbNumber] = useState("");
@@ -126,6 +140,10 @@ export default function BillingPage() {
   const [invoiceShipment, setInvoiceShipment] = useState("");
   const [invoiceDueDate, setInvoiceDueDate] = useState("");
   const [invoiceOwner, setInvoiceOwner] = useState("");
+  const [taxTreatments, setTaxTreatments] = useState<TaxTreatment[]>([]);
+  const [taxTreatment, setTaxTreatment] = useState("RRA-RW-VAT18");
+  const [taxEvidenceReference, setTaxEvidenceReference] = useState("");
+  const [taxOptionsError, setTaxOptionsError] = useState("");
   const [taxPreview, setTaxPreview] = useState<TaxPreview | null>(null);
   const [taxPreviewError, setTaxPreviewError] = useState("");
   const [taxPreviewLoading, setTaxPreviewLoading] = useState(false);
@@ -356,18 +374,77 @@ export default function BillingPage() {
 
   useEffect(() => {
     let cancelled = false;
+    setTaxTreatments([]);
+    setTaxOptionsError("");
+    if (readinessLoading || !taxReadiness?.ready) return;
+    const currency = (selectedInvoiceShipment?.currency || "USD")
+      .trim()
+      .toUpperCase();
+    apiFetch<TaxTreatment[]>(
+      `/api/billing/tax-treatments?currency=${encodeURIComponent(currency)}`,
+      { cache: "no-store" },
+    )
+      .then((available) => {
+        if (cancelled) return;
+        setTaxTreatments(available);
+        setTaxTreatment((previous) =>
+          available.some((item) => item.code === previous)
+            ? previous
+            : available[0]?.code || "",
+        );
+      })
+      .catch((exception) => {
+        if (!cancelled)
+          setTaxOptionsError(
+            exception instanceof Error
+              ? exception.message
+              : "Unable to load approved VAT treatments",
+          );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    readinessLoading,
+    taxReadiness?.ready,
+    selectedInvoiceShipment?.currency,
+  ]);
+
+  const chosenTaxTreatment = taxTreatments.find(
+    (item) => item.code === taxTreatment,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
     setTaxPreview(null);
     setTaxPreviewError("");
-    if (!invoiceShipment || readinessLoading || !taxReadiness?.ready) {
+    if (
+      !invoiceShipment ||
+      readinessLoading ||
+      !taxReadiness?.ready ||
+      !chosenTaxTreatment
+    ) {
       setTaxPreviewLoading(false);
       return () => {
         cancelled = true;
       };
     }
+    if (chosenTaxTreatment.requiresEvidence && !taxEvidenceReference.trim()) {
+      setTaxPreviewError(
+        "Enter the supporting customs, export, or exemption document reference for this treatment.",
+      );
+      return;
+    }
     setTaxPreviewLoading(true);
     apiFetch<TaxPreview>(
-      `/api/billing/shipments/${invoiceShipment}/invoice/vat-preview`,
-      { method: "GET" },
+      `/api/billing/shipments/${invoiceShipment}/invoice/rra-preview`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          taxTreatment,
+          taxEvidenceReference: taxEvidenceReference.trim() || undefined,
+        }),
+      },
     )
       .then((preview) => {
         if (!cancelled) setTaxPreview(preview);
@@ -386,7 +463,14 @@ export default function BillingPage() {
     return () => {
       cancelled = true;
     };
-  }, [invoiceShipment, readinessLoading, taxReadiness?.ready]);
+  }, [
+    invoiceShipment,
+    readinessLoading,
+    taxReadiness?.ready,
+    taxTreatment,
+    taxEvidenceReference,
+    chosenTaxTreatment?.code,
+  ]);
 
   function shipmentForInvoice(invoice: Invoice) {
     return shipments.find((shipment) => shipment.id === invoice.shipmentId);
@@ -426,9 +510,14 @@ export default function BillingPage() {
       setSaving(false);
       return;
     }
-    if (!taxPreview) {
+    if (
+      !taxPreview ||
+      !chosenTaxTreatment ||
+      taxPreview.treatmentCode !== taxTreatment ||
+      (taxPreview.evidenceReference || "") !== taxEvidenceReference.trim()
+    ) {
       setError(
-        "Invoice tax has not been confirmed by the backend. Complete Invoice Tax Setup first, then refresh the invoice preview.",
+        "The selected RRA tax treatment has not been confirmed by the backend. Review the required document reference and tax preview.",
       );
       setSaving(false);
       return;
@@ -448,6 +537,8 @@ export default function BillingPage() {
             owner: invoiceOwner.trim() || undefined,
             taxJurisdictionCode: taxPreview.taxJurisdictionCode,
             taxCode: taxPreview.taxCode,
+            taxTreatment,
+            taxEvidenceReference: taxEvidenceReference.trim() || undefined,
           }),
         },
       );
@@ -1016,14 +1107,71 @@ export default function BillingPage() {
             </label>
           </div>
           <p className="form-hint">
-            The applicable invoice tax rule is selected by the server from the
-            verified company setup. Complete{" "}
-            <Link href="/billing/setup">Invoice Tax Setup</Link>
-            before billing. The current workflow requires one active configured
-            VAT rule; finance must verify that this treatment applies to the
-            service. If setup is missing or ambiguous, the invoice remains
-            blocked.
+            Rwanda Revenue Authority (RRA) VAT treatments are already in the
+            system. Staff choose the correct legal category; nobody enters a VAT
+            percentage. Zero-rated and exempt invoices require a supporting
+            reference and Finance approval. AAL invoice calculations do not
+            replace RRA EBM/electronic tax invoices.
           </p>
+          {invoiceShipment && (
+            <div className="grid grid-2" style={{ gap: 12, marginTop: 12 }}>
+              <label className="field">
+                <span>RRA VAT treatment</span>
+                <select
+                  value={taxTreatment}
+                  onChange={(event) => {
+                    setTaxTreatment(event.target.value);
+                    setTaxEvidenceReference("");
+                  }}
+                  disabled={!taxReadiness?.ready || taxTreatments.length === 0}
+                >
+                  {taxTreatments.length === 0 && (
+                    <option value="">Loading approved treatments…</option>
+                  )}
+                  {taxTreatments.map((treatment) => (
+                    <option
+                      key={treatment.code}
+                      value={treatment.code}
+                      disabled={
+                        treatment.requiresEvidence && !canApproveSpecialVat
+                      }
+                    >
+                      {treatment.label}
+                      {treatment.requiresEvidence && !canApproveSpecialVat
+                        ? " (Finance approval required)"
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+                <small>
+                  {chosenTaxTreatment?.description ||
+                    "Only RRA-approved treatments are available."}
+                </small>
+              </label>
+              {chosenTaxTreatment?.requiresEvidence && (
+                <label className="field">
+                  <span>Supporting document / reference</span>
+                  <input
+                    value={taxEvidenceReference}
+                    onChange={(event) =>
+                      setTaxEvidenceReference(event.target.value)
+                    }
+                    maxLength={255}
+                    required
+                    placeholder="Export declaration, AWB, customs or exemption approval"
+                  />
+                  <small>
+                    Required to justify zero-rated or exempt VAT treatment.
+                  </small>
+                </label>
+              )}
+            </div>
+          )}
+          {taxOptionsError && (
+            <div className="alert alert-error" role="alert">
+              {taxOptionsError}
+            </div>
+          )}
 
           {invoiceShipment && selectedInvoiceShipment && (
             <section
@@ -1052,11 +1200,10 @@ export default function BillingPage() {
                     Tax preview unavailable: {taxPreviewError}
                   </p>
                   <p style={{ marginBottom: 0 }}>
-                    A finance administrator can review the active default
-                    jurisdiction and VAT rule in{" "}
-                    <Link href="/billing/setup">Invoice Tax Setup</Link>.
-                    Invoice creation remains blocked until the server confirms a
-                    valid rule.
+                    Choose the correct RRA treatment and provide evidence for a
+                    zero-rated or exempt supply. If the company is not set up,
+                    contact Finance via{" "}
+                    <Link href="/billing/setup">Invoice Setup</Link>.
                   </p>
                 </div>
               )}
@@ -1087,7 +1234,7 @@ export default function BillingPage() {
                       </strong>
                     </div>
                     <div className="card" style={{ padding: 14 }}>
-                      <div className="kpi-label">Configured tax treatment</div>
+                      <div className="kpi-label">Selected RRA treatment</div>
                       <strong>
                         {taxPreview.taxInclusive
                           ? "VAT included in entered amount"
@@ -1290,6 +1437,10 @@ export default function BillingPage() {
               readinessLoading ||
               !taxReadiness?.ready ||
               !taxPreview ||
+              !chosenTaxTreatment ||
+              taxPreview.treatmentCode !== taxTreatment ||
+              (taxPreview.evidenceReference || "") !==
+                taxEvidenceReference.trim() ||
               taxPreviewLoading
             }
           >

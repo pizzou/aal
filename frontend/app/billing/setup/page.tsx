@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
@@ -16,237 +15,249 @@ type Jurisdiction = {
   currency?: string;
   active?: boolean;
   default_for_invoicing?: boolean;
+  vat_registration_status?: "REGISTERED" | "NOT_REGISTERED" | "UNVERIFIED";
 };
-type TaxRule = {
-  id: string;
-  code: string;
-  tax_name: string;
-  rate: number;
-  withholding_rate: number;
-  valid_from: string;
-  valid_until?: string | null;
-  currency?: string | null;
-  tax_type: string;
-  inclusive: boolean;
-  active: boolean;
-};
-type Readiness = {
+
+type InvoiceReadiness = {
   ready: boolean;
-  message: string;
+  message?: string;
   jurisdictionCode?: string | null;
   taxCode?: string | null;
   taxRate?: number | null;
 };
 
-const base = "/api/finance/hardening";
-const message = (e: unknown) =>
-  e instanceof Error ? e.message : "Unable to contact the finance service.";
+type TaxRule = {
+  code: string;
+  tax_type: string;
+  rate: number;
+  inclusive: boolean;
+  currency?: string | null;
+  active: boolean;
+};
+
+type CompanyForm = {
+  code: string;
+  legalName: string;
+  registrationNo: string;
+  countryCode: string;
+  address: string;
+  invoicePrefix: string;
+  currency: string;
+};
+
+const DEFAULT_COMPANY: CompanyForm = {
+  code: "RW",
+  legalName: "",
+  registrationNo: "",
+  countryCode: "RW",
+  address: "",
+  invoicePrefix: "AAL-INV",
+  // Keep the existing AAL invoice currency as the starting suggestion;
+  // the finance user must select the currency actually used by the company.
+  currency: "USD",
+};
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Unable to contact the server. Please try again.";
+}
 
 export default function InvoiceTaxSetupPage() {
-  const router = useRouter();
   const { role } = useAuth();
-  const allowed = ["ADMIN", "FINANCE"].includes(role || "");
+  const canEdit = role === "ADMIN" || role === "FINANCE";
+  const [company, setCompany] = useState<CompanyForm>(DEFAULT_COMPANY);
+  const [configuredCompany, setConfiguredCompany] =
+    useState<Jurisdiction | null>(null);
+  const [readiness, setReadiness] = useState<InvoiceReadiness | null>(null);
+  const [activeVat, setActiveVat] = useState<TaxRule | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [vatRegistration, setVatRegistration] = useState<
+    "REGISTERED" | "NOT_REGISTERED" | ""
+  >("");
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [status, setStatus] = useState<Readiness | null>(null);
-  const [company, setCompany] = useState({
-    code: "",
-    legalName: "",
-    registrationNo: "",
-    countryCode: "",
-    address: "",
-    invoicePrefix: "AAL-INV",
-    currency: "USD",
-  });
-  const [confirmed, setConfirmed] = useState(false);
-  const [jurisdictions, setJurisdictions] = useState<Jurisdiction[]>([]);
-  const [rule, setRule] = useState<TaxRule | null>(null);
-  const [inclusive, setInclusive] = useState(false);
-  const [vatRate, setVatRate] = useState("18");
+  const [notice, setNotice] = useState("");
 
-  async function refresh() {
+  async function loadSetup(): Promise<boolean> {
     setLoading(true);
     setError("");
     try {
-      const rows = await apiFetch<Jurisdiction[]>(`${base}/tax-jurisdictions`, {
-        cache: "no-store",
-      });
-      setJurisdictions(rows);
-      const active = rows.find((j) => j.active && j.default_for_invoicing);
-      // Readiness is currency-specific. Verify the actual configured issuer
-      // currency instead of mixing different effective tax rules.
-      const checkedCurrency = (active?.currency || company.currency || "USD")
-        .trim()
-        .toUpperCase();
-      const readiness = await apiFetch<Readiness>(
-        `/api/billing/invoice-readiness?currency=${encodeURIComponent(checkedCurrency)}`,
+      const jurisdictions = await apiFetch<Jurisdiction[]>(
+        "/api/finance/hardening/tax-jurisdictions",
         { cache: "no-store" },
       );
-      setStatus(readiness);
-      if (active) {
-        setCompany({
-          code: active.jurisdiction_code ?? "",
-          legalName: active.legal_name ?? "",
-          registrationNo: active.tax_registration_no ?? "",
-          countryCode: active.country_code ?? "",
-          address: active.address ?? "",
-          invoicePrefix: active.invoice_prefix ?? "AAL-INV",
-          currency: active.currency ?? "USD",
-        });
+      const current =
+        jurisdictions.find((row) => row.active && row.default_for_invoicing) ??
+        null;
+      setConfiguredCompany(current);
+      setVatRegistration(
+        current?.vat_registration_status === "REGISTERED" ||
+          current?.vat_registration_status === "NOT_REGISTERED"
+          ? current.vat_registration_status
+          : "",
+      );
+      setCompany(
+        current
+          ? {
+              code: current.jurisdiction_code || "RW",
+              legalName: current.legal_name || "",
+              registrationNo: current.tax_registration_no || "",
+              countryCode: current.country_code || "RW",
+              address: current.address || "",
+              invoicePrefix: current.invoice_prefix || "AAL-INV",
+              currency: current.currency || "USD",
+            }
+          : DEFAULT_COMPANY,
+      );
+
+      // This is a read-only server check; setup is never silently activated.
+      const billingCurrency = (current?.currency || "USD").toUpperCase();
+      const result = await apiFetch<InvoiceReadiness>(
+        `/api/billing/invoice-readiness?currency=${encodeURIComponent(billingCurrency)}`,
+        { cache: "no-store" },
+      );
+      setReadiness(result);
+      if (current?.jurisdiction_code) {
         const rules = await apiFetch<TaxRule[]>(
-          `${base}/tax-rules?jurisdictionCode=${encodeURIComponent(active.jurisdiction_code ?? "")}`,
+          `/api/finance/hardening/tax-rules?jurisdictionCode=${encodeURIComponent(current.jurisdiction_code)}`,
           { cache: "no-store" },
         );
-        const selected =
-          rules.find((r) => r.code === readiness.taxCode) ??
-          rules.find((r) => r.tax_type === "VAT" && !r.currency) ??
-          null;
-        setRule(selected);
-        setInclusive(Boolean(selected?.inclusive));
-        if (selected) setVatRate(String(selected.rate));
+        setActiveVat(
+          rules.find(
+            (rule) => rule.code === result.taxCode && rule.tax_type === "VAT",
+          ) ??
+            rules.find(
+              (rule) =>
+                rule.active && rule.tax_type === "VAT" && !rule.currency,
+            ) ??
+            null,
+        );
       } else {
-        setRule(null);
+        setActiveVat(null);
       }
-    } catch (e) {
-      setError(message(e));
-      setStatus(null);
+      return true;
+    } catch (exception) {
+      setReadiness(null);
+      setActiveVat(null);
+      setError(errorMessage(exception));
+      return false;
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    void refresh();
+    void loadSetup();
   }, []);
 
-  async function saveJurisdiction() {
-    if (!allowed) return;
-    if (!confirmed) {
+  function update<K extends keyof CompanyForm>(key: K, value: CompanyForm[K]) {
+    setCompany((previous) => ({ ...previous, [key]: value }));
+    setVerified(false);
+    setNotice("");
+  }
+
+  async function saveCompany() {
+    if (!canEdit || saving) return;
+    const code = company.code.trim().toUpperCase();
+    const countryCode = company.countryCode.trim().toUpperCase();
+    const currency = company.currency.trim().toUpperCase();
+    const prefix = company.invoicePrefix.trim().toUpperCase();
+    if (!company.legalName.trim() || !code || !countryCode || !currency) {
+      setError("Enter the legal company name, country and invoice currency.");
+      return;
+    }
+    if (!/^[A-Z]{2,3}$/.test(countryCode) || !/^[A-Z]{3}$/.test(currency)) {
       setError(
-        "Confirm the company's legal details and authority to issue the selected tax invoice before enabling invoicing.",
+        "Use a valid country code (RW) and three-letter currency (USD or RWF).",
       );
       return;
     }
     if (
-      !company.code.trim() ||
-      !company.legalName.trim() ||
-      !company.countryCode.trim()
+      !/^[A-Z0-9._-]{1,80}$/.test(code) ||
+      (prefix && !/^[A-Z0-9][A-Z0-9-]{0,38}$/.test(prefix))
     ) {
-      setError("Enter the legal company name, jurisdiction code and country.");
+      setError(
+        "Check the jurisdiction code and invoice prefix; use letters, numbers and hyphens.",
+      );
+      return;
+    }
+    if (countryCode === "RW" && !vatRegistration) {
+      setError("Select whether the company is registered for VAT with RRA.");
+      return;
+    }
+    if (!verified) {
+      setError(
+        "Confirm that the company details and its VAT status were verified.",
+      );
       return;
     }
     setSaving(true);
     setError("");
-    setSuccess("");
+    setNotice("");
     try {
-      await apiFetch(`${base}/tax-jurisdictions`, {
+      await apiFetch("/api/finance/hardening/tax-jurisdictions", {
         method: "POST",
         body: JSON.stringify({
           ...company,
-          code: company.code.trim().toUpperCase(),
-          countryCode: company.countryCode.trim().toUpperCase(),
-          currency: company.currency.trim().toUpperCase(),
+          code,
+          countryCode,
+          currency,
+          invoicePrefix: prefix,
           active: true,
           defaultForInvoicing: true,
         }),
       });
-      setSuccess(
-        "Company invoice setup saved. Verify the effective VAT rule and review the invoice preview before billing.",
-      );
-      await refresh();
-    } catch (e) {
-      setError(message(e));
+      if (countryCode === "RW") {
+        await apiFetch("/api/finance/hardening/rwanda-vat-registration", {
+          method: "POST",
+          body: JSON.stringify({
+            registered: vatRegistration === "REGISTERED",
+          }),
+        });
+      }
+      // Legal VAT treatments are provisioned by the backend; no rate entry.
+      const verifiedOnServer = await loadSetup();
+      setEditing(false);
+      setVerified(false);
+      if (verifiedOnServer) {
+        setNotice(
+          "Company invoice details saved. Check the VAT summary, then continue to an invoice preview.",
+        );
+      }
+    } catch (exception) {
+      setError(errorMessage(exception));
     } finally {
       setSaving(false);
     }
   }
 
-  async function saveTaxTreatment() {
-    if (!allowed || !rule || !status?.ready || !confirmed) {
-      setError(
-        "Confirm the company's applicable VAT treatment before changing its tax rule.",
-      );
-      return;
-    }
-    const parsedRate = Number(vatRate);
-    if (!Number.isFinite(parsedRate) || parsedRate < 0 || parsedRate > 100) {
-      setError("Enter an approved VAT rate from 0% to 100%.");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    setSuccess("");
-    try {
-      await apiFetch(`${base}/tax-rules`, {
-        method: "POST",
-        body: JSON.stringify({
-          jurisdictionCode: status.jurisdictionCode,
-          code: rule.code,
-          taxName: rule.tax_name,
-          rate: parsedRate,
-          withholdingRate: Number(rule.withholding_rate ?? 0),
-          currency: rule.currency ?? null,
-          validFrom: rule.valid_from,
-          validUntil: rule.valid_until ?? null,
-          taxType: rule.tax_type,
-          inclusive,
-          appliesTo: "INVOICE",
-          active: true,
-        }),
-      });
-      setSuccess(
-        "Configured VAT rate and treatment saved. Review a fresh tax preview before issuing invoices.",
-      );
-      await refresh();
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const field = (
-    label: string,
-    name: keyof typeof company,
-    placeholder?: string,
-  ) => (
-    <label className="field" key={name}>
-      <span>{label}</span>
-      <input
-        value={company[name]}
-        placeholder={placeholder ?? ""}
-        onChange={(e) => {
-          setConfirmed(false);
-          setCompany((old) => ({ ...old, [name]: e.target.value }));
-        }}
-        disabled={!allowed || saving}
-      />
-    </label>
-  );
+  const ready = readiness?.ready === true;
 
   return (
     <main className="page">
       <div className="page-head">
         <div>
-          <div className="eyebrow">AAL / FINANCE / ONE-TIME SETUP</div>
-          <h1 className="page-title">Invoice Tax Setup</h1>
+          <div className="eyebrow">AAL / COMPANY SETTINGS</div>
+          <h1 className="page-title">Company invoice setup</h1>
           <p className="page-subtitle">
-            Configure the legal invoice issuer and applicable VAT treatment{" "}
-            <strong>before</strong> creating customer invoices.
+            Set up your company once. After that, staff can create invoices
+            without repeating these details.
           </p>
         </div>
         <div className="actions">
-          <Link className="btn" href="/billing">
-            Billing &amp; Receivables
+          <Link href="/billing" className="btn">
+            Invoices &amp; payments
           </Link>
           <button
+            type="button"
             className="btn"
             disabled={loading || saving}
-            onClick={() => void refresh()}
+            onClick={() => void loadSetup()}
           >
-            Refresh status
+            Check setup again
           </button>
         </div>
       </div>
@@ -256,192 +267,331 @@ export default function InvoiceTaxSetupPage() {
           {error}
         </div>
       )}
-      {success && (
+      {notice && (
         <div className="alert alert-success aal-alert" role="status">
-          {success}
+          {notice}
         </div>
       )}
 
       <section
         className="form-panel"
-        style={{ marginBottom: 18 }}
-        aria-label="Invoice tax readiness"
+        style={{ marginBottom: 16 }}
+        aria-label="Invoice setup status"
       >
         <div className="section-heading">
-          <div className="section-number">01</div>
+          <div className="section-number">1</div>
           <div>
-            <h2>Check billing readiness</h2>
+            <h2>Is invoicing ready?</h2>
             <p>
-              Read-only check from the actual backend. It does not create
-              invoices or tax rules.
+              Checked directly against the company and VAT configuration saved
+              on the server.
             </p>
           </div>
         </div>
         {loading ? (
-          <p>Checking invoice configuration…</p>
-        ) : status?.ready ? (
+          <p>Checking company invoice settings…</p>
+        ) : error && !readiness ? (
+          <p>Unable to verify the setup. Check the connection and try again.</p>
+        ) : ready ? (
           <div className="alert alert-success" role="status">
-            Invoice tax setup is active: {status.jurisdictionCode} ·{" "}
-            {status.taxCode} · {status.taxRate}%. Verify the treatment for each
-            service before billing.
+            <strong>Ready for invoice previews.</strong> Company:{" "}
+            {configuredCompany?.legal_name || readiness?.jurisdictionCode}.
+            {readiness?.taxRate != null
+              ? ` Active VAT rate: ${readiness.taxRate}%.`
+              : ""}
           </div>
         ) : (
-          <div className="alert alert-error" role="alert">
-            {status?.message ??
-              "Invoice setup could not be verified. Do not issue invoices until finance has confirmed it."}
+          <div className="alert alert-error" role="status">
+            <strong>Setup is not complete.</strong>{" "}
+            {readiness?.message ||
+              "Save the company's verified invoicing details to continue."}
           </div>
         )}
-        {!allowed && (
+        <p className="form-hint">
+          This check does not issue an invoice. The system will calculate and
+          verify tax again for each shipment.
+        </p>
+        {!canEdit && (
           <p className="form-hint">
-            Ask an administrator or authorized finance user to complete this
-            setup. Your current role cannot update tax configuration.
+            Only Admin and Finance can edit these settings. Ask one of them to
+            complete the setup.
           </p>
         )}
       </section>
 
-      <section className="form-panel" style={{ marginBottom: 18 }}>
+      <section
+        className="form-panel"
+        style={{ marginBottom: 16 }}
+        aria-label="Company invoice details"
+      >
         <div className="section-heading">
-          <div className="section-number">02</div>
+          <div className="section-number">2</div>
           <div>
-            <h2>Company invoicing identity</h2>
+            <h2>Company details</h2>
             <p>
-              Use the company's verified legal and tax information. Never enter
-              placeholder registration details.
+              Use the company's actual registered details; they are shared
+              across new invoices.
             </p>
           </div>
         </div>
-        <div className="form-grid">
-          {field("Jurisdiction code (e.g. RW)", "code")}
-          {field("Registered legal company name", "legalName")}
-          {field("Tax registration number (if applicable)", "registrationNo")}
-          {field("Country code (ISO)", "countryCode")}
-          {field("Invoice prefix", "invoicePrefix")}
-          {field("Default currency", "currency")}
-          {field("Registered company address", "address")}
-        </div>
-        <p className="form-hint">
-          For Rwanda, the initial standard VAT rate is 18%. An authorized
-          finance user can adjust the configured rate after verifying the
-          applicable law and tax registration. Exports, international freight,
-          zero-rated and exempt services may require a different tax treatment:
-          do not apply standard VAT automatically to every shipment. AAL does
-          not replace the required RRA electronic invoicing process.
-        </p>
-        <label className="field" style={{ marginTop: 12 }}>
-          <span>
-            <input
-              type="checkbox"
-              checked={confirmed}
-              disabled={!allowed || saving}
-              onChange={(e) => setConfirmed(e.target.checked)}
-              style={{ marginRight: 8 }}
-            />
-            I have verified the company's legal identity and confirmed its VAT
-            registration and applicable invoice treatment.
-          </span>
-        </label>
-        <div className="actions" style={{ marginTop: 12 }}>
-          <button
-            className="btn btn-primary"
-            type="button"
-            disabled={
-              !allowed ||
-              saving ||
-              !confirmed ||
-              !company.legalName.trim() ||
-              !company.code.trim()
-            }
-            onClick={() => void saveJurisdiction()}
-          >
-            {saving ? "Saving…" : "Save company and activate invoice setup"}
-          </button>
-        </div>
+        {configuredCompany && !editing ? (
+          <>
+            <p>
+              <strong>{configuredCompany.legal_name}</strong>
+            </p>
+            <p className="form-hint">
+              TIN: {configuredCompany.tax_registration_no || "Not entered"} ·
+              VAT registration:{" "}
+              {configuredCompany.vat_registration_status === "REGISTERED"
+                ? "Registered with RRA"
+                : configuredCompany.vat_registration_status === "NOT_REGISTERED"
+                  ? "Not VAT registered"
+                  : "Not verified"}{" "}
+              · Country: {configuredCompany.country_code} · Currency:{" "}
+              {configuredCompany.currency} · Invoice prefix:{" "}
+              {configuredCompany.invoice_prefix || "Not set"}
+            </p>
+            {canEdit && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setEditing(true);
+                  setVerified(false);
+                  setNotice("");
+                }}
+              >
+                Edit company details
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="form-grid">
+              <label className="field field-span-2">
+                <span>Registered company name *</span>
+                <input
+                  value={company.legalName}
+                  placeholder="Enter the name on your registration certificate"
+                  disabled={!canEdit || saving}
+                  onChange={(event) => update("legalName", event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Tax registration / TIN (if applicable)</span>
+                <input
+                  value={company.registrationNo}
+                  placeholder="Company's verified number"
+                  disabled={!canEdit || saving}
+                  onChange={(event) =>
+                    update("registrationNo", event.target.value)
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Invoice currency *</span>
+                <input
+                  list="invoice-currency-options"
+                  value={company.currency}
+                  maxLength={3}
+                  disabled={!canEdit || saving}
+                  onChange={(event) =>
+                    update("currency", event.target.value.toUpperCase())
+                  }
+                />
+                <datalist id="invoice-currency-options">
+                  <option value="USD" />
+                  <option value="RWF" />
+                  <option value="EUR" />
+                </datalist>
+                <small>
+                  Use the company's normal invoice currency, e.g. USD or RWF.
+                </small>
+              </label>
+              <label className="field">
+                <span>Invoice number prefix</span>
+                <input
+                  value={company.invoicePrefix}
+                  placeholder="AAL-INV"
+                  disabled={!canEdit || saving}
+                  onChange={(event) =>
+                    update("invoicePrefix", event.target.value)
+                  }
+                />
+              </label>
+            </div>
+            <details style={{ marginTop: 12 }}>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+                More company settings (optional)
+              </summary>
+              <div className="form-grid" style={{ marginTop: 12 }}>
+                <label className="field">
+                  <span>Country code</span>
+                  <input
+                    value={company.countryCode}
+                    maxLength={3}
+                    disabled={!canEdit || saving}
+                    onChange={(event) =>
+                      update("countryCode", event.target.value.toUpperCase())
+                    }
+                  />
+                  <small>RW means Rwanda.</small>
+                </label>
+                <label className="field">
+                  <span>Jurisdiction code</span>
+                  <input
+                    value={company.code}
+                    maxLength={80}
+                    disabled={!canEdit || saving}
+                    onChange={(event) =>
+                      update("code", event.target.value.toUpperCase())
+                    }
+                  />
+                  <small>
+                    Keep RW for a new Rwanda company; preserve the existing code
+                    when editing.
+                  </small>
+                </label>
+                <label className="field field-span-2">
+                  <span>Registered address</span>
+                  <input
+                    value={company.address}
+                    disabled={!canEdit || saving}
+                    onChange={(event) => update("address", event.target.value)}
+                  />
+                </label>
+              </div>
+            </details>
+            {company.countryCode.toUpperCase() === "RW" && (
+              <label className="field" style={{ marginTop: 14 }}>
+                <span>RRA VAT registration (verify once) *</span>
+                <select
+                  value={vatRegistration}
+                  disabled={!canEdit || saving}
+                  onChange={(event) => {
+                    setVatRegistration(
+                      event.target.value as typeof vatRegistration,
+                    );
+                    setVerified(false);
+                  }}
+                >
+                  <option value="">Select verified company status</option>
+                  <option value="REGISTERED">
+                    Company is VAT registered with RRA
+                  </option>
+                  <option value="NOT_REGISTERED">
+                    Company is not VAT registered
+                  </option>
+                </select>
+                <small>
+                  Check the company's official RRA registration. A TIN alone
+                  does not establish VAT registration.
+                </small>
+              </label>
+            )}
+            <label className="field" style={{ marginTop: 14 }}>
+              <span>
+                <input
+                  type="checkbox"
+                  checked={verified}
+                  disabled={!canEdit || saving}
+                  onChange={(event) => setVerified(event.target.checked)}
+                  style={{ marginRight: 8 }}
+                />
+                I checked the company's legal details and confirmed its VAT
+                status with the authorized finance person.
+              </span>
+            </label>
+            <div className="actions" style={{ marginTop: 14 }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={
+                  !canEdit ||
+                  loading ||
+                  saving ||
+                  !verified ||
+                  !company.legalName.trim()
+                }
+                onClick={() => void saveCompany()}
+              >
+                {saving ? "Saving company…" : "Save company setup"}
+              </button>
+              {configuredCompany && (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={saving}
+                  onClick={() => {
+                    setEditing(false);
+                    setVerified(false);
+                    void loadSetup();
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </section>
 
-      {status?.ready && rule && (
-        <section className="form-panel" style={{ marginBottom: 18 }}>
-          <div className="section-heading">
-            <div className="section-number">03</div>
-            <div>
-              <h2>Review tax treatment</h2>
-              <p>
-                Review the active rule before issuing invoices. Changes must be
-                approved by finance.
-              </p>
-            </div>
+      <section
+        className="form-panel"
+        style={{ marginBottom: 16 }}
+        aria-label="VAT configuration"
+      >
+        <div className="section-heading">
+          <div className="section-number">3</div>
+          <div>
+            <h2>VAT settings</h2>
+            <p>
+              RRA statutory choices are built in; staff never type VAT
+              percentages when invoicing.
+            </p>
           </div>
+        </div>
+        {ready && activeVat ? (
           <p>
-            Selected rule: <strong>{rule.code}</strong>, {rule.rate}% ·
-            effective from {rule.valid_from}
+            Verified default:{" "}
+            <strong>
+              {readiness?.taxCode === "RRA-RW-NONVAT"
+                ? "No VAT (not VAT registered)"
+                : "18% standard VAT"}
+            </strong>
+            . Eligible zero-rated and exempt services are chosen from the
+            statutory list on each invoice.
           </p>
-          <label className="field" style={{ marginBottom: 12 }}>
-            <span>Approved VAT rate (%) — Rwanda standard is 18%</span>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              step="0.0001"
-              value={vatRate}
-              disabled={!allowed || saving}
-              onChange={(e) => {
-                setConfirmed(false);
-                setVatRate(e.target.value);
-              }}
-            />
-            <small>
-              Changes affect invoice previews from the current rule. Previously
-              issued invoices keep their stored tax amounts. Changes for past
-              periods require finance review.
-            </small>
-          </label>
-          <label className="field">
-            <span>
-              Are shipment charges entered inclusive or exclusive of VAT?
-            </span>
-            <select
-              value={inclusive ? "true" : "false"}
-              disabled={!allowed || saving}
-              onChange={(e) => {
-                setConfirmed(false);
-                setInclusive(e.target.value === "true");
-              }}
-            >
-              <option value="false">
-                Exclusive — VAT added to customer amount
-              </option>
-              <option value="true">
-                Inclusive — VAT extracted from customer amount
-              </option>
-            </select>
-          </label>
-          <button
-            className="btn btn-primary"
-            style={{ marginTop: 12 }}
-            disabled={!allowed || saving || !confirmed}
-            onClick={() => void saveTaxTreatment()}
-          >
-            Save approved VAT rate &amp; treatment
-          </button>
-        </section>
-      )}
-      {!!jurisdictions.length && (
+        ) : (
+          <p className="form-hint">
+            First verify the company's RRA VAT registration above. The backend
+            will activate the applicable statutory default.
+          </p>
+        )}
         <p className="form-hint">
-          Configured jurisdictions: {jurisdictions.length}. Only one may be
-          active and default for invoice numbering.
+          RRA VAT treatment options are preset: standard 18%, eligible
+          zero-rated exports or inbound/transit freight, and legally exempt
+          supplies. Non-VAT-registered companies may not charge 18% VAT. All
+          invoices still need to comply with RRA EBM/electronic invoicing
+          obligations.
         </p>
-      )}
-      <div className="actions" style={{ marginTop: 18 }}>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={!status?.ready || loading || saving}
-          onClick={() => router.push("/billing")}
-        >
-          Continue to customer invoicing →
-        </button>
-        <Link className="btn" href="/billing/hardening">
-          Advanced finance controls
-        </Link>
+        {canEdit && company.countryCode.toUpperCase() !== "RW" && (
+          <Link className="btn" href="/billing/hardening">
+            Manage local tax rules
+          </Link>
+        )}
+      </section>
+
+      <div className="actions" style={{ marginTop: 16 }}>
+        {ready ? (
+          <Link className="btn btn-primary" href="/billing">
+            Continue to customer invoicing →
+          </Link>
+        ) : (
+          <span className="form-hint">
+            Complete and verify company setup before creating an invoice.
+          </span>
+        )}
       </div>
     </main>
   );

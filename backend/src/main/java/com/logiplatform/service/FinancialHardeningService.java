@@ -56,7 +56,7 @@ public class FinancialHardeningService {
         UUID tenant = tenant();
         Map<String, Object> row = one("""
                 SELECT lifecycle_status,invoice_no,amount_paid,invoice_amount,subtotal_amount,
-                       tax_rate,tax_amount,tax_code,tax_jurisdiction_code,tax_inclusive,
+                       tax_rate,tax_amount,tax_code,tax_jurisdiction_code,tax_inclusive,tax_basis_reference,
                        credit_note_amount,debit_note_amount,currency,due_date
                   FROM commercial_invoices WHERE tenant_id=? AND id=? FOR UPDATE
                 """, tenant, invoiceId);
@@ -86,7 +86,7 @@ public class FinancialHardeningService {
                         Objects.toString(defaultRule.get("code"), ""), LocalDate.now());
                 row = one("""
                         SELECT lifecycle_status,invoice_no,amount_paid,invoice_amount,subtotal_amount,
-                               tax_rate,tax_amount,tax_code,tax_jurisdiction_code,tax_inclusive,
+                               tax_rate,tax_amount,tax_code,tax_jurisdiction_code,tax_inclusive,tax_basis_reference,
                                credit_note_amount,debit_note_amount,currency,due_date
                           FROM commercial_invoices WHERE tenant_id=? AND id=? FOR UPDATE
                         """, tenant, invoiceId);
@@ -99,10 +99,22 @@ public class FinancialHardeningService {
         if ("DRAFT".equals(current) && "ISSUED".equals(next)) {
             String selectedCode = Objects.toString(row.get("tax_code"), "");
             String selectedJurisdiction = Objects.toString(row.get("tax_jurisdiction_code"), "");
-            Map<String, Object> configuredRule = defaultInvoiceVatRule(LocalDate.now(),
-                    Objects.toString(row.get("currency"), "USD"));
-            // Manually selected special tax treatments can have a different code;
-            // compare the rate snapshot when this draft uses the default tax rule.
+            String registeredCountry = db.queryForObject("""
+                    SELECT country_code FROM finance_tax_jurisdictions
+                     WHERE tenant_id=? AND jurisdiction_code=? AND active=true
+                    """, String.class, tenant, selectedJurisdiction);
+            if ("RW".equalsIgnoreCase(registeredCountry)) {
+                if (!selectedCode.startsWith("RRA-RW-"))
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "Rwanda invoices must use a predefined RRA tax treatment. Review the draft before issuing.");
+                RwandaInvoiceTaxPolicy.require(selectedCode,
+                        Objects.toString(row.get("tax_basis_reference"), null));
+            }
+            Map<String, Object> configuredRule = selectedCode.startsWith("RRA-RW-")
+                    ? selectInvoiceTaxTreatment(LocalDate.now(), Objects.toString(row.get("currency"), "USD"),
+                            selectedCode, Objects.toString(row.get("tax_basis_reference"), null))
+                    : defaultInvoiceVatRule(LocalDate.now(), Objects.toString(row.get("currency"), "USD"));
+            // Verify the selected statutory treatment has not changed before posting.
             if (selectedCode.equalsIgnoreCase(Objects.toString(configuredRule.get("code"), ""))
                     && selectedJurisdiction
                             .equalsIgnoreCase(Objects.toString(configuredRule.get("jurisdiction_code"), ""))
@@ -649,7 +661,8 @@ public class FinancialHardeningService {
         // Other countries must have their own approved rule; do not assume 18%.
         // Saving an existing jurisdiction must not overwrite a finance-adjusted rule.
         if (active && defaultForInvoicing && "RW".equals(normalizedCountry)) {
-            ensureDefaultInvoiceVatRule(t, normalizedCode, LocalDate.now());
+            // The policy is statutory: do not invent a configurable tax rate.
+            ensureRwandaInvoiceTreatments(t, normalizedCode);
         }
         return saved;
     }
@@ -663,6 +676,24 @@ public class FinancialHardeningService {
     public Map<String, Object> taxJurisdiction(String code, String legalName, String registrationNo,
             String countryCode, String address, String prefix, String currency, boolean active) {
         return taxJurisdiction(code, legalName, registrationNo, countryCode, address, prefix, currency, active, false);
+    }
+
+    @Transactional
+    public Map<String, Object> verifyRwandaVatRegistration(boolean registered) {
+        UUID tenantId = tenant();
+        int changed = db.update("""
+                UPDATE finance_tax_jurisdictions
+                   SET vat_registration_status=?, vat_status_verified_at=now(), updated_at=now()
+                 WHERE tenant_id=? AND upper(country_code)='RW'
+                   AND active=true AND default_for_invoicing=true
+                """, registered ? "REGISTERED" : "NOT_REGISTERED", tenantId);
+        if (changed != 1)
+            throw bad("First save the company's verified Rwanda legal identity as the default invoice jurisdiction");
+        return one("""
+                SELECT jurisdiction_code,country_code,vat_registration_status,vat_status_verified_at
+                  FROM finance_tax_jurisdictions
+                 WHERE tenant_id=? AND upper(country_code)='RW' AND active=true AND default_for_invoicing=true
+                """, tenantId);
     }
 
     @Transactional(readOnly = true)
@@ -702,6 +733,8 @@ public class FinancialHardeningService {
             throw bad("Tax rule valid-until date cannot be before valid-from date");
         String jurisdiction = jurisdictionCode.trim().toUpperCase(Locale.ROOT);
         String taxCode = code.trim().toUpperCase(Locale.ROOT);
+        if (taxCode.startsWith("RRA-RW-"))
+            throw bad("RRA statutory VAT treatment codes are system-managed and cannot be edited as custom tax rules");
         if (!taxCode.matches("[A-Z0-9._-]{1,80}"))
             throw bad("Tax code may contain only letters, numbers, dot, underscore and hyphen");
         String normalizedCurrency = blank(currency) ? null : currency.trim().toUpperCase(Locale.ROOT);
@@ -725,6 +758,16 @@ public class FinancialHardeningService {
                 rs -> rs.next() && rs.getBoolean(1), t, jurisdiction);
         if (!Boolean.TRUE.equals(configured))
             throw bad("Configure the tax jurisdiction before adding tax rules");
+        String jurisdictionCountry = db.queryForObject("""
+                SELECT country_code FROM finance_tax_jurisdictions
+                 WHERE tenant_id=? AND jurisdiction_code=?
+                """, String.class, t, jurisdiction);
+        if ("RW".equalsIgnoreCase(jurisdictionCountry)
+                && "VAT".equals(normalizedType)
+                && Set.of("ALL", "INVOICE").contains(normalizedApplies)) {
+            throw bad(
+                    "Rwanda invoice VAT rates follow RRA statutory treatments. Choose a predefined treatment when invoicing; custom VAT percentages are disabled.");
+        }
         if (active && "VAT".equals(normalizedType)) {
             Boolean overlappingRule = db.query("""
                     SELECT EXISTS(
@@ -827,12 +870,14 @@ public class FinancialHardeningService {
     private Map<String, Object> resolveDefaultInvoiceVatRule(LocalDate onDate, String documentCurrency) {
         LocalDate effective = onDate == null ? LocalDate.now() : onDate;
         UUID t = tenant();
-        List<Map<String, Object>> jurisdictions = db.queryForList("""
-                SELECT jurisdiction_code, legal_name, tax_registration_no, currency
-                  FROM finance_tax_jurisdictions
-                 WHERE tenant_id=? AND active=true AND default_for_invoicing=true
-                 ORDER BY jurisdiction_code
-                """, t);
+        List<Map<String, Object>> jurisdictions = db.queryForList(
+                """
+                        SELECT jurisdiction_code, legal_name, tax_registration_no, country_code, vat_registration_status, currency
+                          FROM finance_tax_jurisdictions
+                         WHERE tenant_id=? AND active=true AND default_for_invoicing=true
+                         ORDER BY jurisdiction_code
+                        """,
+                t);
         if (jurisdictions.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "No active default invoice tax jurisdiction is configured for this tenant. Open Invoice Tax Setup and save the company's verified invoicing jurisdiction as active and default before issuing invoices.");
@@ -842,6 +887,16 @@ public class FinancialHardeningService {
                     "More than one active default invoice tax jurisdiction exists. Ask a finance administrator to resolve the configuration before issuing invoices.");
         }
         String jurisdiction = Objects.toString(jurisdictions.get(0).get("jurisdiction_code"), "");
+        String country = Objects.toString(jurisdictions.get(0).get("country_code"), "");
+        if ("RW".equalsIgnoreCase(country)) {
+            String status = Objects.toString(jurisdictions.get(0).get("vat_registration_status"), "UNVERIFIED");
+            if ("UNVERIFIED".equals(status))
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "Finance must verify whether this company is registered for Rwanda VAT in Company Invoice Setup before issuing invoices.");
+            return selectRwandaInvoiceRule(jurisdiction,
+                    "NOT_REGISTERED".equals(status) ? RwandaInvoiceTaxPolicy.NONVAT : RwandaInvoiceTaxPolicy.STANDARD,
+                    effective);
+        }
         List<Map<String, Object>> rules;
         if (documentCurrency == null) {
             rules = db.queryForList("""
@@ -900,6 +955,121 @@ public class FinancialHardeningService {
                             + ". Ask a finance administrator to resolve the tax configuration before issuing invoices.");
         }
         return rules.get(0);
+    }
+
+    /**
+     * Statutory selections: staff choose a legally defined treatment, not a rate.
+     * A currency-neutral rule preserves the original invoice currency.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> invoiceTaxTreatments(String currency) {
+        Map<String, Object> defaultRule = defaultInvoiceVatRule(LocalDate.now(), currency);
+        String jurisdiction = Objects.toString(defaultRule.get("jurisdiction_code"), "");
+        Map<String, Object> country = one("""
+                SELECT country_code,vat_registration_status FROM finance_tax_jurisdictions
+                 WHERE tenant_id=? AND jurisdiction_code=? AND active=true AND default_for_invoicing=true
+                """, tenant(), jurisdiction);
+        if (!"RW".equalsIgnoreCase(Objects.toString(country.get("country_code"), ""))) {
+            return List.of(Map.of("code", Objects.toString(defaultRule.get("code"), ""),
+                    "label", Objects.toString(defaultRule.get("tax_name"), "Configured VAT"),
+                    "description", "Configured tax treatment for this jurisdiction",
+                    "legalBasis", "Approved local tax rule", "rate", n(defaultRule.get("rate")),
+                    "requiresEvidence", false));
+        }
+        String status = Objects.toString(country.get("vat_registration_status"), "UNVERIFIED");
+        return RwandaInvoiceTaxPolicy.treatments().stream()
+                .filter(t -> "NOT_REGISTERED".equals(status)
+                        ? RwandaInvoiceTaxPolicy.NONVAT.equals(t.code())
+                        : !RwandaInvoiceTaxPolicy.NONVAT.equals(t.code()))
+                .map(RwandaInvoiceTaxPolicy.Treatment::asMap).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> selectInvoiceTaxTreatment(LocalDate onDate, String currency,
+            String selectedCode, String evidenceReference) {
+        Map<String, Object> standard = defaultInvoiceVatRule(onDate, currency);
+        String jurisdiction = Objects.toString(standard.get("jurisdiction_code"), "");
+        Map<String, Object> country = one("""
+                SELECT country_code,vat_registration_status FROM finance_tax_jurisdictions
+                 WHERE tenant_id=? AND jurisdiction_code=? AND active=true AND default_for_invoicing=true
+                """, tenant(), jurisdiction);
+        if (!"RW".equalsIgnoreCase(Objects.toString(country.get("country_code"), ""))) {
+            if (selectedCode != null && !selectedCode.isBlank()
+                    && !selectedCode.equalsIgnoreCase(Objects.toString(standard.get("code"), "")))
+                throw bad("Only the configured local invoice tax treatment is available outside Rwanda");
+            return standard;
+        }
+        String status = Objects.toString(country.get("vat_registration_status"), "UNVERIFIED");
+        String requestedCode = selectedCode == null || selectedCode.isBlank()
+                ? ("NOT_REGISTERED".equals(status) ? RwandaInvoiceTaxPolicy.NONVAT : RwandaInvoiceTaxPolicy.STANDARD)
+                : selectedCode;
+        RwandaInvoiceTaxPolicy.Treatment treatment = RwandaInvoiceTaxPolicy.require(requestedCode, evidenceReference);
+        if (treatment.requiresEvidence()) {
+            Object authenticated = SecurityContextHolder.getContext().getAuthentication() == null
+                    ? null
+                    : SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+            String role = authenticated instanceof TenantPrincipal tp ? tp.role() : "";
+            if (!Set.of("ADMIN", "FINANCE").contains(role))
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "Only Admin or Finance can approve a zero-rated or VAT-exempt invoice based on supporting documents.");
+        }
+        if (("NOT_REGISTERED".equals(status) && !RwandaInvoiceTaxPolicy.NONVAT.equals(treatment.code()))
+                || ("REGISTERED".equals(status) && RwandaInvoiceTaxPolicy.NONVAT.equals(treatment.code())))
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "This treatment is not allowed for the company's verified VAT registration status.");
+        Map<String, Object> configured = selectRwandaInvoiceRule(jurisdiction, treatment.code(),
+                onDate == null ? LocalDate.now() : onDate);
+        if (n(configured.get("rate")).compareTo(treatment.rate()) != 0
+                || Boolean.TRUE.equals(configured.get("inclusive"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "The statutory Rwanda VAT rule does not match the approved rate or calculation mode. Contact finance administration.");
+        }
+        return configured;
+    }
+
+    private Map<String, Object> selectRwandaInvoiceRule(String jurisdiction, String code, LocalDate date) {
+        List<Map<String, Object>> rules = db.queryForList("""
+                SELECT r.id,r.code,r.tax_name,r.rate,r.currency,r.valid_from,r.valid_until,
+                       r.jurisdiction_code,r.tax_type,r.inclusive,j.tax_registration_no
+                  FROM finance_tax_rules r JOIN finance_tax_jurisdictions j
+                    ON j.tenant_id=r.tenant_id AND j.jurisdiction_code=r.jurisdiction_code
+                 WHERE r.tenant_id=? AND j.active=true AND j.default_for_invoicing=true
+                   AND upper(j.country_code)='RW' AND r.jurisdiction_code=? AND r.code=?
+                   AND r.active=true AND r.currency IS NULL
+                   AND r.valid_from<=? AND (r.valid_until IS NULL OR r.valid_until>=?)
+                   AND r.applies_to IN ('INVOICE','ALL')
+                """, tenant(), jurisdiction, code, date, date);
+        if (rules.size() != 1)
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "RRA invoice tax treatments are missing or duplicated. Apply Flyway V96 and review the company's Rwanda invoice setup.");
+        return rules.get(0);
+    }
+
+    private void ensureRwandaInvoiceTreatments(UUID tenantId, String jurisdiction) {
+        for (RwandaInvoiceTaxPolicy.Treatment treatment : RwandaInvoiceTaxPolicy.treatments()) {
+            db.update("""
+                    INSERT INTO finance_tax_rules
+                      (id,tenant_id,code,tax_name,rate,withholding_rate,currency,valid_from,
+                       valid_until,active,jurisdiction_code,tax_type,inclusive,exemption_code,applies_to)
+                    VALUES(?,?,?,?,?,0,NULL,DATE '2023-09-14',NULL,true,?,?,false,?,'INVOICE')
+                    ON CONFLICT (tenant_id,jurisdiction_code,code,valid_from) DO NOTHING
+                    """, UUID.randomUUID(), tenantId, treatment.code(), treatment.label(), treatment.rate(),
+                    jurisdiction, RwandaInvoiceTaxPolicy.NONVAT.equals(treatment.code()) ? "OTHER" : "VAT",
+                    treatment.requiresEvidence() ? treatment.code() : null);
+        }
+    }
+
+    @Transactional
+    public void storeInvoiceTaxEvidence(UUID invoiceId, String treatment, String reference) {
+        if (treatment != null && treatment.startsWith("RRA-RW-"))
+            RwandaInvoiceTaxPolicy.require(treatment, reference);
+        String cleaned = reference == null || reference.isBlank() ? null : reference.trim();
+        int updated = db.update("""
+                UPDATE commercial_invoices SET tax_basis_reference=?
+                 WHERE tenant_id=? AND id=? AND lifecycle_status='DRAFT' AND tax_code=?
+                """, cleaned, tenant(), invoiceId, treatment);
+        if (updated != 1)
+            throw bad("Invoice tax evidence can only be saved on a draft with the selected rule");
     }
 
     /**

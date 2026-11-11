@@ -211,6 +211,13 @@ export default function FinancialHardeningPage() {
     activeJurisdictions[0]?.jurisdictionCode ||
     "";
 
+  const rwandaJurisdiction = jurisdictions.some(
+    (item) =>
+      (item.jurisdiction_code ?? item.jurisdictionCode) ===
+        selectedJurisdiction &&
+      (item.country_code ?? item.countryCode)?.toUpperCase() === "RW",
+  );
+
   async function load() {
     setLoading(true);
     setError("");
@@ -1312,18 +1319,24 @@ export default function FinancialHardeningPage() {
               <div>
                 <h2>VAT and tax rules</h2>
                 <p>
-                  Rules are versioned by effective date and jurisdiction.
-                  Invoice creation uses the server-selected active configured
-                  VAT rule and stores an immutable tax snapshot. Exclusive
-                  treatment adds 18% to the subtotal; inclusive treatment
-                  extracts VAT from the entered gross amount. The invoice PDF
-                  shows the subtotal, VAT, and total payable. The active 18%
-                  invoice VAT rule must use 0% withholding until
-                  withholding-certificate settlement is implemented.
+                  For Rwanda, RRA statutory VAT treatments are provided by the
+                  system: standard 18%, qualifying zero-rated supplies, and
+                  exemptions. Staff select a treatment during invoicing; they do
+                  not configure tax rates. Other jurisdictions may require their
+                  own approved rule configuration.
                 </p>
               </div>
             </div>
-            <div className="form-grid">
+            {rwandaJurisdiction && (
+              <div className="alert alert-success" role="status">
+                Rwanda VAT rules are built in and cannot be changed here. Choose
+                the correct RRA treatment on the invoice screen.
+              </div>
+            )}
+            <div
+              className="form-grid"
+              style={rwandaJurisdiction ? { display: "none" } : undefined}
+            >
               <label className="field">
                 <span>Jurisdiction</span>
                 <select
@@ -1441,6 +1454,7 @@ export default function FinancialHardeningPage() {
             <div className="actions" style={{ marginTop: 10 }}>
               <button
                 className="btn btn-primary"
+                style={rwandaJurisdiction ? { display: "none" } : undefined}
                 disabled={
                   busy ||
                   !selectedJurisdiction ||

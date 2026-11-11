@@ -20,7 +20,11 @@ public class BillingController {
         }
 
         public record BillRequest(@NotNull LocalDate dueDate, String owner, String taxJurisdictionCode,
-                        String taxCode) {
+                        String taxCode, String taxTreatment, String taxEvidenceReference) {
+        }
+
+        public record RraTaxPreviewRequest(String taxTreatment, String taxEvidenceReference,
+                        LocalDate onDate) {
         }
 
         public record TaxPreviewRequest(@jakarta.validation.constraints.NotBlank String taxJurisdictionCode,
@@ -44,6 +48,19 @@ public class BillingController {
                 return service.previewDefaultShipmentInvoiceVat(shipmentId, onDate);
         }
 
+        @GetMapping("/tax-treatments")
+        public java.util.List<java.util.Map<String, Object>> taxTreatments(
+                        @RequestParam(required = false) String currency) {
+                return service.invoiceTaxTreatments(currency);
+        }
+
+        @PostMapping("/shipments/{shipmentId}/invoice/rra-preview")
+        public java.util.Map<String, Object> previewRraTax(@PathVariable UUID shipmentId,
+                        @Valid @RequestBody RraTaxPreviewRequest request) {
+                return service.previewRwandaInvoiceTax(shipmentId,
+                                request.taxTreatment(), request.taxEvidenceReference(), request.onDate());
+        }
+
         @PostMapping("/shipments/{shipmentId}/invoice/tax-preview")
         public java.util.Map<String, Object> previewInvoiceTax(@PathVariable UUID shipmentId,
                         @Valid @RequestBody TaxPreviewRequest request) {
@@ -62,7 +79,8 @@ public class BillingController {
         public CommercialInvoice invoice(@PathVariable UUID shipmentId,
                         @Valid @RequestBody BillRequest request) {
                 return service.billShipment(shipmentId, request.dueDate(), request.owner(),
-                                request.taxJurisdictionCode(), request.taxCode());
+                                request.taxJurisdictionCode(), request.taxCode(),
+                                request.taxTreatment(), request.taxEvidenceReference());
         }
 
         @GetMapping("/invoices/{invoiceId}/payments")

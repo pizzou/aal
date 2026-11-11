@@ -428,13 +428,20 @@ public class FinancialDocumentService {
                 if (invoice.getTaxAmount() != null
                         && (invoice.getTaxAmount().signum() > 0
                                 || (invoice.getTaxCode() != null && !invoice.getTaxCode().isBlank()))) {
-                    String taxLabel = "VAT " + decimalText(invoice.getTaxRate()) + "% "
-                            + (invoice.isTaxInclusive() ? "(included)" : "(added)");
-                    if (!blank(invoice.getTaxCode()))
-                        taxLabel += " - " + invoice.getTaxCode();
+                    String taxCode = safe(invoice.getTaxCode());
+                    String taxLabel = "RRA-RW-NONVAT".equals(taxCode) ? "No VAT (not VAT-registered)"
+                            : "RRA-RW-EXEMPT".equals(taxCode) ? "VAT-exempt supply"
+                                    : taxCode.startsWith("RRA-RW-ZERO-") ? "RRA zero-rated supply (0%)"
+                                            : "VAT " + decimalText(invoice.getTaxRate()) + "% "
+                                                    + (invoice.isTaxInclusive() ? "(included)" : "(added)");
                     text(c, truncate(taxLabel, 32), 330, y, 8, false);
                     text(c, money(invoice.getTaxAmount(), invoice.getCurrency()), 465, y, 8, false);
                     y -= 15;
+                }
+                if (!blank(invoice.getTaxBasisReference())) {
+                    text(c, "RRA tax basis / evidence: " + truncate(invoice.getTaxBasisReference(), 78), 42, y, 8,
+                            false);
+                    y -= 14;
                 }
                 text(c, "Invoice total incl. tax", 330, y, 8, true);
                 text(c, money(invoice.getInvoiceAmount(), invoice.getCurrency()), 465, y, 8, true);
@@ -467,6 +474,8 @@ public class FinancialDocumentService {
                     text(c, truncate(paymentInstructions, 112), 42, y, 8, false);
                     y -= 14;
                 }
+                text(c, "RRA EBM/electronic tax invoice may also be required; AAL is not an EBM certification.", 42, 92,
+                        7, false);
                 text(c, "Please quote invoice " + safe(invoice.getInvoiceNo()) + " with your payment.", 42, 76, 8,
                         false);
                 text(c, "Thank you for your business.", 42, 60, 8, true);

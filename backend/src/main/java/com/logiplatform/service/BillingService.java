@@ -66,6 +66,31 @@ public class BillingService {
         }
 
         /**
+         * Preapproved RRA treatments for the invoice selector; never arbitrary rates.
+         */
+        @Transactional(readOnly = true)
+        public java.util.List<java.util.Map<String, Object>> invoiceTaxTreatments(String currency) {
+                return financialHardening.invoiceTaxTreatments(currency);
+        }
+
+        @Transactional(readOnly = true)
+        public java.util.Map<String, Object> previewRwandaInvoiceTax(UUID shipmentId, String treatment,
+                        String evidenceReference, LocalDate onDate) {
+                Shipment shipment = shipments.findByIdAndTenantId(shipmentId, TenantContext.getTenantId())
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "Shipment not found"));
+                String currency = normalizeCurrency(shipment.getCurrency() == null ? "USD" : shipment.getCurrency());
+                java.util.Map<String, Object> rule = financialHardening.selectInvoiceTaxTreatment(
+                                onDate, currency, treatment, evidenceReference);
+                java.util.Map<String, Object> preview = previewShipmentInvoiceTax(shipmentId,
+                                java.util.Objects.toString(rule.get("jurisdiction_code")),
+                                java.util.Objects.toString(rule.get("code")), onDate);
+                preview.put("treatmentCode", rule.get("code"));
+                preview.put("evidenceReference", evidenceReference == null ? "" : evidenceReference.trim());
+                return preview;
+        }
+
+        /**
          * Preview using the tenant's configured configured VAT rule; the user does not
          * type tax codes.
          */
@@ -235,6 +260,18 @@ public class BillingService {
                         String owner,
                         String taxJurisdictionCode,
                         String taxCode) {
+                return billShipment(shipmentId, dueDate, owner, taxJurisdictionCode, taxCode, null, null);
+        }
+
+        @Transactional
+        public CommercialInvoice billShipment(
+                        UUID shipmentId,
+                        LocalDate dueDate,
+                        String owner,
+                        String taxJurisdictionCode,
+                        String taxCode,
+                        String taxTreatment,
+                        String taxEvidenceReference) {
 
                 boolean hasJurisdiction = taxJurisdictionCode != null && !taxJurisdictionCode.isBlank();
                 boolean hasTaxCode = taxCode != null && !taxCode.isBlank();
@@ -273,11 +310,11 @@ public class BillingService {
                 assertDeliveredWithPod(shipment, tenantId);
                 String currency = normalizeCurrency(
                                 shipment.getCurrency() == null ? "USD" : shipment.getCurrency());
-                java.util.Map<String, Object> defaultVatRule = financialHardening.defaultInvoiceVatRule(LocalDate.now(),
-                                currency);
+                java.util.Map<String, Object> selectedVatRule = financialHardening.selectInvoiceTaxTreatment(
+                                LocalDate.now(), currency, taxTreatment, taxEvidenceReference);
                 String resolvedJurisdiction = java.util.Objects.toString(
-                                defaultVatRule.get("jurisdiction_code"), "");
-                String resolvedTaxCode = java.util.Objects.toString(defaultVatRule.get("code"), "");
+                                selectedVatRule.get("jurisdiction_code"), "");
+                String resolvedTaxCode = java.util.Objects.toString(selectedVatRule.get("code"), "");
                 // Request-body tax codes are retained only for compatibility with older
                 // clients. They cannot override the tenant's server-selected tax rule.
                 if (hasJurisdiction &&
@@ -305,12 +342,15 @@ public class BillingService {
                                 // An existing draft may have been previewed before finance
                                 // updated the rate or inclusive treatment under the same code.
                                 // Never issue that stale tax snapshot as if it were current.
-                                if (existing.getTaxRate().compareTo(n(defaultVatRule.get("rate"))) != 0
+                                if (existing.getTaxRate().compareTo(n(selectedVatRule.get("rate"))) != 0
                                                 || existing.isTaxInclusive() != Boolean.TRUE
-                                                                .equals(defaultVatRule.get("inclusive"))) {
+                                                                .equals(selectedVatRule.get("inclusive"))) {
                                         throw new ResponseStatusException(HttpStatus.CONFLICT,
                                                         "The VAT rate or inclusive treatment changed after this draft was prepared. Review and correct the draft tax calculation before issuing it.");
                                 }
+                                // Save the supporting basis on the draft BEFORE immutable issuance.
+                                financialHardening.storeInvoiceTaxEvidence(existing.getId(), resolvedTaxCode,
+                                                taxEvidenceReference);
                                 // Use the shared lifecycle transition as the single posting and
                                 // history boundary. Tax is guaranteed to be applied before issue.
                                 financialHardening.transitionInvoice(existing.getId(), "ISSUED",
@@ -362,6 +402,8 @@ public class BillingService {
                 // shipment invoice. Omitting tax fields in an API request cannot bypass VAT.
                 financialHardening.applyTaxToDraftInvoice(invoice.getId(), resolvedJurisdiction,
                                 resolvedTaxCode, LocalDate.now());
+                financialHardening.storeInvoiceTaxEvidence(invoice.getId(), resolvedTaxCode,
+                                taxEvidenceReference);
                 entityManager.refresh(invoice);
                 // One canonical lifecycle transition owns the ledger posting, status
                 // update and immutable lifecycle-history row for every invoice path.

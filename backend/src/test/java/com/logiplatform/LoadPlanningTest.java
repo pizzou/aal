@@ -15,9 +15,6 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.util.UUID;
 
-
-
-
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -42,9 +39,12 @@ import static com.logiplatform.dto.AuthDtos.*;
 
 class LoadPlanningTest extends TenantTestSupport {
 
-    @Autowired private ShipmentService shipmentService;
-    @Autowired private VehicleService vehicleService;
-    @Autowired private LoadPlanningService loadPlanningService;
+    @Autowired
+    private ShipmentService shipmentService;
+    @Autowired
+    private VehicleService vehicleService;
+    @Autowired
+    private LoadPlanningService loadPlanningService;
 
     @AfterEach
     void clearTenant() {
@@ -77,30 +77,30 @@ class LoadPlanningTest extends TenantTestSupport {
         VehicleResponse vehicle = vehicleService.create(new CreateVehicleRequest("RAB-LP2", "TRUCK", 750));
         weighedShipment("S1", 600);
         weighedShipment("S2", 400);
-        weighedShipment("S3", 500);
-        weighedShipment("S4", 200);
+        ShipmentResponse s3 = weighedShipment("S3", 500);
+        ShipmentResponse s4 = weighedShipment("S4", 200);
 
         LoadPlanResponse plan = loadPlanningService.planLoad(vehicle.id());
 
         assertEquals(700, plan.totalWeightLoadedKg(), "Python verified: best is 500+200=700, not 600 alone");
         assertEquals(2, plan.selected().size());
-        assertTrue(plan.selected().stream().anyMatch(p -> p.referenceCode().equals("S3")));
-        assertTrue(plan.selected().stream().anyMatch(p -> p.referenceCode().equals("S4")));
+        assertTrue(plan.selected().stream().anyMatch(p -> p.referenceCode().equals(s3.referenceCode())));
+        assertTrue(plan.selected().stream().anyMatch(p -> p.referenceCode().equals(s4.referenceCode())));
     }
 
     @Test
     void overCapacityItemIsExcluded_matchesVerifiedPythonResult() {
         setTenant(UUID.randomUUID());
         VehicleResponse vehicle = vehicleService.create(new CreateVehicleRequest("RAB-LP3", "VAN", 100));
-        weighedShipment("Heavy", 150);
+        ShipmentResponse heavy = weighedShipment("Heavy", 150);
         weighedShipment("Light1", 50);
         weighedShipment("Light2", 40);
 
         LoadPlanResponse plan = loadPlanningService.planLoad(vehicle.id());
 
         assertEquals(90, plan.totalWeightLoadedKg());
-        assertTrue(plan.excluded().stream().anyMatch(p -> p.referenceCode().equals("Heavy")));
-        assertTrue(plan.selected().stream().noneMatch(p -> p.referenceCode().equals("Heavy")),
+        assertTrue(plan.excluded().stream().anyMatch(p -> p.referenceCode().equals(heavy.referenceCode())));
+        assertTrue(plan.selected().stream().noneMatch(p -> p.referenceCode().equals(heavy.referenceCode())),
                 "An item heavier than the entire vehicle capacity must never be selected");
     }
 

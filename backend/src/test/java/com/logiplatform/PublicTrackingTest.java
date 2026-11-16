@@ -10,13 +10,13 @@ import com.logiplatform.tenancy.TenantContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.UUID;
-
-
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -43,8 +43,15 @@ import static com.logiplatform.dto.AuthDtos.*;
 
 class PublicTrackingTest extends TenantTestSupport {
 
-    @Autowired private ShipmentService shipmentService;
-    @Autowired private PublicTrackingService publicTrackingService;
+    @Autowired
+    private ShipmentService shipmentService;
+    @Autowired
+    private PublicTrackingService publicTrackingService;
+    @Autowired
+    private CargoDocumentRepository cargoDocuments;
+    @Autowired
+    @Qualifier("tenantJdbcTemplate")
+    private JdbcTemplate tenantDb;
 
     @AfterEach
     void clearTenant() {
@@ -63,7 +70,11 @@ class PublicTrackingTest extends TenantTestSupport {
         TenantContext.clear();
 
         PublicShipmentView view = publicTrackingService.findByToken(shipment.trackingToken());
-        assertEquals("PUB-001", view.referenceCode());
+        assertEquals(shipment.referenceCode(), view.referenceCode());
+        assertTrue(shipment.referenceCode().matches("AAL-SHP-\\d{4}-\\d{6}"));
+        assertEquals(shipment.trackingNumber(), view.trackingNumber());
+        assertEquals(shipment.trackingToken(), TrackingReferenceCode.toToken(view.trackingNumber()));
+        assertEquals(view, publicTrackingService.findByReference(view.trackingNumber()));
         assertEquals("ROAD", view.transportMode());
     }
 
@@ -105,7 +116,45 @@ class PublicTrackingTest extends TenantTestSupport {
         assertNotEquals(shipmentA.trackingToken(), shipmentB.trackingToken());
 
         TenantContext.clear();
-        assertEquals("PUB-003", publicTrackingService.findByToken(shipmentA.trackingToken()).referenceCode());
-        assertEquals("PUB-004", publicTrackingService.findByToken(shipmentB.trackingToken()).referenceCode());
+        assertEquals(shipmentA.referenceCode(),
+                publicTrackingService.findByToken(shipmentA.trackingToken()).referenceCode());
+        assertEquals(shipmentB.referenceCode(),
+                publicTrackingService.findByToken(shipmentB.trackingToken()).referenceCode());
+    }
+
+    @Test
+    void publicTrackingDoesNotExposeDocumentsUnlessExplicitlyPublished() {
+        setTenant(UUID.randomUUID());
+        ShipmentResponse shipment = shipmentService.create(new CreateShipmentRequest(
+                null, "Kigali", "Nairobi", "ROAD", null, null));
+        CargoDocument hidden = new CargoDocument(TenantContext.getTenantId(), shipment.id(),
+                "INTERNAL_CUSTOMS_FILE", "INTERNAL", null, null);
+        CargoDocument visible = new CargoDocument(TenantContext.getTenantId(), shipment.id(),
+                "PUBLIC_DELIVERY_NOTE", "DELIVERY_NOTE", null, null);
+        visible.setLifecycle(1, null, null, true, null, null, null);
+        // DRAFT documents are not published, even when incorrectly flagged visible.
+        CargoDocument draft = new CargoDocument(TenantContext.getTenantId(), shipment.id(),
+                "UNAPPROVED_DRAFT", "DRAFT", null, null);
+        draft.setLifecycle(1, null, null, true, null, null, null);
+        // The lifecycle service owns publication; test the DB visibility predicate
+        // without bypassing the stored default document status.
+        cargoDocuments.saveAndFlush(hidden);
+        cargoDocuments.saveAndFlush(visible);
+        cargoDocuments.saveAndFlush(draft);
+        tenantDb.update("UPDATE cargo_documents SET status='ISSUED' WHERE id=? AND tenant_id=?",
+                visible.getId(), TenantContext.getTenantId());
+        TenantContext.clear();
+
+        PublicShipmentView result = publicTrackingService.findByReference(shipment.trackingNumber());
+        assertEquals(1, result.documents().size(), "Only customer-visible, issued documents appear");
+        assertEquals("PUBLIC_DELIVERY_NOTE", result.documents().get(0).documentType());
+    }
+
+    @Test
+    void malformedOrGuessableReferencesDoNotRevealShipments() {
+        TenantContext.clear();
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> publicTrackingService.findByReference("AAL-SHP-2026-000001"));
+        assertEquals(404, ex.getStatusCode().value());
     }
 }

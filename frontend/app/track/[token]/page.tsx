@@ -8,6 +8,14 @@ import {
   publicTrackingApi,
 } from "@/lib/api-client";
 import Icon from "@/components/Icon";
+import { trackingNumberFromToken } from "@/lib/tracking-reference";
+
+function readableMilestone(eventType: string): string {
+  return eventType
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
 export default function PublicTrackingResult() {
   const params = useParams<{ token: string }>();
   const [data, setData] = useState<PublicShipmentView | null>(null);
@@ -15,16 +23,28 @@ export default function PublicTrackingResult() {
   const [feedbackRating, setFeedbackRating] = useState(5);
   const [feedbackComment, setFeedbackComment] = useState("");
   const [feedbackSent, setFeedbackSent] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
   useEffect(() => {
-    if (params.token)
-      publicTrackingApi
-        .track(params.token)
-        .then(setData)
-        .catch((e) =>
+    if (!params.token) return;
+    let active = true;
+    setData(null);
+    setError("");
+    setFeedbackError("");
+    setFeedbackSent(false);
+    publicTrackingApi
+      .track(params.token)
+      .then((view) => {
+        if (active) setData(view);
+      })
+      .catch((e) => {
+        if (active)
           setError(
-            e instanceof ApiError ? e.message : "Tracking reference not found",
-          ),
-        );
+            e instanceof ApiError ? e.message : "Tracking number not found",
+          );
+      });
+    return () => {
+      active = false;
+    };
   }, [params.token]);
   if (error)
     return (
@@ -62,6 +82,12 @@ export default function PublicTrackingResult() {
             <div className="public-eyebrow">03 / LIVE SHIPMENT VISIBILITY</div>
             <h1>{data.referenceCode}</h1>
             <p>
+              Tracking number:{" "}
+              <strong>
+                {data.trackingNumber || trackingNumberFromToken(params.token)}
+              </strong>
+            </p>
+            <p>
               {data.originAddress} <span>→</span> {data.destinationAddress}
             </p>
           </div>
@@ -96,7 +122,7 @@ export default function PublicTrackingResult() {
             <div className="track-event" key={`${x.occurredAt}-${i}`}>
               <div className="track-dot" />
               <div>
-                <strong>{x.eventType}</strong>
+                <strong>{readableMilestone(x.eventType)}</strong>
                 <span>{x.location || "AAL network"}</span>
                 <small>{x.notes || "Shipment milestone recorded"}</small>
               </div>
@@ -177,6 +203,7 @@ export default function PublicTrackingResult() {
             <form
               onSubmit={async (event) => {
                 event.preventDefault();
+                setFeedbackError("");
                 try {
                   await publicTrackingApi.feedback(params.token, {
                     rating: feedbackRating,
@@ -185,7 +212,7 @@ export default function PublicTrackingResult() {
                   });
                   setFeedbackSent(true);
                 } catch (e) {
-                  setError(
+                  setFeedbackError(
                     e instanceof ApiError
                       ? e.message
                       : "Unable to send feedback.",
@@ -194,6 +221,7 @@ export default function PublicTrackingResult() {
               }}
               style={{ display: "grid", gap: 10 }}
             >
+              {feedbackError && <p role="alert">{feedbackError}</p>}
               <select
                 value={feedbackRating}
                 onChange={(e) => setFeedbackRating(Number(e.target.value))}

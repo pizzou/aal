@@ -9,6 +9,7 @@ import {
   publicQuoteApi,
 } from "@/lib/api-client";
 import Icon from "@/components/Icon";
+import { trackingNumberFromToken } from "@/lib/tracking-reference";
 
 const modes = [
   ["AIR", "Air freight"],
@@ -137,14 +138,14 @@ export default function BookClient({
             operational workflow.
           </p>
           <div className="tracking-ticket">
-            <span>PUBLIC TRACKING TOKEN</span>
-            <strong>{result.trackingToken}</strong>
-            <small>Keep this token to track without signing in.</small>
+            <span>YOUR AAL TRACKING NUMBER</span>
+            <strong>{trackingNumberFromToken(result.trackingToken)}</strong>
+            <small>Keep this private number to track without signing in.</small>
           </div>
           <div className="flow-success-actions">
             <Link
               className="public-main-button"
-              href={`/track/${encodeURIComponent(result.trackingToken)}`}
+              href={`/track/${encodeURIComponent(trackingNumberFromToken(result.trackingToken))}`}
             >
               Track shipment <Icon name="arrow" size={14} />
             </Link>

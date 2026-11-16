@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Icon from "@/components/Icon";
+import { normalizeTrackingInput } from "@/lib/tracking-reference";
 
 export default function TrackPage() {
   const router = useRouter();
@@ -11,7 +12,7 @@ export default function TrackPage() {
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    const token = reference.trim();
+    const token = normalizeTrackingInput(reference);
     if (token) router.push(`/track/${encodeURIComponent(token)}`);
   }
 
@@ -21,7 +22,10 @@ export default function TrackPage() {
       <section className="public-center-panel">
         <div className="public-eyebrow">03 / TRACK</div>
         <h1>Track your shipment.</h1>
-        <p>Enter the tracking token or shipment reference sent by AAL.</p>
+        <p>
+          Enter the secure AAL tracking number sent with your booking, or paste
+          your tracking link.
+        </p>
         <form onSubmit={submit} className="public-large-track-form">
           <div className="public-track-input">
             <Icon name="search" size={18} />
@@ -29,13 +33,17 @@ export default function TrackPage() {
               autoFocus
               value={reference}
               onChange={(e) => setReference(e.target.value)}
-              placeholder="e.g. 2a7f... or AAL-2026-00124"
+              placeholder="AAL-TRK-… or your tracking link"
             />
           </div>
           <button className="public-main-button" type="submit">
             Track shipment <Icon name="arrow" size={14} />
           </button>
         </form>
+        <p className="card-muted">
+          Your shipment number (AAL-SHP-…) identifies the job internally; the
+          secure AAL-TRK number is required for public tracking.
+        </p>
         <div className="flow-benefits">
           <span>
             <Icon name="shield" size={15} /> No login required
@@ -61,7 +69,7 @@ function FlowNav() {
         </span>
         <span>
           <strong>AAL</strong>
-          <small> AVIATION AFRICA LOGISTIC</small>
+          <small>AVIATION AFRICA LOGISTICS</small>
         </span>
       </Link>
       <div className="flow-nav-links">

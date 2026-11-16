@@ -51,7 +51,8 @@ public class AirCargoTrackingScheduler {
 
     @Scheduled(fixedDelayString = "${aircargo.eta-poll.interval-ms:300000}")
     public void poll() {
-        if (!enabled) return;
+        if (!enabled)
+            return;
 
         TenantContext.setTenantId(tenantId);
         String owner = jobLocks.tryAcquire("air-cargo-eta-poll", Duration.ofMinutes(5));
@@ -66,9 +67,9 @@ public class AirCargoTrackingScheduler {
                     ShipmentStatus.BOOKED,
                     ShipmentStatus.IN_TRANSIT,
                     ShipmentStatus.PLANNING)) {
-                for (Shipment shipment : shipments.findAllByTenantIdAndWeightKgIsNotNullAndStatus(tenantId, status)) {
-                    if (shipment.getTransportMode() == TransportMode.AIR
-                            && shipment.getFlightNumber() != null
+                for (Shipment shipment : shipments.findAllByTenantIdAndStatusAndTransportModeAndFlightNumberIsNotNull(
+                        tenantId, status, TransportMode.AIR)) {
+                    if (shipment.getFlightNumber() != null
                             && !shipment.getFlightNumber().isBlank()) {
                         ids.add(shipment.getId());
                     }
@@ -78,7 +79,8 @@ public class AirCargoTrackingScheduler {
             for (UUID id : ids) {
                 try {
                     Shipment shipment = shipments.findByIdAndTenantId(id, tenantId).orElse(null);
-                    if (shipment == null) continue;
+                    if (shipment == null)
+                        continue;
 
                     AirCargoBooking latestBooking = bookings
                             .findAllByTenantIdAndShipmentIdOrderByCreatedAtDesc(tenantId, id)
@@ -87,7 +89,8 @@ public class AirCargoTrackingScheduler {
                             .orElse(null);
 
                     AirCargoProviderPort provider = resolveProvider(latestBooking);
-                    if (provider == null || !provider.capabilities().flightStatus()) continue;
+                    if (provider == null || !provider.capabilities().flightStatus())
+                        continue;
 
                     AirCargoProviderPort.FlightStatus live;
                     if (latestBooking != null

@@ -571,7 +571,7 @@ export default function ShipmentCreateForm() {
 
                 <div className="form-grid">
                   <label className="field">
-                    <span>Shipment / AWB number</span>
+                    <span>Shipment number</span>
 
                     <input
                       value={form.referenceCode}
@@ -579,7 +579,10 @@ export default function ShipmentCreateForm() {
                       placeholder="Generated automatically by AAL"
                       aria-readonly="true"
                     />
-                    <small>System-generated; not entered manually.</small>
+                    <small>
+                      System-generated; the customer tracking number is also
+                      created on save. Air waybills are issued separately.
+                    </small>
                   </label>
 
                   <label className="field">

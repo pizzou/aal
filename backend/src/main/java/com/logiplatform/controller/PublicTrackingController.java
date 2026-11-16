@@ -11,7 +11,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.UUID;
 import static com.logiplatform.dto.PublicTrackingDtos.*;
 
 @RestController
@@ -25,14 +24,15 @@ public class PublicTrackingController {
     }
 
     @GetMapping("/{token}")
-    public ResponseEntity<PublicShipmentView> track(@PathVariable UUID token) {
-        return ResponseEntity.ok(publicTrackingService.findByToken(token));
+    public ResponseEntity<PublicShipmentView> track(@PathVariable String token) {
+        return ResponseEntity.ok(publicTrackingService.findByReference(token));
     }
 
     @PostMapping("/{token}/feedback")
-    public ResponseEntity<java.util.Map<String,Object>> feedback(
-            @PathVariable UUID token,
+    public ResponseEntity<java.util.Map<String, Object>> feedback(
+            @PathVariable String token,
             @Valid @RequestBody PublicFeedbackRequest request) {
-        return ResponseEntity.ok(publicTrackingService.feedback(token, request));
+        return ResponseEntity.ok(publicTrackingService.feedback(
+                publicTrackingService.resolveToken(token), request));
     }
 }

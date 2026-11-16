@@ -9,6 +9,7 @@ public final class PublicTrackingDtos {
 
         public record PublicShipmentView(
                         String referenceCode,
+                        String trackingNumber,
                         String originAddress,
                         String destinationAddress,
                         String status,
@@ -31,9 +32,9 @@ public final class PublicTrackingDtos {
         }
 
         public record PublicFeedbackRequest(
-                Integer rating,
-                String category,
-                String comment,
-                String contactEmail) {
+                        Integer rating,
+                        String category,
+                        String comment,
+                        String contactEmail) {
         }
 }

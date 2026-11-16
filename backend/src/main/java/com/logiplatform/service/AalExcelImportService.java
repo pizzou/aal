@@ -8,7 +8,9 @@ import com.logiplatform.model.CommercialQuote;
 import com.logiplatform.model.ExpenseRecord;
 import com.logiplatform.model.PartnerRecord;
 import com.logiplatform.model.Shipment;
+import com.logiplatform.model.ShipmentTrackingEvent;
 import com.logiplatform.model.TaskRecord;
+import com.logiplatform.model.TrackingEventType;
 import com.logiplatform.model.TransportMode;
 import com.logiplatform.repository.ClientRecordRepository;
 import com.logiplatform.repository.CommercialInvoiceRepository;
@@ -16,6 +18,7 @@ import com.logiplatform.repository.CommercialQuoteRepository;
 import com.logiplatform.repository.ExpenseRecordRepository;
 import com.logiplatform.repository.PartnerRecordRepository;
 import com.logiplatform.repository.ShipmentRepository;
+import com.logiplatform.repository.ShipmentTrackingEventRepository;
 import com.logiplatform.repository.TaskRecordRepository;
 import com.logiplatform.tenancy.TenantContext;
 import jakarta.persistence.EntityManager;
@@ -45,6 +48,7 @@ public class AalExcelImportService {
                         DateTimeFormatter.ISO_LOCAL_DATE);
 
         private final ShipmentRepository shipments;
+        private final ShipmentTrackingEventRepository trackingEvents;
         private final CommercialQuoteRepository quotes;
         private final CommercialInvoiceRepository invoices;
         private final ClientRecordRepository clients;
@@ -64,6 +68,7 @@ public class AalExcelImportService {
 
         public AalExcelImportService(
                         ShipmentRepository shipments,
+                        ShipmentTrackingEventRepository trackingEvents,
                         CommercialQuoteRepository quotes,
                         CommercialInvoiceRepository invoices,
                         ClientRecordRepository clients,
@@ -75,6 +80,7 @@ public class AalExcelImportService {
                         com.logiplatform.repository.AalImportBatchRepository importBatches) {
 
                 this.shipments = shipments;
+                this.trackingEvents = trackingEvents;
                 this.quotes = quotes;
                 this.invoices = invoices;
                 this.clients = clients;
@@ -819,6 +825,11 @@ public class AalExcelImportService {
                         }
 
                         if (created) {
+                                trackingEvents.save(new ShipmentTrackingEvent(
+                                                tenant, saved.getId(), TrackingEventType.CREATED,
+                                                saved.getOriginAddress(),
+                                                "Historical shipment imported into AAL; earlier movement milestones require verification",
+                                                Instant.now()));
                                 count++;
                         }
                 }

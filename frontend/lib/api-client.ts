@@ -699,6 +699,7 @@ export interface Shipment {
   carrierName: string | null;
   carrierReferenceNumber: string | null;
   trackingToken: string;
+  trackingNumber: string;
   weightKg: number | null;
   notificationEmail: string | null;
   flightNumber: string | null;
@@ -988,6 +989,7 @@ export interface PublicTrackingEvent {
 
 export interface PublicShipmentView {
   referenceCode: string;
+  trackingNumber: string;
   originAddress: string;
   destinationAddress: string;
   status: string;

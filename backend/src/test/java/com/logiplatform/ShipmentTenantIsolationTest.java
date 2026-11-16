@@ -19,9 +19,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-
 import static org.junit.jupiter.api.Assertions.*;
-
 
 import static com.logiplatform.dto.ShipmentDtos.*;
 import static com.logiplatform.dto.ReportingDtos.*;
@@ -78,12 +76,12 @@ class ShipmentTenantIsolationTest extends TenantTestSupport {
         shipmentService.create(roadShipment("SHP-A2"));
 
         setTenant(tenantB);
-        shipmentService.create(roadShipment("SHP-B1"));
+        ShipmentResponse tenantBShipment = shipmentService.create(roadShipment("SHP-B1"));
 
         var tenantBShipments = shipmentService.list(PageRequest.of(0, 50));
 
         assertTrue(tenantBShipments.getContent().stream()
-                        .allMatch(s -> s.referenceCode().equals("SHP-B1")),
+                .allMatch(s -> s.referenceCode().equals(tenantBShipment.referenceCode())),
                 "Tenant B's shipment list must contain only tenant B's shipments");
     }
 
@@ -133,7 +131,8 @@ class ShipmentTenantIsolationTest extends TenantTestSupport {
                 .orElseThrow().getCreatedAt();
         Instant early = createdAt.plusMillis(100);
         Instant late = early.plusMillis(1000);
-        // Insert in reverse order to prove history uses occurrence time, not insertion order.
+        // Insert in reverse order to prove history uses occurrence time, not insertion
+        // order.
         shipmentService.addTrackingEvent(shipment.id(), new AddTrackingEventRequest(
                 "EXCEPTION", "Indian Ocean", "later event", late));
         shipmentService.addTrackingEvent(shipment.id(), new AddTrackingEventRequest(

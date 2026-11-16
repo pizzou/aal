@@ -2,6 +2,7 @@ package com.logiplatform.repository;
 
 import com.logiplatform.model.Shipment;
 import com.logiplatform.model.ShipmentStatus;
+import com.logiplatform.model.TransportMode;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Lock;
 
@@ -18,48 +19,63 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface ShipmentRepository extends JpaRepository<Shipment, UUID> {
-    Optional<Shipment> findByIdAndTenantId(UUID id, UUID tenantId);
+        Optional<Shipment> findByIdAndTenantId(UUID id, UUID tenantId);
 
-    /** Serializes operational transitions and dispatch assignment for one tenant-owned shipment. */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select s from Shipment s where s.id = :id and s.tenantId = :tenantId")
-    Optional<Shipment> findLockedByIdAndTenantId(
-            @Param("id") UUID id,
-            @Param("tenantId") UUID tenantId);
-    Page<Shipment> findAllByTenantId(UUID tenantId, Pageable pageable);
+        /**
+         * Serializes operational transitions and dispatch assignment for one
+         * tenant-owned shipment.
+         */
+        @Lock(LockModeType.PESSIMISTIC_WRITE)
+        @Query("select s from Shipment s where s.id = :id and s.tenantId = :tenantId")
+        Optional<Shipment> findLockedByIdAndTenantId(
+                        @Param("id") UUID id,
+                        @Param("tenantId") UUID tenantId);
 
-    @Query("""
-            SELECT s
-              FROM Shipment s
-             WHERE s.tenantId = :tenantId
-               AND (
-                    :q = ''
-                    OR LOWER(COALESCE(s.referenceCode, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.clientName, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.contact, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.commodity, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.airlineUsed, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.carrierName, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.invoiceNo, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.originCityPort, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.destinationCityPort, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.originAddress, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-                    OR LOWER(COALESCE(s.destinationAddress, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-               )
-               AND (:mode = '' OR UPPER(s.transportMode) = UPPER(:mode))
-               AND (:status = '' OR UPPER(s.status) = UPPER(:status))
-            """)
-    Page<Shipment> search(
-            @Param("tenantId") UUID tenantId,
-            @Param("q") String q,
-            @Param("mode") String mode,
-            @Param("status") String status,
-            Pageable pageable);
-    List<Shipment> findAllByTenantIdAndWeightKgIsNotNullAndStatus(UUID tenantId, ShipmentStatus status);
-    boolean existsByTenantIdAndReferenceCode(UUID tenantId, String referenceCode);
-    Optional<Shipment> findByTenantIdAndReferenceCode(UUID tenantId, String referenceCode);
-    List<Shipment> findAllByTenantIdAndEtdGreaterThanEqualAndEtdLessThanOrderByEtdAsc(UUID tenantId, Instant from, Instant to);
-    List<Shipment> findAllByTenantIdAndNextActionDateOrderByNextActionDateAsc(UUID tenantId, LocalDate date);
-    List<Shipment> findAllByTenantIdAndDateOpenedGreaterThanEqualAndDateOpenedLessThan(
-            UUID tenantId, LocalDate fromInclusive, LocalDate toExclusive);
+        Page<Shipment> findAllByTenantId(UUID tenantId, Pageable pageable);
+
+        @Query("""
+                        SELECT s
+                          FROM Shipment s
+                         WHERE s.tenantId = :tenantId
+                           AND (
+                                :q = ''
+                                OR LOWER(COALESCE(s.referenceCode, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                                OR LOWER(COALESCE(s.clientName, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                                OR LOWER(COALESCE(s.contact, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                                OR LOWER(COALESCE(s.commodity, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                                OR LOWER(COALESCE(s.airlineUsed, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                                OR LOWER(COALESCE(s.carrierName, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                                OR LOWER(COALESCE(s.invoiceNo, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                                OR LOWER(COALESCE(s.originCityPort, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                                OR LOWER(COALESCE(s.destinationCityPort, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                                OR LOWER(COALESCE(s.originAddress, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                                OR LOWER(COALESCE(s.destinationAddress, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                           )
+                           AND (:mode = '' OR UPPER(s.transportMode) = UPPER(:mode))
+                           AND (:status = '' OR UPPER(s.status) = UPPER(:status))
+                        """)
+        Page<Shipment> search(
+                        @Param("tenantId") UUID tenantId,
+                        @Param("q") String q,
+                        @Param("mode") String mode,
+                        @Param("status") String status,
+                        Pageable pageable);
+
+        List<Shipment> findAllByTenantIdAndWeightKgIsNotNullAndStatus(UUID tenantId, ShipmentStatus status);
+
+        /** ETA providers work from flight assignment, not a legacy weight_kg field. */
+        List<Shipment> findAllByTenantIdAndStatusAndTransportModeAndFlightNumberIsNotNull(
+                        UUID tenantId, ShipmentStatus status, TransportMode mode);
+
+        boolean existsByTenantIdAndReferenceCode(UUID tenantId, String referenceCode);
+
+        Optional<Shipment> findByTenantIdAndReferenceCode(UUID tenantId, String referenceCode);
+
+        List<Shipment> findAllByTenantIdAndEtdGreaterThanEqualAndEtdLessThanOrderByEtdAsc(UUID tenantId, Instant from,
+                        Instant to);
+
+        List<Shipment> findAllByTenantIdAndNextActionDateOrderByNextActionDateAsc(UUID tenantId, LocalDate date);
+
+        List<Shipment> findAllByTenantIdAndDateOpenedGreaterThanEqualAndDateOpenedLessThan(
+                        UUID tenantId, LocalDate fromInclusive, LocalDate toExclusive);
 }

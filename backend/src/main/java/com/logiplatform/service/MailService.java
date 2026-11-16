@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class MailService {
@@ -202,7 +203,8 @@ public class MailService {
         if (recipientEmail == null || recipientEmail.isBlank())
             return;
 
-        String trackingUrl = frontendUrl.replaceAll("/$", "") + "/track/" + trackingToken;
+        String trackingNumber = TrackingReferenceCode.fromToken(UUID.fromString(trackingToken));
+        String trackingUrl = frontendUrl.replaceAll("/$", "") + "/track/" + trackingNumber;
 
         send(
                 recipientEmail.trim(),
@@ -216,7 +218,7 @@ public class MailService {
                             <p>AAL has received booking <strong>%s</strong>.</p>
                             <table style="width:100%%;border-collapse:collapse;margin:20px 0">
                               <tr><td style="padding:8px 0;color:#64748b">Route</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
-                              <tr><td style="padding:8px 0;color:#64748b">Tracking token</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+                              <tr><td style="padding:8px 0;color:#64748b">Tracking number</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
                             </table>
                             <p><a href="%s" style="display:inline-block;padding:13px 22px;background:#0B3B8F;color:#fff;text-decoration:none;border-radius:7px;font-weight:700">Track shipment</a></p>
                             <p style="font-size:13px;color:#64748b">No account is required to track this shipment.</p>
@@ -228,7 +230,7 @@ public class MailService {
                                 escape(recipientName == null || recipientName.isBlank() ? "Customer" : recipientName),
                                 escape(bookingReference),
                                 escape(route),
-                                escape(trackingToken),
+                                escape(trackingNumber),
                                 escapeAttribute(trackingUrl)));
     }
 

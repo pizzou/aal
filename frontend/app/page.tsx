@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import Icon from "@/components/Icon";
+import { normalizeTrackingInput } from "@/lib/tracking-reference";
 
 const cards = [
   {
@@ -35,7 +36,7 @@ export default function Home() {
 
   function submitTrack(event: FormEvent) {
     event.preventDefault();
-    const value = reference.trim();
+    const value = normalizeTrackingInput(reference);
     if (value) router.push(`/track/${encodeURIComponent(value)}`);
   }
 
@@ -61,8 +62,8 @@ export default function Home() {
         >
           <Icon name="search" size={17} />
           <input
-            aria-label="Search by tracking reference"
-            placeholder="Search by tracking reference"
+            aria-label="Enter secure AAL tracking number"
+            placeholder="AAL-TRK number or tracking link"
             value={reference}
             onChange={(e) => setReference(e.target.value)}
           />

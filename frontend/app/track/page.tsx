@@ -61,7 +61,7 @@ function FlowNav() {
         </span>
         <span>
           <strong>AAL</strong>
-          <small>AFRICA LOGISTIC AVIATION</small>
+          <small> AVIATION AFRICA LOGISTIC</small>
         </span>
       </Link>
       <div className="flow-nav-links">
